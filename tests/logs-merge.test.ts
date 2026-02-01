@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { PrismaClient } from '@prisma/client';
-import fetch from 'node-fetch';
 
 const prisma = new PrismaClient();
 const API_URL = 'http://localhost:3000';
@@ -99,7 +98,7 @@ describe('Merge API Endpoints', () => {
       });
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.success).toBe(true);
       expect(result.primary_id).toBe(primaryId);
       expect(result.merged_count).toBe(2);
@@ -126,7 +125,7 @@ describe('Merge API Endpoints', () => {
       });
 
       expect(response.status).toBe(400);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.error).toContain('primary_id');
     });
 
@@ -154,7 +153,7 @@ describe('Merge API Endpoints', () => {
       });
 
       expect(response.status).toBe(400);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.error).toContain('cannot be in duplicate');
     });
 
@@ -169,7 +168,7 @@ describe('Merge API Endpoints', () => {
       });
 
       expect(response.status).toBe(404);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.error).toContain('not found');
     });
 
@@ -231,7 +230,7 @@ describe('Merge API Endpoints', () => {
       const response = await fetch(`${API_URL}/api/logs/${primaryId}/merged-with`);
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.primary_id).toBe(primaryId);
       expect(result.merged_count).toBe(2);
       expect(result.merged_from).toHaveLength(2);
@@ -245,7 +244,7 @@ describe('Merge API Endpoints', () => {
       const response = await fetch(`${API_URL}/api/logs/nonexistent/merged-with`);
 
       expect(response.status).toBe(404);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.error).toContain('not found');
     });
 
@@ -268,7 +267,7 @@ describe('Merge API Endpoints', () => {
       const response = await fetch(`${API_URL}/api/logs/${newPrimary.id}/merged-with`);
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = (await response.json()) as any;
       expect(result.merged_count).toBe(0);
       expect(result.merged_from).toHaveLength(0);
     });
