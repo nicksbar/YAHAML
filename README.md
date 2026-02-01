@@ -2,29 +2,32 @@
 
 Collaborative ham radio logging with a focus on **group/club workflows**, **UDP interoperability**, and **remote rig control**.
 
-## Goals
-- Multi-user logging by callsign with shared activity context (Field Day, POTA, SOTA, contest, custom).
-- Interop with existing tools via standard UDP logging patterns.
-- Rig control via HAMLib (local and remote).
-- Portable, modular deployment with Docker Compose.
+## Features
+- Multi-user logging by callsign with shared activity context (Field Day, POTA, SOTA, contests)
+- Real-time activity feed and station coordination
+- Club and special event callsign management
+- Contest templates and scoring
+- Remote rig control via HAMLib (rigctld)
+- UDP logging protocol support for interoperability
+- Modern, responsive web interface
+- SQLite database with Prisma ORM
 
-## Non-Goals (for MVP)
-- Replacing every feature of N1MM/DXLab/N3FJP on day one.
-- Proprietary protocol cloning without understanding licensing/legal constraints.
+## Quick Start
 
-## Quick Start (placeholder)
-This repo will include a Docker Compose setup and service definitions once the architecture is finalized.
+```bash
+npm install
+npm run db:generate
+npm run db:push
+npm run dev:all
+```
 
-## Project Docs
-- Requirements: docs/requirements.md
+Access the UI at http://localhost:5173
+
+## Project Documentation
 - Architecture: docs/architecture.md
-- Testing: docs/testing.md
-- Protocols: docs/protocols-udp.md
-- N3FJP protocol notes: docs/protocols-n3fjp.md
-- N3FJP research: docs/research-n3fjp.md
-- Network capture: docs/capture.md
-- Roadmap: ROADMAP.md
-- Progress tracking: PROGRESS.md
+- Deployment: DEPLOYMENT.md
+- API Reference: See source code comments
+- UI Design System: UI_DESIGN_SYSTEM.md
 
 ## How to Contribute
 See CONTRIBUTING.md.

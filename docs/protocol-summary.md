@@ -1,11 +1,11 @@
-# N3FJP Protocol Reverse-Engineering Summary
+# External Logging Protocol Implementation Summary
 
-## Discovery Process
-Protocol was reverse-engineered by capturing network traffic from N3FJP Field Day logging software connecting to a local TCP server stub. All message types and formats have been discovered and documented.
+## Overview
+Implementation summary of TCP-based multi-station networking protocol used by Windows ham radio logging applications. Protocol was analyzed through network traffic observation and testing.
 
 ## Transport Layer
-- **Protocol**: TCP/IP (not UDP)
-- **Default Port**: 1000 (may require elevated privileges; tested on 10000)
+- **Protocol**: TCP/IP
+- **Port**: Configurable (commonly 1000 or 10000)
 - **Encoding**: UTF-16LE (little-endian Unicode)
 - **Message Framing**: 
   - Start: `<BOR>` (Begin of Record)
@@ -13,7 +13,7 @@ Protocol was reverse-engineered by capturing network traffic from N3FJP Field Da
   - Trailer: `\x03\x04\x07` (3 control bytes after EOR)
   - Multi-message bundling: Multiple messages may arrive without EOR between them; split on BOR boundaries
 
-## Message Types Discovered (7 Total)
+## Message Types (7 Core Types)
 
 ### 1. BAMS - Band/Mode/Station Announcement
 **Direction**: Client → Server (+ broadcast)
