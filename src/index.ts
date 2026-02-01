@@ -24,6 +24,7 @@ import {
 } from './aggregation';
 import { calculateNextOccurrence } from './contest-templates/scheduler';
 import { lookupCallsign, validateCallsign } from './hamdb';
+import { locationRouter } from './location-api';
 
 dotenv.config();
 
@@ -127,6 +128,7 @@ app.get('/api/stations', async (_req, res) => {
   try {
     const stations = await prisma.station.findMany({
       include: {
+        location: true,
         bandActivities: true,
         networkStatus: true,
         _count: {
@@ -145,6 +147,7 @@ app.get('/api/stations/:id', async (req, res) => {
     const station = await prisma.station.findUnique({
       where: { id: req.params.id },
       include: {
+        location: true,
         bandActivities: true,
         qsoLogs: { orderBy: { qsoDate: 'desc' }, take: 10 },
         contextLogs: { orderBy: { createdAt: 'desc' }, take: 10 },
@@ -159,19 +162,37 @@ app.get('/api/stations/:id', async (req, res) => {
 
 app.post('/api/stations', async (req, res) => {
   try {
-    const { callsign, name, class: stationClass, section, grid } = req.body;
+    const { callsign, name, class: stationClass, locationId } = req.body;
     const station = await prisma.station.create({
       data: {
         callsign,
         name,
         class: stationClass,
-        section,
-        grid,
+        locationId,
       },
     });
     return res.status(201).json(station);
   } catch (error) {
     return res.status(400).json({ error: 'Failed to create station' });
+  }
+});
+
+app.patch('/api/stations/:callsign', async (req, res) => {
+  try {
+    const { name, class: stationClass, section, locationId, clubId } = req.body;
+    const station = await prisma.station.update({
+      where: { callsign: req.params.callsign },
+      data: {
+        name,
+        class: stationClass,
+        section, // Deprecated but still supported for backward compatibility
+        locationId,
+        clubId,
+      },
+    });
+    return res.json(station);
+  } catch (error) {
+    return res.status(400).json({ error: 'Failed to update station' });
   }
 });
 
@@ -1507,6 +1528,9 @@ app.get('/api/callsign/lookup/:callsign', async (req, res) => {
     return res.status(500).json({ error: error.message || 'Failed to lookup callsign' });
   }
 });
+
+// Mount location router
+app.use('/api/locations', locationRouter);
 
 // Validate callsign
 app.get('/api/callsign/validate/:callsign', async (req, res) => {

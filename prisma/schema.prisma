@@ -10,16 +10,43 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Saved operating locations (can be reused across operations)
+model Location {
+  id          String   @id @default(cuid())
+  name        String   // "Home QTH", "Field Day Site", "Portable - Mt. Hood"
+  latitude    String?
+  longitude   String?
+  grid        String?
+  elevation   Int?     // Elevation in feet
+  section     String?  // ARRL section
+  county      String?
+  cqZone      Int?     // CQ Zone (1-40)
+  ituZone     Int?     // ITU Zone (1-90)
+  isDefault   Boolean  @default(false) // Default location for this operator
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  stations    Station[]
+  
+  @@map("locations")
+}
+
 // Station/Operator information
 model Station {
   id        String   @id @default(cuid())
   callsign  String   @unique
   name      String
   class     String?  // Field Day class (1A, 2A, 3A, etc.)
-  section   String?  // ARRL section
-  grid      String?  // Grid square
+  section   String?  // ARRL section (deprecated - use location.section)
+  grid      String?  // Grid square (deprecated - use location.grid)
+  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Current operating location
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
   // Club membership
   clubId    String?
@@ -33,6 +60,7 @@ model Station {
   radioAssignments RadioAssignment[]
 
   @@index([clubId])
+  @@index([locationId])
   @@map("stations")
 }
 

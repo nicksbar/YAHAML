@@ -129,7 +129,7 @@ function App() {
   const [qsoLogs, setQsoLogs] = useState<QsoLog[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [globalErrors, setGlobalErrors] = useState<string[]>([])
+  const [globalMessages, setGlobalMessages] = useState<Array<{ text: string; type: 'error' | 'success' }>>([])
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [callsignInput, setCallsignInput] = useState(
     localStorage.getItem(storageKey) || '',
@@ -210,12 +210,20 @@ function App() {
   const [radioTesting, setRadioTesting] = useState(false)
   const [specialClubId, setSpecialClubId] = useState('')
   
-  // Station location state
+  // Saved locations state
+  const [savedLocations, setSavedLocations] = useState<any[]>([])
+  const [selectedLocationId, setSelectedLocationId] = useState('')
+  const [locationName, setLocationName] = useState('')
+  
+  // Current location state (for editing)
   const [stationLatitude, setStationLatitude] = useState('')
   const [stationLongitude, setStationLongitude] = useState('')
-  const [stationLocationName, setStationLocationName] = useState('')
   const [stationGrid, setStationGrid] = useState('')
   const [stationSection, setStationSection] = useState('')
+  const [stationCounty, setStationCounty] = useState('')
+  const [stationCqZone, setStationCqZone] = useState('')
+  const [stationItuZone, setStationItuZone] = useState('')
+  const [stationElevation, setStationElevation] = useState('')
   const [locationDetecting, setLocationDetecting] = useState(false)
   
   const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
@@ -702,7 +710,7 @@ function App() {
       })
       if (response.ok) {
         await fetchStations()
-        addError('Station details saved')
+        addSuccess('Station details saved')
       } else {
         const data = await response.json()
         addError(data.error || 'Failed to save station details')
@@ -721,6 +729,7 @@ function App() {
     fetchSpecialCallsigns()
     fetchContestTemplates()
     fetchRadios()
+    fetchLocations()
     // fetchRadioAssignments()
   }, [])
 
@@ -778,12 +787,16 @@ function App() {
     }
   }, [clubContestId, contest, availableContests])
 
-  const addError = (msg: string) => {
-    setGlobalErrors(prev => [...prev, msg])
+  const addMessage = (msg: string, type: 'error' | 'success' = 'error') => {
+    setGlobalMessages(prev => [...prev, { text: msg, type }])
     setTimeout(() => {
-      setGlobalErrors(prev => prev.slice(1))
-    }, 5000)
+      setGlobalMessages(prev => prev.slice(1))
+    }, 3000)
   }
+  
+  // Backwards compatibility
+  const addError = (msg: string) => addMessage(msg, 'error')
+  const addSuccess = (msg: string) => addMessage(msg, 'success')
 
   const currentCallsign = localStorage.getItem(storageKey) || 'Not set'
 
@@ -2314,54 +2327,6 @@ function App() {
     return letter1 + letter2 + num1 + num2 + letter3 + letter4
   }
 
-  function getARRLSection(lat: number, lon: number): string {
-    // Simplified ARRL section lookup based on coordinates
-    // Returns 2-letter ARRL section code
-    if (lat < 25) return 'SFL' // South Florida
-    if (lat < 27 && lon < -80) return 'NFL' // North Florida
-    if (lat < 30 && lon < -81) return 'GA' // Georgia  
-    if (lat < 35 && lon < -80) return 'SC' // South Carolina
-    if (lat < 37 && lon < -77) return 'VA' // Virginia
-    if (lat < 40 && lon < -74) return 'NJ' // New Jersey
-    if (lat < 42 && lon < -71) return 'CT' // Connecticut
-    if (lat < 45 && lon < -70) return 'VT' // Vermont
-    if (lat < 48 && lon < -68) return 'ME' // Maine
-    if (lat < 40 && lon < -72) return 'NY' // New York
-    if (lat < 42 && lon < -76) return 'PA' // Pennsylvania
-    if (lat < 40 && lon < -78) return 'VA' // Virginia (western)
-    if (lat < 38 && lon < -80) return 'WV' // West Virginia
-    if (lat < 40 && lon < -82) return 'OH' // Ohio
-    if (lat < 42 && lon < -84) return 'MI' // Michigan
-    if (lat < 45 && lon < -87) return 'IN' // Indiana
-    if (lat < 48 && lon < -89) return 'WI' // Wisconsin
-    if (lat < 45 && lon < -92) return 'MN' // Minnesota
-    if (lat < 41 && lon < -88) return 'IL' // Illinois
-    if (lat < 40 && lon < -85) return 'KY' // Kentucky
-    if (lat < 36 && lon < -88) return 'TN' // Tennessee
-    if (lat < 35 && lon < -90) return 'AR' // Arkansas
-    if (lat < 33 && lon < -91) return 'LA' // Louisiana
-    if (lat < 35 && lon < -93) return 'OK' // Oklahoma
-    if (lat < 37 && lon < -97) return 'KS' // Kansas
-    if (lat < 41 && lon < -99) return 'NE' // Nebraska
-    if (lat < 45 && lon < -103) return 'SD' // South Dakota
-    if (lat < 48 && lon < -105) return 'MT' // Montana
-    if (lat < 42 && lon < -107) return 'WY' // Wyoming
-    if (lat < 40 && lon < -109) return 'UT' // Utah
-    if (lat < 38 && lon < -109) return 'AZ' // Arizona
-    if (lat < 36 && lon < -108) return 'NM' // New Mexico
-    if (lat < 33 && lon < -100) return 'TX' // Texas (north)
-    if (lat < 29 && lon < -99) return 'TX' // Texas (south)
-    if (lat < 42 && lon < -120) return 'OR' // Oregon
-    if (lat < 49 && lon < -121) return 'WA' // Washington
-    if (lat < 40 && lon < -124) return 'NCA' // California (north)
-    if (lat < 36 && lon < -120) return 'SCA' // California (south)
-    if (lat < 21 && lon < -158) return 'HI' // Hawaii
-    if (lat < 45 && lon < -95) return 'MO' // Missouri
-    if (lat < 42 && lon < -91) return 'IA' // Iowa
-    if (lat < 44 && lon < -123) return 'OR' // Oregon
-    return 'XX' // Unknown
-  }
-
   async function autoDetectLocation() {
     setLocationDetecting(true)
     try {
@@ -2373,13 +2338,54 @@ function App() {
         )
       })
 
-      const grid = latLonToGridSquare(position.latitude, position.longitude)
-      const section = getARRLSection(position.latitude, position.longitude)
+      const lat = position.latitude
+      const lon = position.longitude
+      const grid = latLonToGridSquare(lat, lon)
 
-      setStationLatitude(position.latitude.toFixed(4))
-      setStationLongitude(position.longitude.toFixed(4))
+      setStationLatitude(lat.toFixed(4))
+      setStationLongitude(lon.toFixed(4))
       setStationGrid(grid)
-      setStationSection(section)
+      
+      // Elevation from GPS
+      if (position.altitude) {
+        setStationElevation(Math.round(position.altitude * 3.28084).toString()) // meters to feet
+      }
+
+      // Reverse geocode to get county and possibly more details
+      try {
+        const geoResponse = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`,
+          { headers: { 'User-Agent': 'YAHAML-Contest-Logger/1.0' } }
+        )
+        if (geoResponse.ok) {
+          const geoData = await geoResponse.json()
+          const address = geoData.address || {}
+          
+          // Set county
+          if (address.county) {
+            setStationCounty(address.county.replace(' County', ''))
+          }
+          
+          // Set state for ARRL section lookup
+          if (address.state_code || address.state) {
+            setStationSection(address.state_code || address.state)
+          }
+        }
+      } catch (err) {
+        console.error('Reverse geocoding failed:', err)
+      }
+
+      // Lookup CQ and ITU zones by coordinates
+      try {
+        const zoneResponse = await fetch(`/api/locations/zones?lat=${lat}&lon=${lon}`)
+        if (zoneResponse.ok) {
+          const zones = await zoneResponse.json()
+          if (zones.cqZone) setStationCqZone(zones.cqZone.toString())
+          if (zones.ituZone) setStationItuZone(zones.ituZone.toString())
+        }
+      } catch (err) {
+        console.error('Zone lookup failed:', err)
+      }
     } catch (error: any) {
       const message = error.code === 1 ? 'Location permission denied' : 'Failed to get location'
       addError(message)
@@ -2387,6 +2393,162 @@ function App() {
       setLocationDetecting(false)
     }
   }
+
+  async function fetchLocations() {
+    try {
+      const response = await fetch('/api/locations')
+      if (response.ok) {
+        const data = await response.json()
+        setSavedLocations(data)
+        // Select default location if available
+        const defaultLoc = data.find((loc: any) => loc.isDefault)
+        if (defaultLoc && !selectedLocationId) {
+          loadLocation(defaultLoc)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch locations:', error)
+    }
+  }
+
+  function loadLocation(location: any) {
+    setSelectedLocationId(location.id)
+    setLocationName(location.name)
+    setStationLatitude(location.latitude || '')
+    setStationLongitude(location.longitude || '')
+    setStationGrid(location.grid || '')
+    setStationSection(location.section || '')
+    setStationCounty(location.county || '')
+    setStationCqZone(location.cqZone?.toString() || '')
+    setStationItuZone(location.ituZone?.toString() || '')
+    setStationElevation(location.elevation?.toString() || '')
+  }
+
+  async function saveLocationAs() {
+    if (!locationName.trim()) {
+      addError('Location name is required')
+      return
+    }
+
+    try {
+      const response = await fetch('/api/locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: locationName,
+          latitude: stationLatitude || null,
+          longitude: stationLongitude || null,
+          grid: stationGrid || null,
+          elevation: stationElevation ? parseInt(stationElevation) : null,
+          section: stationSection || null,
+          county: stationCounty || null,
+          cqZone: stationCqZone ? parseInt(stationCqZone) : null,
+          ituZone: stationItuZone ? parseInt(stationItuZone) : null,
+          isDefault: false,
+        }),
+      })
+      if (response.ok) {
+        const newLocation = await response.json()
+        await fetchLocations()
+        setSelectedLocationId(newLocation.id)
+        addSuccess('Location saved successfully')
+      } else {
+        const data = await response.json()
+        addError(data.error || 'Failed to save location')
+      }
+    } catch (error) {
+      addError('Failed to save location')
+    }
+  }
+
+  async function updateSelectedLocation() {
+    if (!selectedLocationId) {
+      addError('No location selected to update')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/locations/${selectedLocationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: locationName,
+          latitude: stationLatitude || null,
+          longitude: stationLongitude || null,
+          grid: stationGrid || null,
+          elevation: stationElevation ? parseInt(stationElevation) : null,
+          section: stationSection || null,
+          county: stationCounty || null,
+          cqZone: stationCqZone ? parseInt(stationCqZone) : null,
+          ituZone: stationItuZone ? parseInt(stationItuZone) : null,
+        }),
+      })
+      if (response.ok) {
+        await fetchLocations()
+        addSuccess('Location updated successfully')
+      } else {
+        const data = await response.json()
+        addError(data.error || 'Failed to update location')
+      }
+    } catch (error) {
+      addError('Failed to update location')
+    }
+  }
+
+  async function setAsDefaultLocation() {
+    if (!selectedLocationId) {
+      addError('No location selected')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/locations/${selectedLocationId}/set-default`, {
+        method: 'PATCH',
+      })
+      if (response.ok) {
+        await fetchLocations()
+        addSuccess('Set as default location')
+      } else {
+        const data = await response.json()
+        addError(data.error || 'Failed to set default')
+      }
+    } catch (error) {
+      addError('Failed to set default location')
+    }
+  }
+
+  async function applyLocationToStation() {
+    const callsign = localStorage.getItem(storageKey)
+    if (!callsign) {
+      addError('No active callsign selected')
+      return
+    }
+    if (!selectedLocationId) {
+      addError('No location selected to apply')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/stations/${callsign}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          locationId: selectedLocationId,
+        }),
+      })
+      if (response.ok) {
+        await fetchStations()
+        addSuccess('Location applied to station')
+      } else {
+        const data = await response.json()
+        addError(data.error || 'Failed to apply location')
+      }
+    } catch (error) {
+      addError('Failed to apply location')
+    }
+  }
+
+
 
   function renderStationView() {
     const currentCall = localStorage.getItem(storageKey) || 'Not set'
@@ -2524,13 +2686,59 @@ function App() {
 
           <section className="panel">
             <h2>Operating Location</h2>
-            <p className="hint">Automatically determine grid square and section from GPS coordinates</p>
+            <p className="hint">Save and manage operating locations. GPS auto-detect fills coordinates. Select a saved location or create a new one.</p>
+            
+            {/* Location Selection */}
+            <div className="form-grid" style={{ gridTemplateColumns: '1fr auto', marginBottom: '1rem' }}>
+              <div className="field">
+                <label>Saved Location</label>
+                <select 
+                  value={selectedLocationId}
+                  onChange={(e) => {
+                    const loc = savedLocations.find(l => l.id === e.target.value)
+                    if (loc) {
+                      loadLocation(loc)
+                    } else {
+                      // New location
+                      setSelectedLocationId('')
+                      setLocationName('')
+                      setStationLatitude('')
+                      setStationLongitude('')
+                      setStationGrid('')
+                      setStationSection('')
+                      setStationCounty('')
+                      setStationCqZone('')
+                      setStationItuZone('')
+                      setStationElevation('')
+                    }
+                  }}
+                >
+                  <option value="">+ New Location</option>
+                  {savedLocations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name} {loc.isDefault ? '⭐' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Location Name</label>
+                <input 
+                  type="text" 
+                  placeholder="Home QTH, Field Day Site, etc."
+                  value={locationName}
+                  onChange={(e) => setLocationName(e.target.value)}
+                />
+              </div>
+            </div>
+            
+            {/* Location Fields */}
             <div className="form-grid">
               <div className="field">
                 <label>Latitude</label>
                 <input 
                   type="number" 
-                  placeholder="41.7142" 
+                  placeholder="44.8468" 
                   value={stationLatitude}
                   onChange={(e) => setStationLatitude(e.target.value)}
                   step="0.0001"
@@ -2540,39 +2748,70 @@ function App() {
                 <label>Longitude</label>
                 <input 
                   type="number" 
-                  placeholder="-72.7267" 
+                  placeholder="-123.2208" 
                   value={stationLongitude}
                   onChange={(e) => setStationLongitude(e.target.value)}
                   step="0.0001"
                 />
               </div>
               <div className="field">
-                <label>Grid Square</label>
+                <label>Grid Square (Auto)</label>
                 <input 
                   type="text" 
-                  placeholder="FN31pr"
+                  placeholder="CN84ju"
                   value={stationGrid}
                   onChange={(e) => setStationGrid(e.target.value.toUpperCase())}
                   readOnly={!!stationLatitude && !!stationLongitude}
                 />
               </div>
               <div className="field">
-                <label>ARRL Section</label>
+                <label>Elevation (ft)</label>
                 <input 
-                  type="text" 
-                  placeholder="CT"
-                  value={stationSection}
-                  onChange={(e) => setStationSection(e.target.value.toUpperCase())}
-                  readOnly={!!stationLatitude && !!stationLongitude}
+                  type="number" 
+                  placeholder="500"
+                  value={stationElevation}
+                  onChange={(e) => setStationElevation(e.target.value)}
                 />
               </div>
               <div className="field">
-                <label>Location Name (Optional)</label>
+                <label>ARRL Section</label>
                 <input 
                   type="text" 
-                  placeholder="Field Day Site" 
-                  value={stationLocationName}
-                  onChange={(e) => setStationLocationName(e.target.value)}
+                  placeholder="OR"
+                  value={stationSection}
+                  onChange={(e) => setStationSection(e.target.value.toUpperCase())}
+                  maxLength={3}
+                />
+              </div>
+              <div className="field">
+                <label>County</label>
+                <input 
+                  type="text" 
+                  placeholder="Polk"
+                  value={stationCounty}
+                  onChange={(e) => setStationCounty(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>CQ Zone (1-40)</label>
+                <input 
+                  type="number" 
+                  placeholder="3"
+                  value={stationCqZone}
+                  onChange={(e) => setStationCqZone(e.target.value)}
+                  min="1"
+                  max="40"
+                />
+              </div>
+              <div className="field">
+                <label>ITU Zone (1-90)</label>
+                <input 
+                  type="number" 
+                  placeholder="2"
+                  value={stationItuZone}
+                  onChange={(e) => setStationItuZone(e.target.value)}
+                  min="1"
+                  max="90"
                 />
               </div>
             </div>
@@ -2584,17 +2823,45 @@ function App() {
               >
                 📍 {locationDetecting ? 'Detecting...' : 'Auto-detect from GPS'}
               </button>
+              {selectedLocationId ? (
+                <>
+                  <button 
+                    className="btn primary"
+                    onClick={updateSelectedLocation}
+                  >
+                    💾 Update Location
+                  </button>
+                  <button 
+                    className="btn secondary"
+                    onClick={setAsDefaultLocation}
+                  >
+                    ⭐ Set as Default
+                  </button>
+                  <button 
+                    className="btn primary"
+                    onClick={applyLocationToStation}
+                  >
+                    ✓ Apply to Station
+                  </button>
+                </>
+              ) : (
+                <button 
+                  className="btn primary"
+                  onClick={saveLocationAs}
+                  disabled={!locationName.trim()}
+                >
+                  💾 Save as New Location
+                </button>
+              )}
             </div>
-            {stationGrid && stationSection && (
+            {stationGrid && stationLatitude && stationLongitude && (
               <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--accent-muted)', borderRadius: '6px' }}>
                 <div style={{ fontSize: '0.9rem' }}>
-                  <strong>Detected:</strong> Grid {stationGrid} in {stationSection}
+                  <strong>Detected:</strong> Grid {stationGrid}
                 </div>
-                {stationLatitude && stationLongitude && (
-                  <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '0.5rem' }}>
-                    {stationLatitude}, {stationLongitude}
-                  </div>
-                )}
+                <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '0.5rem' }}>
+                  {stationLatitude}, {stationLongitude}
+                </div>
               </div>
             )}
           </section>
@@ -2886,7 +3153,7 @@ function App() {
       </header>
 
       <main>
-        {globalErrors.length > 0 && (
+        {globalMessages.length > 0 && (
           <div style={{
             position: 'fixed',
             top: '70px',

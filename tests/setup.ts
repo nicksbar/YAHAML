@@ -28,10 +28,11 @@ export async function teardownTestDB() {
     await prisma.networkStatus.deleteMany();
     
     // Then independent tables
+    await prisma.station.deleteMany(); // Delete stations before locations (FK dependency)
+    await prisma.location.deleteMany();
     await prisma.club.deleteMany();
     await prisma.contest.deleteMany();
     await prisma.contestTemplate.deleteMany();
-    await prisma.station.deleteMany();
     await prisma.aDIFImport.deleteMany();
   } catch (error) {
     // Silently fail if some tables don't exist or have constraints
