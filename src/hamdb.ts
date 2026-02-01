@@ -17,8 +17,8 @@ export interface CallsignInfo {
   lastUpdated?: string;
 }
 
-const HAMDB_API_BASE = 'https://hamdb.org/api/v1';
-const HAMDB_USER_AGENT = 'YAHAML-Contest-Logger/1.0';
+const HAMDB_API_BASE = 'https://api.hamdb.org/v1';
+const HAMDB_APP_NAME = 'YAHAML-Contest-Logger/1.0';
 
 /**
  * Lookup a callsign in HamDB
@@ -28,39 +28,39 @@ export async function lookupCallsign(callsign: string): Promise<CallsignInfo | n
   try {
     const cleanCall = callsign.toUpperCase().trim();
     
-    // HamDB API endpoint: /search/{callsign}/{user_agent}
-    const url = `${HAMDB_API_BASE}/search/${cleanCall}/${HAMDB_USER_AGENT}`;
+    // HamDB API endpoint: GET http://api.hamdb.org/{callsign}/json/{appname}
+    const url = `${HAMDB_API_BASE}/${cleanCall}/json/${HAMDB_APP_NAME}`;
     
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
+    const response = await fetch(url);
 
     if (!response.ok) {
-      if (response.status === 404) {
-        return null; // Callsign not found
-      }
       throw new Error(`HamDB API error: ${response.status}`);
     }
 
     const data: any = await response.json();
 
-    // HamDB returns { search: { results: [ { call: {...} } ] } }
-    if (data.search?.results?.[0]?.call) {
-      const call = data.search.results[0].call;
+    console.log(`HamDB response for ${cleanCall}:`, JSON.stringify(data, null, 2));
+
+    // HamDB returns { hamdb: { callsign: {...}, messages: { status: "OK" } } }
+    if (data.hamdb?.callsign && data.hamdb?.messages?.status === 'OK') {
+      const call = data.hamdb.callsign;
       
       return {
         callsign: cleanCall,
-        name: call.fname && call.lname ? `${call.fname} ${call.lname}` : call.fname || call.lname,
+        name: call.fname && call.name ? `${call.fname} ${call.name}` : call.fname || call.name,
         address: call.addr1,
-        city: call.city,
+        city: call.addr2,
         state: call.state,
         zip: call.zip,
         country: call.country,
-        class: call.class, // License class (A, B, C, E, F, T, N)
+        class: call.class, // License class
         lastUpdated: call.updated,
       };
+    }
+
+    // Check for not found status
+    if (data.hamdb?.messages?.status === 'NOT_FOUND') {
+      return null;
     }
 
     return null;

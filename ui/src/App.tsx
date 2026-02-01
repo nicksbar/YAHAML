@@ -173,6 +173,18 @@ function App() {
   const [clubSaveError, setClubSaveError] = useState<string | null>(null)
   const [clubContestId, setClubContestId] = useState('')
   
+  // Station form state
+  const [stationName, setStationName] = useState('')
+  const [stationLicenseClass, setStationLicenseClass] = useState('')
+  const [stationAddress, setStationAddress] = useState('')
+  const [stationCity, setStationCity] = useState('')
+  const [stationState, setStationState] = useState('')
+  const [stationZip, setStationZip] = useState('')
+  const [stationCountry, setStationCountry] = useState('')
+  const [stationClubId, setStationClubId] = useState('')
+  const [stationContestId, setStationContestId] = useState('')
+  const [stationLookupLoading, setStationLookupLoading] = useState(false)
+  
   // Special callsign form state
   const [specialCallsigns, setSpecialCallsigns] = useState<any[]>([])
   const [specialCallsign, setSpecialCallsign] = useState('')
@@ -644,6 +656,59 @@ function App() {
       await fetchAdminList() // Recheck admin status
     } catch (error) {
       console.error('Failed to save callsign:', error)
+    }
+  }
+
+  async function lookupCallsignInHamDB(callsign: string) {
+    setStationLookupLoading(true)
+    try {
+      const response = await fetch(`/api/callsign/lookup/${callsign}`)
+      if (response.ok) {
+        const data = await response.json()
+        setStationName(data.name || '')
+        setStationAddress(data.address || '')
+        setStationCity(data.city || '')
+        setStationState(data.state || '')
+        setStationZip(data.zip || '')
+        setStationCountry(data.country || '')
+        setStationLicenseClass(data.class || '')
+      } else {
+        addError(`Callsign ${callsign} not found in HamDB`)
+      }
+    } catch (error) {
+      addError('Failed to lookup callsign')
+    } finally {
+      setStationLookupLoading(false)
+    }
+  }
+
+  async function saveStationDetails() {
+    const callsign = localStorage.getItem(storageKey)
+    if (!callsign) {
+      addError('No active callsign selected')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/stations/${callsign}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: stationName,
+          class: stationLicenseClass,
+          section: stationState,
+          clubId: stationClubId || null,
+        }),
+      })
+      if (response.ok) {
+        await fetchStations()
+        addError('Station details saved')
+      } else {
+        const data = await response.json()
+        addError(data.error || 'Failed to save station details')
+      }
+    } catch (error) {
+      addError('Failed to save station details')
     }
   }
 
@@ -2365,20 +2430,95 @@ function App() {
           </section>
 
           <section className="panel">
-            <h2>Station Details</h2>
+            <h2>Operator Information</h2>
+            <p className="hint">Lookup from HamDB or edit manually</p>
+            <div style={{ marginBottom: '1rem' }}>
+              <button 
+                className="btn secondary"
+                onClick={() => lookupCallsignInHamDB(currentCall)}
+                disabled={currentCall === 'Not set' || stationLookupLoading}
+              >
+                {stationLookupLoading ? '🔍 Searching HamDB...' : '🔍 Lookup in HamDB'}
+              </button>
+            </div>
             <div className="form-grid">
               <div className="field">
                 <label>Name</label>
-                <input type="text" placeholder="Your Name" />
+                <input 
+                  type="text" 
+                  placeholder="Your Name" 
+                  value={stationName}
+                  onChange={(e) => setStationName(e.target.value)}
+                />
               </div>
               <div className="field">
                 <label>License Class</label>
-                <select>
-                  <option>Extra</option>
-                  <option>General</option>
-                  <option>Technician</option>
+                <select
+                  value={stationLicenseClass}
+                  onChange={(e) => setStationLicenseClass(e.target.value)}
+                >
+                  <option value="">-- Select --</option>
+                  <option value="E">Extra (E)</option>
+                  <option value="A">Advanced (A)</option>
+                  <option value="G">General (G)</option>
+                  <option value="T">Technician (T)</option>
+                  <option value="N">Novice (N)</option>
                 </select>
               </div>
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>Address</label>
+                <input 
+                  type="text" 
+                  placeholder="123 Radio Lane"
+                  value={stationAddress}
+                  onChange={(e) => setStationAddress(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>City</label>
+                <input 
+                  type="text" 
+                  placeholder="Boston"
+                  value={stationCity}
+                  onChange={(e) => setStationCity(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>State/Province</label>
+                <input 
+                  type="text" 
+                  placeholder="MA"
+                  value={stationState}
+                  onChange={(e) => setStationState(e.target.value.toUpperCase())}
+                  maxLength={2}
+                />
+              </div>
+              <div className="field">
+                <label>ZIP/Postal Code</label>
+                <input 
+                  type="text" 
+                  placeholder="02101"
+                  value={stationZip}
+                  onChange={(e) => setStationZip(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Country</label>
+                <input 
+                  type="text" 
+                  placeholder="United States"
+                  value={stationCountry}
+                  onChange={(e) => setStationCountry(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="action-buttons" style={{ marginTop: '0' }}>
+              <button 
+                className="btn primary"
+                onClick={saveStationDetails}
+              >
+                💾 Save Operator Information
+              </button>
             </div>
           </section>
 
@@ -2464,7 +2604,10 @@ function App() {
             <p className="hint">Link this station to a club for coordinated operations</p>
             <div className="field">
               <label>Associated Club</label>
-              <select>
+              <select
+                value={stationClubId}
+                onChange={(e) => setStationClubId(e.target.value)}
+              >
                 <option value="">Independent Operator</option>
                 {clubs.map((club: any) => (
                   <option key={club.id} value={club.id}>{club.name} ({club.callsign})</option>
@@ -2478,7 +2621,10 @@ function App() {
             <p className="hint">Select active contest for this operating session</p>
             <div className="field">
               <label>Active Contest</label>
-              <select>
+              <select
+                value={stationContestId}
+                onChange={(e) => setStationContestId(e.target.value)}
+              >
                 <option value="">No Contest</option>
                 {contest && contest.isActive && (
                   <option value={contest.id}>{contest.name} (Active)</option>
