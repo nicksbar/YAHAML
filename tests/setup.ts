@@ -18,7 +18,7 @@ export async function teardownTestDB() {
   // Clear all data
   await prisma.networkStatus.deleteMany();
   await prisma.contextLog.deleteMany();
-  await prisma.qSOLog.deleteMany();
+  await prisma.logEntry.deleteMany();
   await prisma.bandActivity.deleteMany();
   await prisma.station.deleteMany();
   await prisma.aDIFImport.deleteMany();

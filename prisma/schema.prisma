@@ -27,7 +27,7 @@ model Station {
 
   // Relations
   bandActivities BandActivity[]
-  qsoLogs        QSOLog[]
+  qsoLogs        LogEntry[]
   contextLogs    ContextLog[]
   networkStatus  NetworkStatus?
   radioAssignments RadioAssignment[]
@@ -57,9 +57,14 @@ model BandActivity {
 }
 
 // QSO (contact) log entries
-model QSOLog {
+model LogEntry {
   id        String   @id @default(cuid())
   stationId String
+  contestId String?
+  clubId    String?
+  operatorCallsign String?
+  source    String   @default("unknown")
+  dedupeKey String   @unique
   
   // QSO details
   callsign  String   // Remote station callsign
@@ -83,16 +88,34 @@ model QSOLog {
   name      String?  // Remote operator name
   state     String?  // State/Province
   grid      String?  // Grid square
+  rawPayload String? // Optional raw payload for troubleshooting
+  
+  // Merge & conflict tracking
+  merge_status      String    @default("primary")  // primary | duplicate_of | merged
+  merged_into_id    String?   // FK to primary entry (if this is a duplicate)
+  merge_reason      String?   // Why this was merged (e.g., "TCP relay duplicate", "WSJT-X auto-merge")
+  merge_timestamp   DateTime? // When merge happened
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
   station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  contest   Contest? @relation(fields: [contestId], references: [id], onDelete: SetNull)
+  club      Club?    @relation(fields: [clubId], references: [id], onDelete: SetNull)
+  
+  // Self-references for merge tracking
+  merged_from       LogEntry? @relation("MergedInto", fields: [merged_into_id], references: [id], onDelete: SetNull)
+  merges            LogEntry[] @relation("MergedInto")
 
   @@index([stationId])
+  @@index([contestId])
+  @@index([clubId])
   @@index([qsoDate])
   @@index([callsign])
+  @@index([operatorCallsign])
+  @@index([merge_status])
+  @@index([merged_into_id])
   @@map("qso_logs")
 }
 
@@ -232,6 +255,7 @@ model Contest {
   
   // Relations
   clubs          Club[]
+  logEntries     LogEntry[]
   
   @@index([templateId])
   @@map("contests")
@@ -274,6 +298,7 @@ model Club {
   // Relations
   stations       Station[]
   specialCallsigns SpecialCallsign[]
+  logEntries     LogEntry[]
   
   @@index([contestId])
   @@map("clubs")

@@ -6,7 +6,7 @@ async function main() {
   // Clear existing data
   await prisma.networkStatus.deleteMany();
   await prisma.contextLog.deleteMany();
-  await prisma.qSOLog.deleteMany();
+  await prisma.logEntry.deleteMany();
   await prisma.bandActivity.deleteMany();
   await prisma.station.deleteMany();
 
@@ -53,9 +53,11 @@ async function main() {
   });
 
   // Create sample QSO logs
-  await prisma.qSOLog.create({
+  await prisma.logEntry.create({
     data: {
       stationId: station1.id,
+      source: 'seed',
+      dedupeKey: `${station1.callsign}|K1LI|20|CW|seed`,
       callsign: 'K1LI',
       band: '20',
       mode: 'CW',

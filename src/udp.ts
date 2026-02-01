@@ -1,4 +1,5 @@
 import dgram from 'dgram';
+import { Prisma } from '@prisma/client';
 import prisma from './db';
 
 export interface UdpTarget {
@@ -21,6 +22,33 @@ export interface UdpQsoInput {
   name?: string;
   state?: string;
   grid?: string;
+}
+
+function buildDedupeKey(input: {
+  stationCall: string;
+  callsign: string;
+  band: string;
+  mode: string;
+  qsoDate: Date;
+  qsoTime: string;
+  contestId?: string | null;
+  clubId?: string | null;
+}): string {
+  const dateStr = input.qsoDate.toISOString().slice(0, 10);
+  return [
+    input.contestId || 'none',
+    input.clubId || 'none',
+    input.stationCall.toUpperCase(),
+    input.callsign.toUpperCase(),
+    input.band.toUpperCase(),
+    input.mode.toUpperCase(),
+    dateStr,
+    input.qsoTime,
+  ].join('|');
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 function parseKeyValuePayload(payload: string): Record<string, string> {
@@ -260,24 +288,42 @@ export function startUdpServer(port: number, host: string = '0.0.0.0', targets: 
     }
 
     const station = await getOrCreateStation(qso.stationCall);
-    await prisma.qSOLog.create({
-      data: {
-        stationId: station.id,
-        callsign: qso.callsign,
-        band: qso.band,
-        mode: qso.mode,
-        frequency: qso.frequency,
-        rstSent: qso.rstSent,
-        rstRcvd: qso.rstRcvd,
-        power: qso.power,
-        qsoDate: qso.qsoDate,
-        qsoTime: qso.qsoTime,
-        points: qso.points || 0,
-        name: qso.name,
-        state: qso.state,
-        grid: qso.grid,
-      },
+    const dedupeKey = buildDedupeKey({
+      stationCall: qso.stationCall,
+      callsign: qso.callsign,
+      band: qso.band,
+      mode: qso.mode,
+      qsoDate: qso.qsoDate,
+      qsoTime: qso.qsoTime,
     });
+
+    try {
+      await prisma.logEntry.create({
+        data: {
+          stationId: station.id,
+          callsign: qso.callsign,
+          band: qso.band,
+          mode: qso.mode,
+          frequency: qso.frequency,
+          rstSent: qso.rstSent,
+          rstRcvd: qso.rstRcvd,
+          power: qso.power,
+          qsoDate: qso.qsoDate,
+          qsoTime: qso.qsoTime,
+          points: qso.points || 0,
+          name: qso.name,
+          state: qso.state,
+          grid: qso.grid,
+          source: 'udp',
+          dedupeKey,
+          rawPayload: payload.substring(0, 2000),
+        },
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
+      }
+    }
 
     await logBandActivity(station.id, qso.band, qso.mode).catch(() => {});
     await updateNetworkStatus(station.id, rinfo.address).catch(() => {});

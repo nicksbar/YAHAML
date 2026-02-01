@@ -31,7 +31,7 @@ describe('Club API', () => {
 
   afterEach(async () => {
     // Clean up clubs after each test - delete in correct order
-    await prisma.qSOLog.deleteMany({});
+    await prisma.logEntry.deleteMany({});
     await prisma.station.deleteMany({});
     await prisma.club.deleteMany({ where: { contestId: testContestId } });
   });
@@ -248,9 +248,11 @@ describe('Club API', () => {
         },
       });
 
-      await prisma.qSOLog.create({
+      await prisma.logEntry.create({
         data: {
           stationId: station.id,
+          source: 'test',
+          dedupeKey: `${station.callsign}|N1TEST|20|CW|test`,
           callsign: 'N1TEST',
           qsoDate: new Date(),
           qsoTime: '1234',

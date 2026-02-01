@@ -232,40 +232,134 @@ Hamlib (rigctld) → Query on form open
 **Goal**: Support ARRL, CQ, WPX rules natively.
 
 ### 7.1 Contest Template System
+
 ```prisma
 model ContestTemplate {
-  id          String @id
-  name        String  // "ARRL Field Day", "CQ WW DX"
+  id               String   @id @default(cuid())
+  name             String   @unique // "ARRL Field Day", "CQ WW DX", "Parks on the Air"
+  organization     String             // "ARRL", "CQ Magazine", "POTA"
+  description      String?
+  website          String?
   
-  // Exchange
-  exchange_fields  Json  // { "state": required, "section": optional }
-  mode_restriction Json  // { "80m": ["cw", "ssb"], "40m": [...] }
+  // Exchange requirements
+  exchange_fields  Json             // { "state": required, "section": optional }
+  exchange_example String?          // e.g., "TX" or "AR/TX" for Field Day
   
-  // Scoring
-  scoring_rules    Json  // { "cw": { "us": 1, "dxcc": 2 }, ... }
-  dupe_rules       String  // "mode-aware", "band-only", "strict"
+  // Restrictions by band/mode
+  mode_restrictions Json?           // { "160m": ["cw"], "40m": ["cw", "ssb"] }
+  band_restrictions Json?           // { "digital": ["20m", "40m", "80m"] }
   
-  // Export
-  cabrillo_class   String  // "5A", "3A", "M/M", etc.
-  export_template  String  // CABRILLO template
+  // Scoring configuration
+  scoring_rules    Json             // { "cw": { "us": 1, "dxcc": 2 }, "ssb": { ... } }
+  qso_points       Int              // Points per QSO
+  multiplier_type  String[]         // ["state", "section", "dxcc"]
+  bonuses          Json?            // { "power": 5, "location": 10 }
+  
+  // Deduplication rules
+  dupe_rules       String @default("mode-aware")  // mode-aware | band-only | strict
+  
+  // Export/Submission
+  cabrillo_class   String?          // "5A", "3A", "M/M", "SO", etc.
+  cabrillo_category String?         // Category for submission
+  exchange_format  String           // Field order in CABRILLO
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  @@index([organization])
 }
 ```
 
-### 7.2 Validation Rules
-- Enforce exchange fields (e.g., state + section for Field Day)
-- Validate call format (W5ABC, N0ABC, DL1ABC, etc.)
-- Check mode-band restrictions (no SSB on 160m CW-only)
-- Calculate score per QSO
+### 7.2 Built-In Contest Templates
 
-### 7.3 Auto-Multiplier Tracking
+#### 🏕️ ARRL Field Day
 ```
+Organization: ARRL
+Exchange: State + Section (e.g., "TX" for Texas)
+Scoring: QSO Points × Power Multiplier + Bonuses
+Multipliers: All US States & Sections
+Special Rules: GOTA (Get On The Air) tracked separately
+```
+
+#### 🏞️ Parks on the Air (POTA)
+```
+Organization: POTA
+Exchange: Park ID + Reference (e.g., "K-0001")
+Scoring: 10 QSOs per activator
+Multipliers: Park activations (each unique park = 1x multiplier)
+Special Rules: Activator/Hunter distinction
+```
+
+#### ⛰️ Summits on the Air (SOTA)
+```
+Organization: SOTA
+Exchange: Grid square + Summit ID
+Scoring: Points based on summit altitude
+Multipliers: Summit summits worked (each unique = multiplier)
+Special Rules: Altitude-based scoring
+```
+
+#### 🌍 CQ WW DX
+```
+Organization: CQ Magazine
+Exchange: Zone (or state if US/Canada)
+Scoring: 3 pts (same continent), 4 pts (same region), 5 pts (DX)
+Multipliers: DXCC countries worked per band
+Special Rules: Band-by-band multipliers, no dupes per band/mode
+```
+
+#### 📻 CQ VHF
+```
+Organization: CQ Magazine
+Exchange: Grid square (6 or 8 character)
+Scoring: 1 pt per QSO + grid square multipliers
+Multipliers: Unique grid squares per band
+Special Rules: VHF/UHF bands only, EME allowed
+```
+
+### 7.3 Validation & Auto-Scoring
+
+```typescript
+// Apply template rules on entry creation
+class ContestValidator {
+  validateExchange(template, exchange) {
+    // Verify state code exists (if required)
+    // Verify section code valid (if required)
+    // Check format matches template
+  }
+  
+  validateQso(template, qso) {
+    // Check mode allowed on band
+    // Verify band/frequency match
+    // Calculate points per template
+  }
+  
+  calculateScore(template, entries) {
+    // Count QSOs per rule
+    // Track multipliers (states, sections, countries, grids)
+    // Apply bonuses
+    // Return total score
+  }
+}
+```
+
+### 7.4 Multiplier Tracking
+
+```prisma
 model Multiplier {
-  contestId    String
-  multiplierType String  // "state", "section", "dxcc_country"
-  value        String   // "TX", "AR", "UR3RZ"
-  first_qso_timestamp DateTime
+  id              String  @id @default(cuid())
+  contestId       String
+  multiplierType  String  // "state", "section", "dxcc_country", "grid_square", "park_id"
+  value           String  // "TX", "AR", "UR3RZ", "FN42ab", "K-0001"
+  count           Int @default(1)
+  
+  first_qso_date  DateTime
+  last_qso_date   DateTime
+  
+  createdAt       DateTime @default(now())
   
   @@unique([contestId, multiplierType, value])
+  @@index([contestId, multiplierType])
 }
 ```
 

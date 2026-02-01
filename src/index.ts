@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { Prisma } from '@prisma/client';
 import prisma from './db';
 import { startRelayServer } from './relay';
 import { parseUdpTargets, startUdpServer } from './udp';
@@ -17,6 +18,33 @@ const udpPort = process.env.UDP_PORT || 2237;
 const udpHost = process.env.UDP_HOST || '0.0.0.0';
 const udpTargets = parseUdpTargets(process.env.UDP_TARGETS);
 const oauthEnabled = process.env.OAUTH_ENABLED === 'true';
+
+function buildDedupeKey(input: {
+  stationCall: string;
+  callsign: string;
+  band: string;
+  mode: string;
+  qsoDate: Date;
+  qsoTime: string;
+  contestId?: string | null;
+  clubId?: string | null;
+}): string {
+  const dateStr = input.qsoDate.toISOString().slice(0, 10);
+  return [
+    input.contestId || 'none',
+    input.clubId || 'none',
+    input.stationCall.toUpperCase(),
+    input.callsign.toUpperCase(),
+    input.band.toUpperCase(),
+    input.mode.toUpperCase(),
+    dateStr,
+    input.qsoTime,
+  ].join('|');
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
 
 // Middleware
 app.use(cors());
@@ -150,7 +178,7 @@ app.post('/api/band-activity', async (req, res) => {
 // QSO log endpoints
 app.get('/api/qso-logs/:stationId', async (req, res) => {
   try {
-    const logs = await prisma.qSOLog.findMany({
+    const logs = await prisma.logEntry.findMany({
       where: { stationId: req.params.stationId },
       orderBy: { qsoDate: 'desc' },
     });
@@ -162,12 +190,177 @@ app.get('/api/qso-logs/:stationId', async (req, res) => {
 
 app.post('/api/qso-logs', async (req, res) => {
   try {
-    const qsoLog = await prisma.qSOLog.create({
-      data: req.body,
+    const {
+      stationId,
+      callsign,
+      band,
+      mode,
+      qsoDate,
+      qsoTime,
+      contestId,
+      clubId,
+      operatorCallsign,
+      source,
+      dedupeKey,
+      ...rest
+    } = req.body;
+
+    if (!stationId || !callsign || !band || !mode || !qsoDate || !qsoTime) {
+      return res.status(400).json({ error: 'Missing required QSO fields' });
+    }
+
+    const station = await prisma.station.findUnique({
+      where: { id: stationId },
     });
-    return res.status(201).json(qsoLog);
+
+    const resolvedDedupeKey = dedupeKey || buildDedupeKey({
+      stationCall: station?.callsign || stationId,
+      callsign,
+      band,
+      mode,
+      qsoDate: new Date(qsoDate),
+      qsoTime,
+      contestId,
+      clubId,
+    });
+
+    try {
+      const qsoLog = await prisma.logEntry.create({
+        data: {
+          stationId,
+          callsign,
+          band,
+          mode,
+          qsoDate: new Date(qsoDate),
+          qsoTime,
+          contestId,
+          clubId,
+          operatorCallsign,
+          source: source || 'api',
+          dedupeKey: resolvedDedupeKey,
+          ...rest,
+        },
+      });
+      return res.status(201).json(qsoLog);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return res.status(200).json({ deduped: true, dedupeKey: resolvedDedupeKey });
+      }
+      throw error;
+    }
   } catch (error) {
     return res.status(400).json({ error: 'Failed to create QSO log' });
+  }
+});
+
+// Merge QSO log entries (mark duplicates as merged into primary)
+app.post('/api/logs/merge', async (req, res) => {
+  try {
+    const { primary_id, duplicate_ids, merge_reason } = req.body;
+
+    // Validation
+    if (!primary_id) {
+      return res.status(400).json({ error: 'primary_id is required' });
+    }
+
+    if (!duplicate_ids || !Array.isArray(duplicate_ids) || duplicate_ids.length === 0) {
+      return res.status(400).json({ error: 'duplicate_ids must be a non-empty array' });
+    }
+
+    // Ensure primary_id is not in duplicate_ids
+    if (duplicate_ids.includes(primary_id)) {
+      return res.status(400).json({ error: 'Primary ID cannot be in duplicate list' });
+    }
+
+    // Verify primary entry exists
+    const primary = await prisma.logEntry.findUnique({
+      where: { id: primary_id },
+    });
+
+    if (!primary) {
+      return res.status(404).json({ error: 'Primary entry not found' });
+    }
+
+    // Verify all duplicates exist
+    const duplicates = await prisma.logEntry.findMany({
+      where: { id: { in: duplicate_ids } },
+    });
+
+    if (duplicates.length !== duplicate_ids.length) {
+      return res.status(404).json({ error: 'One or more duplicate entries not found' });
+    }
+
+    // Atomic merge transaction
+    const result = await prisma.$transaction(
+      duplicate_ids.map(dup_id =>
+        prisma.logEntry.update({
+          where: { id: dup_id },
+          data: {
+            merge_status: 'duplicate_of',
+            merged_into_id: primary_id,
+            merge_reason: merge_reason || 'merged via API',
+            merge_timestamp: new Date(),
+          },
+        })
+      )
+    );
+
+    return res.status(200).json({
+      success: true,
+      primary_id,
+      merged_count: result.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Merge error:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: 'Failed to merge entries', details: errorMessage });
+  }
+});
+
+// Query merged entries for a primary QSO
+app.get('/api/logs/:id/merged-with', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get the primary entry
+    const primary = await prisma.logEntry.findUnique({
+      where: { id },
+    });
+
+    if (!primary) {
+      return res.status(404).json({ error: 'Entry not found' });
+    }
+
+    // Get all entries merged into this one
+    const merged = await prisma.logEntry.findMany({
+      where: {
+        merged_into_id: id,
+        merge_status: 'duplicate_of',
+      },
+      orderBy: { merge_timestamp: 'desc' },
+    });
+
+    return res.json({
+      primary_id: id,
+      primary_entry: {
+        callsign: primary.callsign,
+        band: primary.band,
+        mode: primary.mode,
+        qsoDate: primary.qsoDate,
+        source: primary.source,
+      },
+      merged_from: merged.map(m => ({
+        id: m.id,
+        callsign: m.callsign,
+        source: m.source,
+        merge_reason: m.merge_reason,
+        merge_timestamp: m.merge_timestamp,
+      })),
+      merged_count: merged.length,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to fetch merge history' });
   }
 });
 
