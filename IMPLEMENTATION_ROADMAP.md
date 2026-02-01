@@ -183,53 +183,23 @@ useEffect(() => {
 ```
 
 ### 5.3 Dupe Alert on Entry
-- When new LogEntry created with mode, band, time
-- Check dedupeKey immediately
-- If dupe found, emit `dupe_detected` event to UI
 - Show alert **before operator submits to exchange**
 
 ---
-
-## Phase 6: Integration Modules (Sprint 6+) 🔌
-
-**Goal**: Auto-ingest from WSJT-X, Fldigi, Hamlib (like FDLog_Enhanced).
-
 ### 6.1 WSJT-X Auto-Logging
 ```
-WSJT-X → UDP broadcast (QSO details)
-         → YAHAML UDP listener parses
-         → Creates LogEntry with source: 'wsjt-x'
-         → Alerts UI: "FT8 QSO logged"
 ```
 
-Implementation:
-- Monitor WSJT-X UDP port (default 2237)
-- Parse JSON logbook_new_entry messages
-- Map to LogEntry schema
 - Handle deduplication (same QSO logged manually + auto)
 
-### 6.2 Fldigi Integration
-```
-Fldigi → XML-RPC API
-         → Query: frequency, mode, remote call
          → On button press: "Log This QSO"
          → Creates LogEntry in YAHAML
-         → Updates Fldigi with QSO ID (audit link)
-```
-
-### 6.3 Hamlib Auto-Population
 ```
 Hamlib (rigctld) → Query on form open
-                 → Populate: FREQ, MODE, VFO
-                 → Validate band from frequency
-                 → Show band-specific mode restrictions
-```
-
 ---
 
 ## Phase 7: Contest-Specific Features (Sprint 7+) 🏆
 
-**Goal**: Support ARRL, CQ, WPX rules natively.
 
 ### 7.1 Contest Template System
 
@@ -255,85 +225,40 @@ model ContestTemplate {
   multiplier_type  String[]         // ["state", "section", "dxcc"]
   bonuses          Json?            // { "power": 5, "location": 10 }
   
-  // Deduplication rules
-  dupe_rules       String @default("mode-aware")  // mode-aware | band-only | strict
-  
-  // Export/Submission
-  cabrillo_class   String?          // "5A", "3A", "M/M", "SO", etc.
-  cabrillo_category String?         // Category for submission
-  exchange_format  String           // Field order in CABRILLO
-  
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  
-  @@index([organization])
-}
-```
-
-### 7.2 Built-In Contest Templates
-
-#### 🏕️ ARRL Field Day
-```
-Organization: ARRL
 Exchange: State + Section (e.g., "TX" for Texas)
-Scoring: QSO Points × Power Multiplier + Bonuses
-Multipliers: All US States & Sections
-Special Rules: GOTA (Get On The Air) tracked separately
-```
-
-#### 🏞️ Parks on the Air (POTA)
-```
-Organization: POTA
-Exchange: Park ID + Reference (e.g., "K-0001")
-Scoring: 10 QSOs per activator
-Multipliers: Park activations (each unique park = 1x multiplier)
-Special Rules: Activator/Hunter distinction
-```
-
-#### ⛰️ Summits on the Air (SOTA)
-```
-Organization: SOTA
-Exchange: Grid square + Summit ID
-Scoring: Points based on summit altitude
-Multipliers: Summit summits worked (each unique = multiplier)
-Special Rules: Altitude-based scoring
-```
-
-#### 🌍 CQ WW DX
-```
-Organization: CQ Magazine
-Exchange: Zone (or state if US/Canada)
-Scoring: 3 pts (same continent), 4 pts (same region), 5 pts (DX)
-Multipliers: DXCC countries worked per band
-Special Rules: Band-by-band multipliers, no dupes per band/mode
-```
-
-#### 📻 CQ VHF
-```
-Organization: CQ Magazine
-Exchange: Grid square (6 or 8 character)
-Scoring: 1 pt per QSO + grid square multipliers
-Multipliers: Unique grid squares per band
-Special Rules: VHF/UHF bands only, EME allowed
-```
-
-### 7.3 Validation & Auto-Scoring
-
-```typescript
-// Apply template rules on entry creation
-class ContestValidator {
-  validateExchange(template, exchange) {
-    // Verify state code exists (if required)
-    // Verify section code valid (if required)
-    // Check format matches template
-  }
+  ```typescript
+  // /api/logs/stream?contestId=xxx
+  app.get('/api/logs/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
   
-  validateQso(template, qso) {
-    // Check mode allowed on band
-    // Verify band/frequency match
-    // Calculate points per template
-  }
+    const { contestId } = req.query;
   
+    const handler = (entry) => {
+      if (entry.contestId === contestId) {
+        res.write(`data: ${JSON.stringify(entry)}\n\n`);
+      }
+    };
+  
+    eventEmitter.on('logEntry:created', handler);
+  
+    res.on('close', () => {
+      eventEmitter.off('logEntry:created', handler);
+    });
+  });
+  ```
+
+  ### 6.2 Advanced Frontend WebSocket Hooks
+  - useWebSocket: real-time vs polling modes
+  - useContestUpdates: aggregates, band occupancy, operator stats
+  - Scoreboard with live updates per source
+  - Multi-band visualization (colored occupancy chart)
+  - Operator performance dashboard with trends
+
+  ### 6.3 Dupe Resolution UI
+  - One-click merge for detected duplicates
+  - Show dupe candidates with confidence scores
+  - Audit trail of all merges
   calculateScore(template, entries) {
     // Count QSOs per rule
     // Track multipliers (states, sections, countries, grids)
@@ -343,128 +268,21 @@ class ContestValidator {
 }
 ```
 
-### 7.4 Multiplier Tracking
+## Phase 7: Advanced Features (Sprint 7+) 🏆
 
-```prisma
+**Goal**: RAG chewing, DXpeditions, QSL integration.
 model Multiplier {
-  id              String  @id @default(cuid())
   contestId       String
-  multiplierType  String  // "state", "section", "dxcc_country", "grid_square", "park_id"
-  value           String  // "TX", "AR", "UR3RZ", "FN42ab", "K-0001"
-  count           Int @default(1)
-  
-  first_qso_date  DateTime
-  last_qso_date   DateTime
-  
-  createdAt       DateTime @default(now())
-  
-  @@unique([contestId, multiplierType, value])
-  @@index([contestId, multiplierType])
-}
-```
+### 7.1 RAG Chewing Mode
+- Non-contest, casual logging
+- Simple log entry form
+- Basic stats (contacts per band, mode)
 
----
-
+### 7.2 DXpedition Support
+- Remote multi-op coordination
+- Shared log with role-based access
+- Home-operator alert system
 ## Phase 8: Distributed Logging (Future) 🌐
-
-**Goal**: Multi-site contests like FDLog_Enhanced (Node1, Node2, GOTA sync).
-
-### 8.1 Network Sync Protocol
-```
-All nodes replicate LogEntry locally
-Periodic sync: node-to-node dupe check, fill-in missing
-
-Status: Design phase; defer to V2
-```
-
----
-
-## Implementation Priority Matrix
-
-| Phase | Feature | Difficulty | User Impact | Timeline |
-|-------|---------|-----------|------------|----------|
-| 1 | Core LogEntry schema | Low | Foundational | Now |
-| 2 | Merge/Conflict handling | Medium | Audit trail | Week 2 |
-| 3 | ADIF-3 + CABRILLO export | Medium | Portability | Week 3 |
-| 4 | Aggregation tables | Medium | Performance | Week 4 |
-| 5 | Real-time push (SSE) | Medium-High | UX | Week 5 |
-| 6 | WSJT-X / Hamlib integration | High | Convenience | Weeks 6-8 |
-| 7 | Contest templates | High | Flexibility | Weeks 8-10 |
-| 8 | Distributed sync | Very High | Scale | V2.0 |
-
----
-
-## Quick Implementation Checklist
-
-### Immediate (This Week)
-- [ ] Run Prisma migration for LogEntry schema
-- [ ] Test TCP relay QSO ingest with dedupeKey
-- [ ] Verify API endpoints work with new schema
-- [ ] Document dedupeKey algorithm
-
-### Next Week
-- [ ] Add `merge_status`, `merged_into_id` fields
-- [ ] Implement `/api/logs/merge` endpoint
-- [ ] Write conflict resolution tests
-
-### Following Week
-- [ ] Design ADIF-3 export schema
-- [ ] Implement `GET /api/export/adif` endpoint
-- [ ] Create CABRILLO export template for sample contest
-
-### Following Month
-- [ ] Add LogAggregate model
-- [ ] Implement hourly aggregation trigger
-- [ ] Add scoreboard endpoints
-- [ ] Wire up SSE stream to React UI
-
----
-
-## Resources & References
-
-**FDLog_Enhanced** (Distributed, Multi-Node):
-- Source: https://github.com/scotthibbs/FDLog_Enhanced
-- File: `share_fdlog.py` (network sync protocol)
-- Lesson: Distributed database is battle-tested for 40 years
-
-**Hamledger** (Modern Stack):
-- Source: https://github.com/valibali/hamledger
-- File: `src/integration/` (WSJT-X, Hamlib, Fldigi)
-- Lesson: TypeScript/Electron patterns apply to Node.js/React
-
-**dolphinlog** (ADIF Export):
-- Source: https://github.com/xaratustrah/dolphinlog
-- Code: ADIF-3 field mapping and validation
-
-**ADIF-3 Spec**:
-- URL: http://adif.org/
-- Covers 200+ fields; we need ~20 for basic export
-
-**Hamlib**:
-- Docs: https://hamlib.github.io/
-- Protocol: TCP on port 4532 by default
-
----
-
-## Success Metrics
-
-By end of Phase 5 (8 weeks), YAHAML should:
-- ✅ Handle multi-source ingest (TCP, UDP, UI, auto) with dedupe
-- ✅ Export portable ADIF-3 format (eQSL/LoTW compatible)
-- ✅ Support real-time scoreboard & dupe alerts (no polling)
-- ✅ Aggregate stats hourly for performance
-- ✅ Handle merge/conflict scenarios gracefully
-
-By end of Phase 7 (12 weeks):
-- ✅ Support 3-5 major contests (ARRL Field Day, CQ WW, etc.)
-- ✅ Auto-ingest from WSJT-X + Hamlib
-- ✅ Production-ready scoring & validation
-
----
-
-## Notes for Next Planning Meeting
-
-1. **Do we want WSJT-X integration in V1 or V2?**
    - V1: Focus on TCP relay + UDP + UI form entry
    - V2: Add WSJT-X, Fldigi, Hamlib auto-logging
 

@@ -7,30 +7,47 @@
 
 ## What's Next (Roadmap for Phase 5+)
 
-### Phase 5: UI WebSocket Integration (Sprint 5)
-- [ ] Frontend WebSocket client hooks (useWebSocket, useContestUpdates)
-- [ ] Real-time scoreboard updates (no polling)
-- [ ] Live band occupancy visualization
-- [ ] Operator stats dashboard with charts
-- [ ] Dupe detection alerts
-- **Effort:** ~2-3 weeks
+### Phase 5: Logging Foundation & Upstream Stabilization (Sprint 5) ⭐ REVISED
+**Strategy Change**: Build critical path FIRST. Validate all upstream sources (WSJT-X, Fldigi, Hamlib, N3FJP) before building dependent features. Risk mitigation: avoid cascading problems if external APIs change.
 
-### Phase 6: Multi-Source Ingest (Sprint 6+)
-- [ ] WSJT-X auto-logging (UDP broadcast listener)
-- [ ] Fldigi integration (XML-RPC)
-- [ ] Hamlib auto-population (frequency, mode, VFO)
-- [ ] N3FJP TCP relay (server mode)
-- **Effort:** ~2-3 weeks
+- [ ] Contest Templates System (3-4 days)
+  - ContestTemplate model: rules, exchange fields, band/mode restrictions
+  - Seed 5 real templates (ARRL FD, CQ WW DX, POTA, SOTA, RAG Chewing)
+  - Contest validation function: checks band/mode/exchange rules
+  - API endpoints: GET templates, POST create
 
-### Phase 7: Contest-Specific Features (Sprint 7+)
-- [ ] Contest template system (ARRL, CQ, WPX, SOTA, POTA rules)
-- [ ] Exchange field validation per contest
-- [ ] Score calculation engine
-- [ ] Contest-specific reports
+- [ ] Multi-Source Ingest Validation (1-2 weeks)
+  - **WSJT-X**: UDP 2237 listener, message parser, deduplication, E2E tests
+  - **Fldigi**: XML-RPC integration for frequency/mode queries, mock tests
+  - **Hamlib**: Freq→band mapping, mode standardization, band/mode restrictions
+  - **N3FJP**: Finish protocol discovery, TRANSACTION ACK, QSO submission
+
+- [ ] Merge & Conflict Resolution (2-3 days)
+  - POST /api/logs/merge endpoint with audit trail
+  - Auto-detect duplicates (same call + band + mode + time ±5min)
+  - Broadcast conflict alerts via WebSocket
+  - GET /api/logs/conflicts for history
+
+- [ ] Basic UI for Logging (3-4 days)
+  - LogEntryForm component with real-time validation
+  - Get current values from Hamlib (frequency/mode auto-fill)
+  - Show band/mode restrictions from contest rules
+  - WebSocket integration: logEntry alerts, dupe warnings, real-time aggregates
+  - Source indicators (WSJT-X auto vs manual vs Fldigi)
+
 - **Effort:** ~3-4 weeks
+- **Outcome**: All upstream sources validated, zero surprises, ready for Phase 6 UI enhancements
 
-### Phase 8: Advanced Features (Sprint 8+)
-- [ ] RAG chewing mode (non-contest casual logging)
+### Phase 6: UI WebSocket Integration (Sprint 6)
+- [ ] Advanced frontend WebSocket hooks (real-time vs polling modes)
+- [ ] Scoreboard with live updates per source
+- [ ] Multi-band visualization (colored occupancy chart)
+- [ ] Operator performance dashboard with trends
+- [ ] Dupe resolution UI (one-click merge)
+- **Effort:** ~2-3 weeks
+
+### Phase 7: Advanced Features (Sprint 7+)
+- [ ] RAG chewing mode (non-contest, casual logging)
 - [ ] DXpedition support (remote multi-op)
 - [ ] QSL card integration
 - [ ] LoTW/eQSL submission
