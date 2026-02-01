@@ -206,6 +206,8 @@ function App() {
   
   // Admin form state
   const [adminListInput, setAdminListInput] = useState('')
+  const [availableContests, setAvailableContests] = useState<any[]>([])
+  const [loadingContests, setLoadingContests] = useState(false)
   
   // Apply theme
   useEffect(() => {
@@ -480,6 +482,54 @@ function App() {
     }
   }
 
+  async function fetchAvailableContests() {
+    try {
+      setLoadingContests(true)
+      const response = await fetch('/api/contests')
+      if (response.ok) {
+        const data = await response.json()
+        setAvailableContests(data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch contests:', error)
+    } finally {
+      setLoadingContests(false)
+    }
+  }
+
+  async function activateContest(contestId: string) {
+    try {
+      const response = await fetch(`/api/admin/activate-contest/${contestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (response.ok) {
+        await fetchContest()
+        await fetchAvailableContests()
+      }
+    } catch (error) {
+      console.error('Failed to activate contest:', error)
+    }
+  }
+
+  async function deactivateContest() {
+    if (!contest) return
+    try {
+      const response = await fetch('/api/admin/deactivate-contest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contestId: contest.id }),
+      })
+      if (response.ok) {
+        await fetchContest()
+        await fetchAvailableContests()
+      }
+    } catch (error) {
+      console.error('Failed to deactivate contest:', error)
+    }
+  }
+
   async function fetchClubs() {
     try {
       const response = await fetch('/api/clubs')
@@ -628,6 +678,12 @@ function App() {
     }, 5000)
     return () => clearInterval(interval)
   }, [autoRefresh, selectedStationId])
+
+  useEffect(() => {
+    if (currentView === 'admin') {
+      fetchAvailableContests()
+    }
+  }, [currentView])
 
   const currentCallsign = localStorage.getItem(storageKey) || 'Not set'
 
@@ -1232,9 +1288,60 @@ function App() {
                     <strong>{contest.totalPoints}</strong>
                   </div>
                 </div>
+                {isAdmin && (
+                  <div className="action-buttons" style={{ marginTop: '1rem' }}>
+                    <button className="btn danger" onClick={() => deactivateContest()}>
+                      ⏹️ Stop Contest
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
-              <p className="empty">No active contest</p>
+              <div>
+                <p className="empty">No active contest</p>
+                {isAdmin && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <p className="hint" style={{ marginBottom: '1rem' }}>Admin: Activate a contest from the list below</p>
+                    <button className="btn secondary" onClick={fetchAvailableContests}>
+                      🔄 Refresh Contests
+                    </button>
+                    {availableContests.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+                        {availableContests
+                          .filter(c => !c.isActive)
+                          .map(c => (
+                            <div
+                              key={c.id}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '0.75rem',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '4px',
+                                backgroundColor: 'var(--bg-secondary)',
+                              }}
+                            >
+                              <div>
+                                <strong>{c.name}</strong>
+                                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                  {c.template?.type || 'Unknown'} • {c.totalQsos} QSOs
+                                </div>
+                              </div>
+                              <button
+                                className="btn primary"
+                                onClick={() => activateContest(c.id)}
+                                style={{ whiteSpace: 'nowrap' }}
+                              >
+                                ⚡ Activate
+                              </button>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </section>
 
@@ -2180,7 +2287,9 @@ function App() {
               <label>Associated Club</label>
               <select>
                 <option value="">Independent Operator</option>
-                <option>ARRL HQ (W1AW)</option>
+                {clubs.map((club: any) => (
+                  <option key={club.id} value={club.id}>{club.name} ({club.callsign})</option>
+                ))}
               </select>
             </div>
           </section>
@@ -2192,7 +2301,9 @@ function App() {
               <label>Active Contest</label>
               <select>
                 <option value="">No Contest</option>
-                <option>Field Day 2026</option>
+                {contest && contest.isActive && (
+                  <option value={contest.id}>{contest.name} (Active)</option>
+                )}
               </select>
             </div>
           </section>
@@ -2313,49 +2424,10 @@ function App() {
         </div>
         <div className="view-content">
           <section className="panel">
-            <h2>Admin Authorization</h2>
+            <h2>Authorization</h2>
             <p className="hint">
               <strong>Current Status:</strong> {isAdmin ? '✅ You have admin access' : '❌ Not authorized'}
             </p>
-            <p className="hint" style={{ marginTop: '0.5rem' }}>
-              Leave empty to allow all users admin access. Add callsigns to restrict.
-            </p>
-          </section>
-
-          <section className="panel">
-            <h2>Contest Management</h2>
-            {contest && contest.isActive ? (
-              <div className="contest-active">
-                <div className="contest-info">
-                  <div className="info-row">
-                    <span>Mode:</span>
-                    <strong>{contest.mode}</strong>
-                  </div>
-                  <div className="info-row">
-                    <span>Duration:</span>
-                    <strong>{contest.duration || '?'} hours</strong>
-                  </div>
-                  <div className="info-row">
-                    <span>QSOs:</span>
-                    <strong>{contest.totalQsos}</strong>
-                  </div>
-                  <div className="info-row">
-                    <span>Points:</span>
-                    <strong>{contest.totalPoints}</strong>
-                  </div>
-                </div>
-                <button className="btn danger" onClick={stopContest}>
-                  Stop Contest
-                </button>
-              </div>
-            ) : (
-              <div className="contest-inactive">
-                <p>No active contest</p>
-                <button className="btn primary" onClick={activateFieldDay}>
-                  🎯 Activate Field Day
-                </button>
-              </div>
-            )}
           </section>
 
           <section className="panel">

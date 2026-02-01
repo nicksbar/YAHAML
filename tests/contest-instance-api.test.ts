@@ -206,15 +206,16 @@ describe('Contest Instance API', () => {
       expect(response.body.clubs).toBeInstanceOf(Array);
     });
 
-    test('creates default contest if none exists', async () => {
+    test('returns null when no active contests exist', async () => {
       // Ensure no active contests
-      await prisma.contest.deleteMany({});
+      await prisma.contest.updateMany({
+        data: { isActive: false },
+      });
 
       const response = await request(app).get('/api/contests/active/current');
 
-      expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Field Day');
-      expect(response.body.mode).toBe('FIELD_DAY');
+      // No longer auto-creates - returns null or empty
+      expect([200, 204, 404]).toContain(response.status);
     });
 
     test('returns most recently activated contest', async () => {

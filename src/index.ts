@@ -23,6 +23,7 @@ import {
   getOperatorActivity,
 } from './aggregation';
 import { calculateNextOccurrence } from './contest-templates/scheduler';
+import { lookupCallsign, validateCallsign } from './hamdb';
 
 dotenv.config();
 
@@ -863,28 +864,14 @@ app.get('/api/contests/upcoming', async (req, res) => {
 // MUST be before /api/contests/:id to avoid :id catching "active"
 app.get('/api/contests/active/current', async (_req, res) => {
   try {
-    let contest = await prisma.contest.findFirst({
+    // Return the currently active contest, or null if none
+    const contest = await prisma.contest.findFirst({
       where: { isActive: true },
       include: {
         clubs: true,
         template: true,
       },
     });
-    
-    if (!contest) {
-      // Create default Field Day contest if none exists
-      contest = await prisma.contest.create({
-        data: {
-          name: 'Field Day',
-          mode: 'FIELD_DAY',
-          scoringMode: 'ARRL',
-        },
-        include: {
-          clubs: true,
-          template: true,
-        },
-      });
-    }
     
     return res.json(contest);
   } catch (error) {
@@ -1370,7 +1357,54 @@ app.delete('/api/special-callsigns/:id', async (req, res) => {
   }
 });
 
-// Admin endpoint to activate Field Day mode
+// Admin endpoint: Activate a contest by ID
+app.post('/api/admin/activate-contest/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verify contest exists
+    const contest = await prisma.contest.findUnique({
+      where: { id },
+    });
+
+    if (!contest) {
+      return res.status(404).json({ error: 'Contest not found' });
+    }
+
+    // Deactivate any other active contests
+    await prisma.contest.updateMany({
+      where: { isActive: true, id: { not: id } },
+      data: { isActive: false },
+    });
+
+    // Activate this contest
+    const updated = await prisma.contest.update({
+      where: { id },
+      data: { isActive: true },
+      include: { clubs: true, template: true },
+    });
+
+    return res.json({ success: true, contest: updated });
+  } catch (error) {
+    return res.status(400).json({ error: 'Failed to activate contest' });
+  }
+});
+
+// Admin endpoint: Deactivate the active contest
+app.post('/api/admin/deactivate-contest', async (_req, res) => {
+  try {
+    const updated = await prisma.contest.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
+
+    return res.json({ success: true, updated: updated.count });
+  } catch (error) {
+    return res.status(400).json({ error: 'Failed to deactivate contest' });
+  }
+});
+
+// DEPRECATED - Old hardcoded Field Day endpoint (kept for compatibility, use /activate-contest/:id instead)
 app.post('/api/admin/activate-field-day', async (_req, res) => {
   try {
     // Deactivate any active contests
@@ -1451,6 +1485,44 @@ app.post('/api/admin/callsigns', (req, res) => {
   }
   adminCallsignList = callsigns.map((c: string) => c.toUpperCase());
   return res.json({ callsigns: adminCallsignList });
+});
+
+// Lookup callsign via HamDB API
+app.get('/api/callsign/lookup/:callsign', async (req, res) => {
+  try {
+    const { callsign } = req.params;
+    
+    if (!callsign || callsign.trim().length === 0) {
+      return res.status(400).json({ error: 'Callsign is required' });
+    }
+
+    const info = await lookupCallsign(callsign);
+    
+    if (!info) {
+      return res.status(404).json({ error: 'Callsign not found in HamDB' });
+    }
+
+    return res.json(info);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to lookup callsign' });
+  }
+});
+
+// Validate callsign
+app.get('/api/callsign/validate/:callsign', async (req, res) => {
+  try {
+    const { callsign } = req.params;
+    
+    if (!callsign || callsign.trim().length === 0) {
+      return res.status(400).json({ error: 'Callsign is required' });
+    }
+
+    const result = await validateCallsign(callsign, true);
+    
+    return res.json(result);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to validate callsign' });
+  }
 });
 
 // ============================================================================
