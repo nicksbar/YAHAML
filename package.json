@@ -19,6 +19,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:e2e": "jest --testPathPattern=e2e",
+    "relay": "ts-node scripts/n3fjp_mitm_relay.ts",
+    "relay:default": "ts-node scripts/n3fjp_mitm_relay.ts 2000 localhost 1000",
     "lint": "eslint src --ext .ts"
   },
   "keywords": [

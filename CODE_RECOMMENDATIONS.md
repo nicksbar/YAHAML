@@ -1,4 +1,61 @@
-# Code Review: YAHAML Architecture vs. Industry Patterns
+# N3FJP Protocol Implementation - Code Fixes & Improvements
+
+## Issues Found & Solutions (Updated from MITM Capture Analysis)
+
+### 1. ✅ UTF-16 LE Encoding (Already Implemented)
+**Status**: `src/relay.ts` already has `decodeMessage()` and `_encodeMessage()` functions
+**What works**: 
+- Message framing with BOR/EOR bytes
+- UTF-16LE decoding
+- BAMS parsing for station/band/mode
+
+**What needs improvement**:
+- `encodeMessage()` marked with `// @ts-ignore` - should activate for responses
+- Should send config in handshake response
+
+### 2. ⚠️ Contest Configuration - Not Fully Utilized
+**Current State**: Schema supports `bandSelection` and `modeSelection` as JSON strings, but:
+- Not parsed or validated in relay/API
+- No migration to populate database
+- No UI to configure per-contest
+- No dynamic filtering in client
+
+**Key Finding from Protocol Analysis**: 
+- Protocol is **contest-agnostic** (no contest ID in messages)
+- Don't hard-code contest apps - use configuration instead
+- Same N3FJP protocol works for Field Day, VHF, HF contests
+- Just change bandSelection/modeSelection JSON per contest
+
+### 3. ⚠️ Band Activity Logging - Missing Validation
+**Current State**: `src/relay.ts` logs any band/mode without validation
+
+**Fix Needed**:
+- Validate band/mode against current contest configuration
+- Flag invalid combinations in logs (but still log them)
+- Return valid options to client for UI filtering
+
+### 4. ⚠️ Client Handshake - Missing Configuration Exchange
+**Current State**: Client connects, server just echoes messages back
+
+**Should Be**: 
+- Client sends initial NTWK message
+- Server responds with NTWK/CONTEST-CONFIG containing:
+  - Contest name
+  - Allowed bands (JSON array)
+  - Allowed modes (JSON array)
+  - Other contest constraints
+
+### 5. ⚠️ Message Type Handling - Incomplete
+**Current State**: Only BAMS and basic NTWK messages parsed
+
+**Not Yet Handled**:
+- NTWK/TRANSACTION messages (CLEAR, LIST)
+- WHO/EOR operator roster messages  
+- Large transaction messages (1600+ bytes with QSO data)
+
+---
+
+## Code Review: YAHAML Architecture vs. Industry Patterns
 
 ## Overview
 
@@ -608,3 +665,112 @@ useLogStream(contestId, (newEntry) => {
 ---
 
 **Document Version**: 1.0 | Last Updated: 2026-01-31
+
+---
+
+## N3FJP Protocol Implementation - Critical Fixes
+
+Based on MITM relay capture and protocol analysis, implement these changes:
+
+### Priority 1: Contest Configuration Support
+
+**Create `src/contest-config.ts`**:
+```typescript
+import prisma from './db';
+
+export async function getContestConfig(contestId?: string) {
+  if (!contestId) {
+    return {
+      bands: ['160', '80', '40', '20', '15', '10', '6', '2', '70cm'],
+      modes: ['CW', 'DIG', 'PH'],
+    };
+  }
+  
+  const contest = await prisma.contest.findUnique({
+    where: { id: contestId },
+  });
+  
+  return {
+    bands: contest?.bandSelection ? JSON.parse(contest.bandSelection) : [],
+    modes: contest?.modeSelection ? JSON.parse(contest.modeSelection) : [],
+  };
+}
+
+export function validateBandMode(band: string, mode: string, config: any): boolean {
+  return config.bands.includes(band) && config.modes.includes(mode);
+}
+```
+
+**Update `src/relay.ts`** - Enable encoding and add validation:
+- Uncomment `encodeMessage()` (remove @ts-ignore)
+- Call when sending config responses
+- Add `validateBandMode()` in BAMS handler
+- Log warnings for invalid combinations
+
+**Update `src/index.ts`** - Add endpoints:
+```typescript
+app.get('/api/contests/:contestId/config', async (req, res) => {
+  const config = await getContestConfig(req.params.contestId);
+  res.json(config);
+});
+
+app.get('/api/stations/band-config', async (req, res) => {
+  const contest = await prisma.contest.findFirst({
+    where: { isActive: true },
+  });
+  const config = await getContestConfig(contest?.id);
+  res.json(config);
+});
+```
+
+**Update `ui/src/App.tsx`** - Dynamic bands/modes:
+```typescript
+const [validBands, setValidBands] = useState<string[]>([]);
+const [validModes, setValidModes] = useState<string[]>([]);
+
+useEffect(() => {
+  fetch('/api/stations/band-config')
+    .then(r => r.json())
+    .then(data => {
+      setValidBands(data.bands);
+      setValidModes(data.modes);
+    });
+}, []);
+
+// Use validBands/validModes in dropdowns instead of hardcoded arrays
+```
+
+### Priority 2: Database Seeding
+
+**Update `prisma/seed.ts`**:
+```typescript
+await prisma.contest.upsert({
+  where: { name: 'Field Day 2026' },
+  update: {},
+  create: {
+    name: 'Field Day 2026',
+    bandSelection: JSON.stringify(['160', '80', '40', '20', '15', '10', '6', '2', '70cm']),
+    modeSelection: JSON.stringify(['CW', 'DIG', 'PH']),
+  },
+});
+```
+
+### Implementation Summary
+
+| File | Changes | LOC | Time |
+|------|---------|-----|------|
+| `src/contest-config.ts` | CREATE | 40 | 30m |
+| `src/relay.ts` | Enable encoding, validate | 25 | 30m |
+| `src/index.ts` | Add endpoints | 35 | 20m |
+| `ui/src/App.tsx` | Dynamic config | 15 | 20m |
+| `prisma/seed.ts` | Add config | 15 | 10m |
+| **Total** | | **130** | **2-3h** |
+
+### Key Benefits
+
+✅ Contest-agnostic protocol - same N3FJP code for all contests  
+✅ No app detection needed - just use database configuration  
+✅ Dynamic UI - band/mode dropdowns update per contest  
+✅ Easy contest switching - no code changes needed  
+✅ Invalid entries flagged - but still logged for diagnostics  
+
