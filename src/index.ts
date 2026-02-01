@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import http from 'http';
 import { Prisma } from '@prisma/client';
 import prisma from './db';
 import { startRelayServer } from './relay';
@@ -11,6 +12,14 @@ import {
   generateCabrilloContent,
   validateCabrilloQso,
 } from './export';
+import { wsManager } from './websocket';
+import {
+  updateAggregates,
+  getAggregates,
+  getScoreboard,
+  getBandOccupancy,
+  getOperatorActivity,
+} from './aggregation';
 
 dotenv.config();
 
@@ -246,6 +255,37 @@ app.post('/api/qso-logs', async (req, res) => {
           ...rest,
         },
       });
+
+      // Update aggregates (async, don't block response)
+      if (contestId) {
+        updateAggregates(qsoLog).then((aggregate) => {
+          // Broadcast to WebSocket clients
+          wsManager.broadcast(`contest:${contestId}`, 'logEntry:created', qsoLog);
+          wsManager.broadcast(`contest:${contestId}`, 'aggregate:updated', aggregate);
+        }).catch((error) => {
+          console.error('Failed to update aggregates:', error);
+        });
+      }
+
+      // Check for duplicates and broadcast alert
+      const existingEntry = await prisma.logEntry.findFirst({
+        where: {
+          stationId,
+          callsign,
+          band,
+          mode,
+          merge_status: { not: 'duplicate_of' },
+          id: { not: qsoLog.id },
+        },
+      });
+
+      if (existingEntry && contestId) {
+        wsManager.broadcast(`contest:${contestId}`, 'dupe:detected', {
+          entry: qsoLog,
+          duplicate: existingEntry,
+        });
+      }
+
       return res.status(201).json(qsoLog);
     } catch (error) {
       if (isUniqueConstraintError(error)) {
@@ -366,6 +406,96 @@ app.get('/api/logs/:id/merged-with', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch merge history' });
+  }
+});
+
+// ============================================================================
+// AGGREGATE STATISTICS ENDPOINTS
+// ============================================================================
+
+// Get time-series aggregates for a contest
+app.get('/api/stats/aggregates', async (req, res) => {
+  try {
+    const { contestId, start, end } = req.query;
+
+    if (!contestId) {
+      return res.status(400).json({ error: 'contestId is required' });
+    }
+
+    const startDate = start ? new Date(String(start)) : undefined;
+    const endDate = end ? new Date(String(end)) : undefined;
+
+    const aggregates = await getAggregates(
+      String(contestId),
+      startDate,
+      endDate
+    );
+
+    return res.json(aggregates);
+  } catch (error) {
+    console.error('Failed to fetch aggregates:', error);
+    return res.status(500).json({ error: 'Failed to fetch aggregates' });
+  }
+});
+
+// Get scoreboard (operator rankings) for a contest
+app.get('/api/stats/scoreboard', async (req, res) => {
+  try {
+    const { contestId } = req.query;
+
+    if (!contestId) {
+      return res.status(400).json({ error: 'contestId is required' });
+    }
+
+    const scoreboard = await getScoreboard(String(contestId));
+
+    return res.json(scoreboard);
+  } catch (error) {
+    console.error('Failed to fetch scoreboard:', error);
+    return res.status(500).json({ error: 'Failed to fetch scoreboard' });
+  }
+});
+
+// Get band occupancy (last hour activity) for a contest
+app.get('/api/stats/band-occupancy', async (req, res) => {
+  try {
+    const { contestId } = req.query;
+
+    if (!contestId) {
+      return res.status(400).json({ error: 'contestId is required' });
+    }
+
+    const occupancy = await getBandOccupancy(String(contestId));
+
+    return res.json(occupancy);
+  } catch (error) {
+    console.error('Failed to fetch band occupancy:', error);
+    return res.status(500).json({ error: 'Failed to fetch band occupancy' });
+  }
+});
+
+// Get operator activity stats
+app.get('/api/stats/operator-activity', async (req, res) => {
+  try {
+    const { contestId, operatorCall } = req.query;
+
+    if (!contestId) {
+      return res.status(400).json({ error: 'contestId is required' });
+    }
+
+    if (!operatorCall) {
+      return res.status(400).json({ error: 'operatorCall is required' });
+    }
+
+    const activity = await getOperatorActivity(
+      String(contestId),
+      String(operatorCall)
+    );
+
+    return res.json(activity);
+  } catch (error) {
+    console.error('Failed to fetch operator activity:', error);
+    return res.status(500).json({ error: 'Failed to fetch operator activity' });
   }
 });
 
@@ -1401,13 +1531,19 @@ app.get('/api/stations/:id/radio', async (req, res) => {
   }
 });
 
-// Start server
-app.listen(Number(port), host, () => {
+// Start HTTP server (for WebSocket support)
+const server = http.createServer(app);
+
+// Initialize WebSocket server
+wsManager.initialize(server);
+
+server.listen(Number(port), host, () => {
   const displayHost = host === '0.0.0.0' ? 'localhost' : host;
   console.log(`✓ YAHAML API server running on http://${displayHost}:${port}`);
   console.log(`  - Binding to: ${host}:${port} (accessible from all interfaces)`);
   console.log(`  - Health check: http://${displayHost}:${port}/health`);
   console.log(`  - API base: http://${displayHost}:${port}/api`);
+  console.log(`  - WebSocket: ws://${displayHost}:${port}/ws`);
 });
 
 // Start relay server

@@ -256,6 +256,7 @@ model Contest {
   // Relations
   clubs          Club[]
   logEntries     LogEntry[]
+  aggregates     LogAggregate[]
   
   @@index([templateId])
   @@map("contests")
@@ -399,6 +400,38 @@ model RadioAssignment {
   @@index([stationId])
   @@index([isActive])
   @@map("radio_assignments")
+}
+
+// Aggregated statistics for real-time scoreboard and analytics
+model LogAggregate {
+  id            String   @id @default(cuid())
+  contestId     String
+  clubId        String?
+  periodStart   DateTime // Hourly bucket: YYYY-MM-DD HH:00:00
+  
+  // QSO Counters
+  totalQsos     Int      @default(0)
+  totalDupes    Int      @default(0)
+  cwContacts    Int      @default(0)
+  ssbContacts   Int      @default(0)
+  ftxContacts   Int      @default(0)
+  
+  // Breakdowns (JSON for flexibility)
+  bandBreakdown     String @default("{}") // JSON: { "20m": 45, "40m": 32, ... }
+  modeBreakdown     String @default("{}") // JSON: { "CW": 50, "SSB": 45, "FT8": 34 }
+  operatorStats     String @default("{}") // JSON: { "W5XYZ": 30, "N0ABC": 28, ... }
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  contest       Contest? @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  
+  @@unique([contestId, clubId, periodStart])
+  @@index([contestId])
+  @@index([clubId])
+  @@index([periodStart])
+  @@map("log_aggregates")
 }
 
 // Add radioAssignments to Station
