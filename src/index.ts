@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import http from 'http';
 import { Prisma } from '@prisma/client';
 import prisma from './db';
+import { validateQsoAgainstTemplate } from './contest-validation';
+import { seedContestTemplates } from './seed-templates';
 import { startRelayServer } from './relay';
 import { parseUdpTargets, startUdpServer } from './udp';
 import { radioManager } from './hamlib';
@@ -20,6 +22,7 @@ import {
   getBandOccupancy,
   getOperatorActivity,
 } from './aggregation';
+import { calculateNextOccurrence } from './contest-templates/scheduler';
 
 dotenv.config();
 
@@ -216,6 +219,7 @@ app.post('/api/qso-logs', async (req, res) => {
       operatorCallsign,
       source,
       dedupeKey,
+      exchange,
       ...rest
     } = req.body;
 
@@ -226,6 +230,31 @@ app.post('/api/qso-logs', async (req, res) => {
     const station = await prisma.station.findUnique({
       where: { id: stationId },
     });
+
+    if (contestId) {
+      const contest = await prisma.contest.findUnique({
+        where: { id: contestId },
+        include: { template: true },
+      });
+
+      if (contest?.template) {
+        const validation = validateQsoAgainstTemplate(
+          {
+            band,
+            mode,
+            exchange,
+          },
+          contest.template,
+        );
+
+        if (!validation.valid) {
+          return res.status(400).json({
+            error: 'QSO failed contest validation',
+            details: validation.errors,
+          });
+        }
+      }
+    }
 
     const resolvedDedupeKey = dedupeKey || buildDedupeKey({
       stationCall: station?.callsign || stationId,
@@ -744,6 +773,125 @@ app.get('/api/contests', async (_req, res) => {
   }
 });
 
+// Get upcoming contests based on template schedules
+// MUST be before /api/contests/:id to avoid :id catching "upcoming"
+app.get('/api/contests/upcoming', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 10;
+    const includeYearRound = req.query.includeYearRound === 'true';
+    const showRecentDays = parseInt(req.query.showRecentDays as string) || 10;
+
+    // Fetch templates from database
+    const dbTemplates = await prisma.contestTemplate.findMany({
+      where: { isPublic: true, isActive: true },
+    });
+
+    console.log(`[Upcoming Contests] Loaded ${dbTemplates.length} templates from DB`);
+
+    // Convert DB templates to ContestTemplate format with parsed JSON
+    const templates = dbTemplates.map(t => ({
+      type: t.type,
+      name: t.name,
+      description: t.description || '',
+      organization: t.organization || '',
+      scoringRules: JSON.parse(t.scoringRules),
+      requiredFields: JSON.parse(t.requiredFields),
+      validationRules: JSON.parse(t.validationRules),
+      schedule: t.schedule ? JSON.parse(t.schedule) : undefined,
+      uiConfig: t.uiConfig ? JSON.parse(t.uiConfig) : undefined,
+      isActive: t.isActive,
+      isPublic: t.isPublic,
+    }));
+
+    console.log(`[Upcoming Contests] Converted ${templates.length} templates, ${templates.filter(t => t.schedule).length} have schedules`);
+
+    // Calculate upcoming contests
+    const now = new Date();
+    const recentCutoff = new Date(now.getTime() - showRecentDays * 24 * 60 * 60 * 1000);
+    
+    const upcoming: any[] = [];
+    
+    for (const template of templates) {
+      const next = calculateNextOccurrence(template, now);
+      console.log(`[Upcoming Contests] ${template.name}: ${next ? next.status : 'null'}`);
+      if (next) {
+        // Include if upcoming OR recently ended (within showRecentDays)
+        if (next.status === 'upcoming' || next.status === 'active' || 
+            (next.status === 'past' && next.endDate >= recentCutoff)) {
+          // Recalculate status considering recent window
+          const adjustedStatus = next.endDate >= now ? 
+            (next.startDate <= now ? 'active' : 'upcoming') : 
+            'recent';
+          
+          upcoming.push({
+            ...next,
+            status: adjustedStatus,
+          });
+        }
+        
+        // Don't include year-round unless requested
+        if (!includeYearRound && template.schedule?.type === 'year-round') {
+          upcoming.pop();
+        }
+      }
+    }
+
+    // Sort by start date (recent/active first, then upcoming)
+    upcoming.sort((a, b) => {
+      // Active contests first
+      if (a.status === 'active' && b.status !== 'active') return -1;
+      if (b.status === 'active' && a.status !== 'active') return 1;
+      
+      // Then by start date
+      return a.startDate.getTime() - b.startDate.getTime();
+    });
+
+    console.log(`[Upcoming Contests] Found ${upcoming.length} contests (showing recent + upcoming)`);
+    
+    if (upcoming.length > 0) {
+      console.log(`[Upcoming Contests] Next: ${upcoming[0].template.name} - ${upcoming[0].status}`);
+    }
+
+    return res.json(upcoming.slice(0, limit));
+  } catch (error) {
+    console.error('Failed to calculate upcoming contests:', error);
+    return res.status(500).json({ error: 'Failed to calculate upcoming contests' });
+  }
+});
+
+// Get or create active contest
+// MUST be before /api/contests/:id to avoid :id catching "active"
+app.get('/api/contests/active/current', async (_req, res) => {
+  try {
+    let contest = await prisma.contest.findFirst({
+      where: { isActive: true },
+      include: {
+        clubs: true,
+        template: true,
+      },
+    });
+    
+    if (!contest) {
+      // Create default Field Day contest if none exists
+      contest = await prisma.contest.create({
+        data: {
+          name: 'Field Day',
+          mode: 'FIELD_DAY',
+          scoringMode: 'ARRL',
+        },
+        include: {
+          clubs: true,
+          template: true,
+        },
+      });
+    }
+    
+    return res.json(contest);
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to fetch active contest' });
+  }
+});
+
 app.get('/api/contests/:id', async (req, res) => {
   try {
     const contest = await prisma.contest.findUnique({
@@ -790,38 +938,6 @@ app.patch('/api/contests/:id', async (req, res) => {
   }
 });
 
-// Get or create active contest
-app.get('/api/contests/active/current', async (_req, res) => {
-  try {
-    let contest = await prisma.contest.findFirst({
-      where: { isActive: true },
-      include: {
-        clubs: true,
-        template: true,
-      },
-    });
-    
-    if (!contest) {
-      // Create default Field Day contest if none exists
-      contest = await prisma.contest.create({
-        data: {
-          name: 'Field Day',
-          mode: 'FIELD_DAY',
-          scoringMode: 'ARRL',
-        },
-        include: {
-          clubs: true,
-          template: true,
-        },
-      });
-    }
-    
-    return res.json(contest);
-  } catch (error) {
-    return res.status(500).json({ error: 'Failed to fetch active contest' });
-  }
-});
-
 // Contest Template endpoints
 app.get('/api/contest-templates', async (_req, res) => {
   try {
@@ -832,6 +948,100 @@ app.get('/api/contest-templates', async (_req, res) => {
     return res.json(templates);
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch contest templates' });
+  }
+});
+
+// DEBUG endpoint to test upcoming contests logic
+app.get('/api/contests/upcoming/debug', async (_req, res) => {
+  try {
+    const dbCount = await prisma.contestTemplate.count();
+    const activeCount = await prisma.contestTemplate.count({ where: { isActive: true, isPublic: true } });
+    const withSchedule = await prisma.contestTemplate.count({ where: { schedule: { not: null } } });
+    
+    return res.json({
+      totalTemplates: dbCount,
+      activePublicTemplates: activeCount,
+      templatesWithSchedule: withSchedule,
+      calculatorImported: typeof calculateNextOccurrence === 'function',
+    });
+  } catch (error) {
+    return res.status(500).json({ error: String(error) });
+  }
+});
+
+app.post('/api/contest-templates/seed', async (req, res) => {
+  try {
+    const force = Boolean(req.body?.force);
+    const existingCount = await prisma.contestTemplate.count();
+
+    if (existingCount > 0 && !force) {
+      return res.status(200).json({
+        seeded: false,
+        count: existingCount,
+        message: 'Templates already exist. Use force=true to reseed.',
+      });
+    }
+
+    await seedContestTemplates();
+    const updatedCount = await prisma.contestTemplate.count();
+
+    return res.status(200).json({
+      seeded: true,
+      count: updatedCount,
+      message: 'Templates seeded successfully.',
+    });
+  } catch (error) {
+    console.error('Failed to seed contest templates:', error);
+    return res.status(500).json({ error: 'Failed to seed contest templates' });
+  }
+});
+
+app.post('/api/contest-templates', async (req, res) => {
+  try {
+    const {
+      type,
+      name,
+      description,
+      organization,
+      scoringRules,
+      requiredFields,
+      validationRules,
+      uiConfig,
+      isActive,
+      isPublic,
+    } = req.body;
+
+    if (!type || !name || !scoringRules || !requiredFields || !validationRules) {
+      return res.status(400).json({
+        error: 'type, name, scoringRules, requiredFields, and validationRules are required',
+      });
+    }
+
+    const toJsonString = (value: unknown) => (
+      typeof value === 'string' ? value : JSON.stringify(value)
+    );
+
+    const createdTemplate = await prisma.contestTemplate.create({
+      data: {
+        type,
+        name,
+        description,
+        organization,
+        scoringRules: toJsonString(scoringRules),
+        requiredFields: toJsonString(requiredFields),
+        validationRules: toJsonString(validationRules),
+        uiConfig: uiConfig ? toJsonString(uiConfig) : null,
+        isActive: typeof isActive === 'boolean' ? isActive : true,
+        isPublic: typeof isPublic === 'boolean' ? isPublic : true,
+      },
+    });
+
+    return res.status(201).json(createdTemplate);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return res.status(409).json({ error: 'Template type already exists' });
+    }
+    return res.status(400).json({ error: 'Failed to create contest template' });
   }
 });
 
@@ -848,6 +1058,56 @@ app.get('/api/contest-templates/:id', async (req, res) => {
     return res.json(template);
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch template' });
+  }
+});
+
+app.patch('/api/contest-templates/:id', async (req, res) => {
+  try {
+    const {
+      type,
+      name,
+      description,
+      organization,
+      scoringRules,
+      requiredFields,
+      validationRules,
+      uiConfig,
+      isActive,
+      isPublic,
+    } = req.body;
+
+    const toJsonString = (value: unknown) => (
+      typeof value === 'string' ? value : JSON.stringify(value)
+    );
+
+    const data: Record<string, unknown> = {};
+
+    if (type !== undefined) data.type = type;
+    if (name !== undefined) data.name = name;
+    if (description !== undefined) data.description = description;
+    if (organization !== undefined) data.organization = organization;
+    if (scoringRules !== undefined) data.scoringRules = toJsonString(scoringRules);
+    if (requiredFields !== undefined) data.requiredFields = toJsonString(requiredFields);
+    if (validationRules !== undefined) data.validationRules = toJsonString(validationRules);
+    if (uiConfig !== undefined) data.uiConfig = uiConfig ? toJsonString(uiConfig) : null;
+    if (typeof isActive === 'boolean') data.isActive = isActive;
+    if (typeof isPublic === 'boolean') data.isPublic = isPublic;
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'No fields provided to update' });
+    }
+
+    const updated = await prisma.contestTemplate.update({
+      where: { id: req.params.id },
+      data,
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return res.status(409).json({ error: 'Template type already exists' });
+    }
+    return res.status(400).json({ error: 'Failed to update contest template' });
   }
 });
 

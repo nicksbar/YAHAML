@@ -744,6 +744,39 @@ main {
   gap: var(--space-xs);
 }
 
+.app :where(input, select, textarea) {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  transition: all var(--transition-fast);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.app :where(input, select, textarea):focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.app :where(input, select, textarea):disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--surface-muted);
+}
+
+.app :where(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  box-shadow: none;
+}
+
 .field label {
   font-size: 0.7rem;
   font-weight: 700;
@@ -792,6 +825,71 @@ main {
 .field textarea {
   resize: vertical;
   min-height: 80px;
+}
+
+.template-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.template-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.template-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.template-filters {
+  background: var(--surface-alt);
+  padding: var(--space-md);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.template-filters .field {
+  margin-bottom: 0;
+}
+
+.template-filters label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+  display: block;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.notice {
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+}
+
+.notice.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.2);
+  color: var(--success);
+}
+
+.notice.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
 }
 
 .field-row {
@@ -1224,6 +1322,74 @@ main {
    PLACEHOLDERS
    ============================================================================ */
 
+.contest-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.contest-list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-fast);
+}
+
+.contest-list-item:hover {
+  background: var(--surface-alt);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.contest-list-item.active {
+  background: linear-gradient(to right, rgba(34, 197, 94, 0.1), var(--surface));
+  border-left-color: var(--success);
+}
+
+.contest-list-item.recent {
+  opacity: 0.7;
+  background: linear-gradient(to right, rgba(107, 114, 128, 0.05), var(--surface));
+}
+
+.contest-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.contest-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.contest-info h4 {
+  margin: 0 0 var(--space-xs) 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.contest-date {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.contest-countdown {
+  margin: var(--space-xs) 0 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.contest-list-item.active .contest-countdown {
+  color: var(--success);
+  font-weight: 600;
+}
+
 .contest-list-placeholder {
   display: flex;
   flex-direction: column;
@@ -1247,8 +1413,9 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.8rem;
+  font-size: 0.8rem);
 }
+
 
 /* ============================================================================
    UTILITIES - Compact

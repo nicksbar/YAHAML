@@ -142,6 +142,26 @@ function App() {
   
   // Contest templates state
   const [contestTemplates, setContestTemplates] = useState<any[]>([])
+  const [upcomingContests, setUpcomingContests] = useState<any[]>([])
+  const [templateFilter, setTemplateFilter] = useState('')
+  const [templateOrgFilter, setTemplateOrgFilter] = useState('all')
+  const [templateSeeding, setTemplateSeeding] = useState(false)
+  const [templateSeedStatus, setTemplateSeedStatus] = useState<string | null>(null)
+  const [templateEditor, setTemplateEditor] = useState({
+    id: '',
+    type: '',
+    name: '',
+    description: '',
+    organization: '',
+    scoringRules: '',
+    requiredFields: '',
+    validationRules: '',
+    uiConfig: '',
+    isActive: true,
+    isPublic: true,
+  })
+  const [templateEditorStatus, setTemplateEditorStatus] = useState<string | null>(null)
+  const [templateEditorError, setTemplateEditorError] = useState<string | null>(null)
   // const [selectedTemplate, setSelectedTemplate] = useState<any | null>(null)
   
   // Club form state
@@ -213,6 +233,174 @@ function App() {
       }
     } catch (err) {
       console.error('Failed to fetch contest templates:', err)
+    }
+  }
+
+  async function fetchUpcomingContests() {
+    try {
+      const response = await fetch('/api/contests/upcoming?limit=10&showRecentDays=10')
+      if (response.ok) {
+        const data = await response.json()
+        setUpcomingContests(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch upcoming contests:', err)
+    }
+  }
+
+  async function seedContestTemplates() {
+    setTemplateSeeding(true)
+    setTemplateSeedStatus(null)
+    try {
+      const response = await fetch('/api/contest-templates/seed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to seed templates')
+      }
+
+      setTemplateSeedStatus(payload.message || 'Templates seeded')
+      await fetchContestTemplates()
+    } catch (error) {
+      setTemplateSeedStatus(
+        error instanceof Error ? error.message : 'Failed to seed templates',
+      )
+    } finally {
+      setTemplateSeeding(false)
+    }
+  }
+
+  function formatTemplateJson(value: any) {
+    if (!value) return ''
+    try {
+      const parsed = typeof value === 'string' ? JSON.parse(value) : value
+      return JSON.stringify(parsed, null, 2)
+    } catch {
+      return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+    }
+  }
+
+  function loadTemplateIntoEditor(template: any) {
+    setTemplateEditor({
+      id: template.id || '',
+      type: template.type || '',
+      name: template.name || '',
+      description: template.description || '',
+      organization: template.organization || '',
+      scoringRules: formatTemplateJson(template.scoringRules),
+      requiredFields: formatTemplateJson(template.requiredFields),
+      validationRules: formatTemplateJson(template.validationRules),
+      uiConfig: formatTemplateJson(template.uiConfig),
+      isActive: template.isActive ?? true,
+      isPublic: template.isPublic ?? true,
+    })
+    setTemplateEditorStatus(null)
+    setTemplateEditorError(null)
+  }
+
+  function resetTemplateEditor() {
+    setTemplateEditor({
+      id: '',
+      type: '',
+      name: '',
+      description: '',
+      organization: '',
+      scoringRules: '',
+      requiredFields: '',
+      validationRules: '',
+      uiConfig: '',
+      isActive: true,
+      isPublic: true,
+    })
+    setTemplateEditorStatus(null)
+    setTemplateEditorError(null)
+  }
+
+  async function submitTemplate(action: 'create' | 'update') {
+    setTemplateEditorStatus(null)
+    setTemplateEditorError(null)
+
+    if (!templateEditor.type || !templateEditor.name) {
+      setTemplateEditorError('Type and name are required')
+      return
+    }
+
+    const parseJson = (value: string, label: string) => {
+      if (!value.trim()) {
+        throw new Error(`${label} JSON is required`)
+      }
+      try {
+        return JSON.parse(value)
+      } catch {
+        throw new Error(`${label} JSON is invalid`)
+      }
+    }
+
+    let scoringRules: any
+    let requiredFields: any
+    let validationRules: any
+    let uiConfig: any = undefined
+
+    try {
+      scoringRules = parseJson(templateEditor.scoringRules, 'Scoring rules')
+      requiredFields = parseJson(templateEditor.requiredFields, 'Required fields')
+      validationRules = parseJson(templateEditor.validationRules, 'Validation rules')
+      if (templateEditor.uiConfig.trim()) {
+        uiConfig = JSON.parse(templateEditor.uiConfig)
+      }
+    } catch (error) {
+      setTemplateEditorError(error instanceof Error ? error.message : 'Invalid JSON')
+      return
+    }
+
+    const payload = {
+      type: templateEditor.type.trim(),
+      name: templateEditor.name.trim(),
+      description: templateEditor.description.trim() || null,
+      organization: templateEditor.organization.trim() || null,
+      scoringRules,
+      requiredFields,
+      validationRules,
+      uiConfig,
+      isActive: templateEditor.isActive,
+      isPublic: templateEditor.isPublic,
+    }
+
+    try {
+      const response = await fetch(
+        action === 'create'
+          ? '/api/contest-templates'
+          : `/api/contest-templates/${templateEditor.id}`,
+        {
+          method: action === 'create' ? 'POST' : 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result?.error || 'Failed to save template')
+      }
+
+      setTemplateEditorStatus(
+        action === 'create'
+          ? 'Template created successfully'
+          : 'Template updated successfully',
+      )
+      await fetchContestTemplates()
+
+      if (action === 'create') {
+        loadTemplateIntoEditor(result)
+      }
+    } catch (error) {
+      setTemplateEditorError(
+        error instanceof Error ? error.message : 'Failed to save template',
+      )
     }
   }
 
@@ -1052,12 +1240,86 @@ function App() {
 
           <section className="panel">
             <h2>Upcoming Contests</h2>
-            <p className="hint">Calendar integration coming soon - link to contest sites and rules</p>
-            <div className="contest-list-placeholder">
-              <div className="placeholder-item">📅 ARRL Field Day - June 2026</div>
-              <div className="placeholder-item">📅 Winter Field Day - January 2026</div>
-              <div className="placeholder-item">📅 CQ WW DX - October 2026</div>
-            </div>
+            <p className="hint">Calculated from template rules - shows recent and upcoming events</p>
+            {(!upcomingContests || upcomingContests.length === 0) && (
+              <div className="empty-state">
+                <p className="empty">No upcoming contests scheduled.</p>
+              </div>
+            )}
+            {upcomingContests && upcomingContests.length > 0 && (
+              <div className="contest-list">
+                {upcomingContests.map((contest: any, idx: number) => {
+                const ui = contest.template.uiConfig || {}
+                const schedule = contest.template.schedule || null
+                const startDate = new Date(contest.startDate)
+                const endDate = new Date(contest.endDate)
+                const daysUntil = contest.daysUntil
+
+                const formatDate = () => {
+                  if (contest.status === 'active') {
+                    return `🔴 ACTIVE NOW - Ends ${endDate.toLocaleDateString()}`
+                  }
+                  if (contest.status === 'recent') {
+                    return `✓ Recently Ended - ${endDate.toLocaleDateString()}`
+                  }
+                  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+                  const month = monthNames[startDate.getMonth()]
+                  const startDay = startDate.getDate()
+                  
+                  if (schedule?.duration?.hours > 24) {
+                    const endDay = endDate.getDate()
+                    return `${month} ${startDay}-${endDay}, ${startDate.getFullYear()}`
+                  }
+                  return `${month} ${startDay}, ${startDate.getFullYear()}`
+                }
+
+                const getDaysText = () => {
+                  if (contest.status === 'active') return 'In Progress'
+                  if (contest.status === 'recent') {
+                    const daysAgo = Math.abs(daysUntil)
+                    if (daysAgo === 0) return 'Ended today'
+                    if (daysAgo === 1) return 'Ended yesterday'
+                    return `Ended ${daysAgo} days ago`
+                  }
+                  if (daysUntil === 0) return 'Today!'
+                  if (daysUntil === 1) return 'Tomorrow'
+                  if (daysUntil < 7) return `In ${daysUntil} days`
+                  if (daysUntil < 30) return `In ${Math.floor(daysUntil / 7)} weeks`
+                  if (daysUntil < 365) return `In ${Math.floor(daysUntil / 30)} months`
+                  return `In ${Math.floor(daysUntil / 365)} years`
+                }
+
+                return (
+                  <div 
+                    key={idx} 
+                    className={`contest-list-item ${contest.status === 'active' ? 'active' : ''} ${contest.status === 'recent' ? 'recent' : ''}`}
+                    style={{ 
+                      borderLeft: contest.status === 'active' ? '4px solid var(--success)' : 
+                                 contest.status === 'recent' ? '4px solid var(--text-muted)' : undefined 
+                    }}
+                  >
+                    <div className="contest-icon">{ui.icon || '📅'}</div>
+                    <div className="contest-info">
+                      <h4>{contest.template.name}</h4>
+                      <p className="contest-date">{formatDate()}</p>
+                      <p className="contest-countdown">{getDaysText()}</p>
+                    </div>
+                    {ui.helpUrl && (
+                      <a
+                        href={ui.helpUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn secondary"
+                        style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                      >
+                        Rules
+                      </a>
+                    )}
+                  </div>
+                )
+              })}
+              </div>
+            )}
           </section>
 
           <section className="panel">
@@ -1065,8 +1327,93 @@ function App() {
             <p className="hint">
               Select a template to create a new contest with predefined rules and scoring
             </p>
+            {contestTemplates.length === 0 && (
+              <div className="empty-state">
+                <p className="empty">No contest templates found.</p>
+                <button
+                  className="btn btn-primary"
+                  onClick={seedContestTemplates}
+                  disabled={templateSeeding}
+                >
+                  {templateSeeding ? 'Seeding Templates…' : 'Seed Standard Templates'}
+                </button>
+                {templateSeedStatus && (
+                  <p className="hint" style={{ marginTop: '0.75rem' }}>
+                    {templateSeedStatus}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {contestTemplates.length > 0 && (
+              <div className="template-filters" style={{ 
+                display: 'flex', 
+                gap: '1rem', 
+                marginBottom: '1.5rem',
+                flexWrap: 'wrap'
+              }}>
+                <div className="field" style={{ flex: '1 1 300px', minWidth: '200px' }}>
+                  <label htmlFor="template-search">🔍 Search</label>
+                  <input
+                    id="template-search"
+                    type="text"
+                    placeholder="Search by name, type, or description..."
+                    value={templateFilter}
+                    onChange={(e) => setTemplateFilter(e.target.value)}
+                  />
+                </div>
+                <div className="field" style={{ flex: '0 1 200px', minWidth: '150px' }}>
+                  <label htmlFor="org-filter">Organization</label>
+                  <select
+                    id="org-filter"
+                    value={templateOrgFilter}
+                    onChange={(e) => setTemplateOrgFilter(e.target.value)}
+                  >
+                    <option value="all">All Organizations</option>
+                    {Array.from(new Set(contestTemplates.map(t => t.organization))).sort().map(org => (
+                      <option key={org} value={org}>{org}</option>
+                    ))}
+                  </select>
+                </div>
+                {(templateFilter || templateOrgFilter !== 'all') && (
+                  <button 
+                    className="btn secondary"
+                    style={{ alignSelf: 'flex-end', padding: '0.6rem 1rem' }}
+                    onClick={() => {
+                      setTemplateFilter('')
+                      setTemplateOrgFilter('all')
+                    }}
+                  >
+                    Clear Filters
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="contest-templates">
-              {contestTemplates.map((template) => {
+              {contestTemplates
+                .filter((template) => {
+                  // Apply text search filter
+                  if (templateFilter) {
+                    const searchLower = templateFilter.toLowerCase()
+                    const matchesName = template.name.toLowerCase().includes(searchLower)
+                    const matchesType = template.type.toLowerCase().includes(searchLower)
+                    const matchesDesc = template.description.toLowerCase().includes(searchLower)
+                    const matchesOrg = template.organization.toLowerCase().includes(searchLower)
+                    
+                    if (!matchesName && !matchesType && !matchesDesc && !matchesOrg) {
+                      return false
+                    }
+                  }
+                  
+                  // Apply organization filter
+                  if (templateOrgFilter !== 'all' && template.organization !== templateOrgFilter) {
+                    return false
+                  }
+                  
+                  return true
+                })
+                .map((template) => {
                 const ui = template.uiConfig ? JSON.parse(template.uiConfig) : {}
                 const scoring = JSON.parse(template.scoringRules)
                 const required = JSON.parse(template.requiredFields)
@@ -1123,6 +1470,12 @@ function App() {
                     >
                       Create Contest from Template
                     </button>
+                    <button
+                      className="btn secondary"
+                      onClick={() => loadTemplateIntoEditor(template)}
+                    >
+                      Edit Template
+                    </button>
                     
                     {ui.helpUrl && (
                       <a 
@@ -1137,6 +1490,246 @@ function App() {
                   </div>
                 )
               })}
+            </div>
+            
+            {/* No results message */}
+            {contestTemplates.length > 0 && contestTemplates.filter((template) => {
+              if (templateFilter) {
+                const searchLower = templateFilter.toLowerCase()
+                const matchesName = template.name.toLowerCase().includes(searchLower)
+                const matchesType = template.type.toLowerCase().includes(searchLower)
+                const matchesDesc = template.description.toLowerCase().includes(searchLower)
+                const matchesOrg = template.organization.toLowerCase().includes(searchLower)
+                
+                if (!matchesName && !matchesType && !matchesDesc && !matchesOrg) {
+                  return false
+                }
+              }
+              
+              if (templateOrgFilter !== 'all' && template.organization !== templateOrgFilter) {
+                return false
+              }
+              
+              return true
+            }).length === 0 && (
+              <div className="empty-state" style={{ marginTop: '2rem' }}>
+                <p className="empty">No templates match your filters.</p>
+                <button 
+                  className="btn secondary"
+                  onClick={() => {
+                    setTemplateFilter('')
+                    setTemplateOrgFilter('all')
+                  }}
+                >
+                  Clear Filters
+                </button>
+              </div>
+            )}
+          </section>
+
+          <section className="panel template-editor">
+            <div className="template-editor-header">
+              <h2>Template Editor</h2>
+              <div className="template-editor-actions">
+                <button className="btn secondary" onClick={resetTemplateEditor}>
+                  New Template
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => submitTemplate('create')}
+                >
+                  Save as New
+                </button>
+                <button
+                  className="btn"
+                  disabled={!templateEditor.id}
+                  onClick={() => submitTemplate('update')}
+                >
+                  Update Template
+                </button>
+              </div>
+            </div>
+
+            <p className="hint">
+              Define rules, exchanges, and scoring as JSON. This editor supports custom
+              contests from sources like contestcalendar.com.
+            </p>
+
+            {templateEditorError && (
+              <div className="notice error">{templateEditorError}</div>
+            )}
+            {templateEditorStatus && (
+              <div className="notice success">{templateEditorStatus}</div>
+            )}
+
+            <div className="form-grid full">
+              <div className="field">
+                <label>Existing Templates</label>
+                <select
+                  value={templateEditor.id}
+                  onChange={(event) => {
+                    const selected = contestTemplates.find(
+                      (template) => template.id === event.target.value,
+                    )
+                    if (selected) {
+                      loadTemplateIntoEditor(selected)
+                    } else {
+                      resetTemplateEditor()
+                    }
+                  }}
+                >
+                  <option value="">-- Select template to edit --</option>
+                  {contestTemplates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name} ({template.type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="form-grid two">
+              <div className="field">
+                <label>Template Type *</label>
+                <input
+                  value={templateEditor.type}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      type: event.target.value,
+                    }))
+                  }
+                  placeholder="CQ_WW_RTTY"
+                />
+                <div className="field-hint">Must be unique (used for lookups)</div>
+              </div>
+              <div className="field">
+                <label>Name *</label>
+                <input
+                  value={templateEditor.name}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="CQ WW RTTY"
+                />
+              </div>
+              <div className="field">
+                <label>Organization</label>
+                <input
+                  value={templateEditor.organization}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      organization: event.target.value,
+                    }))
+                  }
+                  placeholder="CQ Magazine"
+                />
+              </div>
+              <div className="field">
+                <label>Description</label>
+                <input
+                  value={templateEditor.description}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
+                  placeholder="Annual worldwide RTTY contest"
+                />
+              </div>
+            </div>
+
+            <div className="form-grid full">
+              <div className="field">
+                <label>Scoring Rules (JSON) *</label>
+                <textarea
+                  value={templateEditor.scoringRules}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      scoringRules: event.target.value,
+                    }))
+                  }
+                  placeholder='{"pointsPerQso": 1, "multipliers": []}'
+                  rows={8}
+                />
+              </div>
+              <div className="field">
+                <label>Required Fields (JSON) *</label>
+                <textarea
+                  value={templateEditor.requiredFields}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      requiredFields: event.target.value,
+                    }))
+                  }
+                  placeholder='{"exchange": {"required": true, "format": "RST"}}'
+                  rows={6}
+                />
+              </div>
+              <div className="field">
+                <label>Validation Rules (JSON) *</label>
+                <textarea
+                  value={templateEditor.validationRules}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      validationRules: event.target.value,
+                    }))
+                  }
+                  placeholder='{"bands": ["20", "40"], "modes": ["CW", "SSB"]}'
+                  rows={6}
+                />
+              </div>
+              <div className="field">
+                <label>UI Config (JSON)</label>
+                <textarea
+                  value={templateEditor.uiConfig}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      uiConfig: event.target.value,
+                    }))
+                  }
+                  placeholder='{"icon": "📋", "primaryColor": "#4F46E5"}'
+                  rows={5}
+                />
+              </div>
+            </div>
+
+            <div className="form-grid two">
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={templateEditor.isActive}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      isActive: event.target.checked,
+                    }))
+                  }
+                />
+                Active
+              </label>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={templateEditor.isPublic}
+                  onChange={(event) =>
+                    setTemplateEditor((current) => ({
+                      ...current,
+                      isPublic: event.target.checked,
+                    }))
+                  }
+                />
+                Public
+              </label>
             </div>
           </section>
         </div>
@@ -1832,7 +2425,11 @@ function App() {
             </button>
             <button
               className={`nav-btn ${currentView === 'contests' ? 'active' : ''}`}
-              onClick={() => setCurrentView('contests')}
+              onClick={() => {
+                setCurrentView('contests')
+                fetchContestTemplates()
+                fetchUpcomingContests()
+              }}
             >
               Contests
             </button>

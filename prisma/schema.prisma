@@ -194,6 +194,9 @@ model ContestTemplate {
   // Validation rules (JSON)
   validationRules   String   // JSON: { bands, modes, exchanges, time limits, etc. }
   
+  // Schedule configuration (JSON)
+  schedule          String?  // JSON: { type, relative, duration, recurrence, timezone }
+  
   // UI configuration (JSON)
   uiConfig          String?  // JSON: { forms, displays, help text, etc. }
   
