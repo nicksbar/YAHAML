@@ -6,6 +6,11 @@ import prisma from './db';
 import { startRelayServer } from './relay';
 import { parseUdpTargets, startUdpServer } from './udp';
 import { radioManager } from './hamlib';
+import {
+  generateAdifContent,
+  generateCabrilloContent,
+  validateCabrilloQso,
+} from './export';
 
 dotenv.config();
 
@@ -361,6 +366,210 @@ app.get('/api/logs/:id/merged-with', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch merge history' });
+  }
+});
+
+// Export endpoints
+app.get('/api/export/adif', async (req, res): Promise<void> => {
+  try {
+    const { contestId, format = '3' } = req.query;
+
+    if (!contestId) {
+      res.status(400).json({ error: 'contestId is required' });
+      return;
+    }
+
+    if (!['2', '3'].includes(String(format))) {
+      res.status(400).json({ error: 'format must be "2" or "3"' });
+      return;
+    }
+
+    // Fetch all primary (non-merged) entries
+    const entries = await prisma.logEntry.findMany({
+      where: {
+        contestId: String(contestId),
+        merge_status: { not: 'duplicate_of' },
+      },
+      orderBy: { qsoDate: 'asc' },
+    });
+
+    if (entries.length === 0) {
+      res.status(404).json({ error: 'No QSO entries found for contest' });
+      return;
+    }
+
+    // Generate ADIF content
+    const adifContent = generateAdifContent(
+      entries,
+      String(format) as '2' | '3'
+    );
+
+    // Return as file download
+    res.setHeader('Content-Type', 'application/x-adi');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="yahaml-${contestId}-${new Date().toISOString().slice(0, 10)}.adi"`
+    );
+    res.send(adifContent);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'ADIF export failed', details: message });
+  }
+});
+
+app.get('/api/export/cabrillo', async (req, res): Promise<void> => {
+  try {
+    const { contestId, stationId, location } = req.query;
+
+    if (!contestId) {
+      res.status(400).json({ error: 'contestId is required' });
+      return;
+    }
+
+    // Fetch contest details
+    const contest = await prisma.contest.findUnique({
+      where: { id: String(contestId) },
+    });
+
+    if (!contest) {
+      res.status(404).json({ error: 'Contest not found' });
+      return;
+    }
+
+    // Fetch primary entries
+    const entries = await prisma.logEntry.findMany({
+      where: {
+        contestId: String(contestId),
+        merge_status: { not: 'duplicate_of' },
+      },
+      orderBy: { qsoDate: 'asc' },
+    });
+
+    // Validate all entries
+    const validationErrors: { [key: string]: string[] } = {};
+    entries.forEach((entry, idx) => {
+      const errors = validateCabrilloQso(entry);
+      if (errors.length > 0) {
+        validationErrors[`entry_${idx}`] = errors;
+      }
+    });
+
+    if (Object.keys(validationErrors).length > 0) {
+      res.status(400).json({
+        error: 'Validation failed for one or more entries',
+        details: validationErrors,
+      });
+      return;
+    }
+
+    // Get callsign from station
+    let callsign = 'UNKNOWN';
+    if (stationId) {
+      const station = await prisma.station.findUnique({
+        where: { id: String(stationId) },
+      });
+      if (station) {
+        callsign = station.callsign;
+      }
+    }
+
+    // Generate CABRILLO
+    const cabrilloContent = generateCabrilloContent(
+      entries,
+      callsign,
+      contest.name,
+      location ? String(location) : undefined
+    );
+
+    // Return as file download
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="yahaml-${contestId}-${new Date().toISOString().slice(0, 10)}.log"`
+    );
+    res.send(cabrilloContent);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: 'CABRILLO export failed', details: message });
+  }
+});
+
+app.get('/api/export/reverse-log', async (req, res): Promise<void> => {
+  try {
+    const { contestId, remote_call: remoteCall, stationId, location } = req.query;
+
+    if (!contestId) {
+      res.status(400).json({ error: 'contestId is required' });
+      return;
+    }
+
+    if (!remoteCall) {
+      res.status(400).json({ error: 'remote_call is required' });
+      return;
+    }
+
+    // Fetch contest
+    const contest = await prisma.contest.findUnique({
+      where: { id: String(contestId) },
+    });
+
+    if (!contest) {
+      res.status(404).json({ error: 'Contest not found' });
+      return;
+    }
+
+    // Fetch all QSOs WITH the remote call (reverse perspective)
+    const entries = await prisma.logEntry.findMany({
+      where: {
+        contestId: String(contestId),
+        callsign: String(remoteCall),
+        merge_status: { not: 'duplicate_of' },
+      },
+      orderBy: { qsoDate: 'asc' },
+    });
+
+    if (entries.length === 0) {
+      res.status(404).json({
+        error: 'No QSO entries found for remote station',
+      });
+      return;
+    }
+
+    // Get local callsign
+    let callsign = 'UNKNOWN';
+    if (stationId) {
+      const station = await prisma.station.findUnique({
+        where: { id: String(stationId) },
+      });
+      if (station) {
+        callsign = station.callsign;
+      }
+    }
+
+    // Generate CABRILLO format for reverse-log
+    const cabrilloContent = generateCabrilloContent(
+      entries,
+      callsign,
+      `${contest.name} (Reverse-Log for ${remoteCall})`,
+      location ? String(location) : undefined
+    );
+
+    // Return as file download
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="reverse-log-${contestId}-${remoteCall}-${new Date().toISOString().slice(0, 10)}.log"`
+    );
+    res.send(cabrilloContent);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({
+      error: 'Reverse-log export failed',
+      details: message,
+    });
   }
 });
 

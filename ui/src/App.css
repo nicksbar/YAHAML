@@ -1344,6 +1344,99 @@ main {
   }
 }
 
+/* ============================================================================
+   Contest Templates Section
+   ============================================================================ */
+
+.contest-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.contest-template-card {
+  padding: 1.25rem;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  transition: all 0.2s;
+}
+
+.contest-template-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.template-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.template-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.template-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.template-org {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0.2rem 0 0 0;
+}
+
+.template-description {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.template-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.template-detail {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+
+.template-detail strong {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.template-detail span {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.template-link {
+  font-size: 0.85rem;
+  color: var(--accent);
+  text-decoration: none;
+  margin-top: 0.25rem;
+  display: inline-block;
+}
+
+.template-link:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 768px) {
   .navbar {
     padding: var(--space-sm) var(--space-md);
