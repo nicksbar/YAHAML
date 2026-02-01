@@ -1,0 +1,1907 @@
+import { useEffect, useMemo, useState } from 'react'
+import './App.css'
+
+type BandActivity = {
+  id: string
+  band: string
+  mode: string
+  lastSeen: string
+  power?: number | null
+}
+
+type NetworkStatus = {
+  isConnected: boolean
+  ip?: string | null
+  lastConnected?: string | null
+}
+
+type Station = {
+  id: string
+  callsign: string
+  name: string
+  class?: string | null
+  section?: string | null
+  grid?: string | null
+  bandActivities: BandActivity[]
+  networkStatus?: NetworkStatus | null
+  _count: {
+    qsoLogs: number
+    contextLogs: number
+  }
+}
+
+type ContextLog = {
+  id: string
+  level: string
+  category: string
+  message: string
+  createdAt: string
+}
+
+type QsoLog = {
+  id: string
+  callsign: string
+  band: string
+  mode: string
+  qsoDate: string
+  qsoTime: string
+  points: number
+}
+
+type ServiceStatus = {
+  api: {
+    name: string
+    port: number
+    status: string
+    url: string
+  }
+  relay: {
+    name: string
+    port: number
+    status: string
+    protocol: string
+    encoding: string
+    url: string
+  }
+  udp: {
+    name: string
+    port: number
+    status: string
+    protocol: string
+    url: string
+  }
+}
+
+type Contest = {
+  id: string
+  name: string
+  isActive: boolean
+  mode: string
+  startTime?: string | null
+  endTime?: string | null
+  duration?: number | null
+  scoringMode: string
+  pointsPerQso: number
+  totalQsos: number
+  totalPoints: number
+  createdAt: string
+}
+
+type RadioConnection = {
+  id: string
+  name: string
+  host: string
+  port: number
+  manufacturer?: string | null
+  model?: string | null
+  isConnected: boolean
+  lastSeen?: string | null
+  lastError?: string | null
+  frequency?: string | null
+  mode?: string | null
+  bandwidth?: number | null
+  power?: number | null
+  pollInterval: number
+  isEnabled: boolean
+  createdAt: string
+  assignments?: RadioAssignment[]
+}
+
+type RadioAssignment = {
+  id: string
+  radioId: string
+  stationId: string
+  isActive: boolean
+  assignedAt: string
+  unassignedAt?: string | null
+  radio?: RadioConnection
+  station?: Station
+}
+
+const storageKey = 'yahaml:callsign'
+
+type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin'
+
+function App() {
+  const [stations, setStations] = useState<Station[]>([])
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
+  const [contextLogs, setContextLogs] = useState<ContextLog[]>([])
+  const [qsoLogs, setQsoLogs] = useState<QsoLog[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [callsignInput, setCallsignInput] = useState(
+    localStorage.getItem(storageKey) || '',
+  )
+  const [services, setServices] = useState<ServiceStatus | null>(null)
+  const [contest, setContest] = useState<Contest | null>(null)
+  const [adminCallsigns, setAdminCallsigns] = useState<string[]>([])
+  const [isAdmin, setIsAdmin] = useState(true) // Default true, checked after loading admin list
+  const [currentView, setCurrentView] = useState<ViewType>('dashboard')
+  const [clubs, setClubs] = useState<any[]>([])
+  
+  // Contest templates state
+  const [contestTemplates, setContestTemplates] = useState<any[]>([])
+  // const [selectedTemplate, setSelectedTemplate] = useState<any | null>(null)
+  
+  // Club form state
+  const [clubCallsign, setClubCallsign] = useState('')
+  const [clubName, setClubName] = useState('')
+  const [clubSection, setClubSection] = useState('')
+  const [clubGrid, setClubGrid] = useState('')
+  const [altCallsignsInput, setAltCallsignsInput] = useState('')
+  
+  // Special callsign form state
+  const [specialCallsigns, setSpecialCallsigns] = useState<any[]>([])
+  const [specialCallsign, setSpecialCallsign] = useState('')
+  const [specialEventName, setSpecialEventName] = useState('')
+  const [specialDescription, setSpecialDescription] = useState('')
+  const [specialStartDate, setSpecialStartDate] = useState('')
+  const [specialEndDate, setSpecialEndDate] = useState('')
+  
+  // Radio management state
+  const [radios, setRadios] = useState<RadioConnection[]>([])
+  // const [radioAssignments, setRadioAssignments] = useState<RadioAssignment[]>([])
+  const [radioName, setRadioName] = useState('')
+  const [radioHost, setRadioHost] = useState('')
+  const [radioPort, setRadioPort] = useState('4532')
+  const [radioPollInterval, setRadioPollInterval] = useState('1000')
+  const [radioTestResult, setRadioTestResult] = useState<{
+    success: boolean
+    message?: string
+    state?: any
+    info?: string
+    error?: string
+  } | null>(null)
+  const [radioTesting, setRadioTesting] = useState(false)
+  const [specialClubId, setSpecialClubId] = useState('')
+  const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
+    const saved = localStorage.getItem('yahaml-theme')
+    return (saved as any) || 'auto'
+  })
+  
+  // Delete confirmation states
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [deleteConfirmType, setDeleteConfirmType] = useState<'special' | 'club' | 'radio' | null>(null)
+  
+  // Admin form state
+  const [adminListInput, setAdminListInput] = useState('')
+  
+  // Apply theme
+  useEffect(() => {
+    localStorage.setItem('yahaml-theme', theme)
+    const root = document.documentElement
+    if (theme === 'auto') {
+      root.classList.remove('theme-light', 'theme-dark')
+    } else {
+      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.add(`theme-${theme}`)
+    }
+  }, [theme])
+
+  const selectedStation = useMemo(
+    () => stations.find((station) => station.id === selectedStationId) || null,
+    [stations, selectedStationId],
+  )
+  
+  async function fetchContestTemplates() {
+    try {
+      const response = await fetch('/api/contest-templates')
+      if (response.ok) {
+        const data = await response.json()
+        setContestTemplates(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch contest templates:', err)
+    }
+  }
+
+  async function fetchStations() {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/stations')
+      if (!response.ok) throw new Error('Failed to load stations')
+      const data = (await response.json()) as Station[]
+      setStations(data)
+      if (!selectedStationId && data.length > 0) {
+        setSelectedStationId(data[0].id)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function fetchStationDetails(stationId: string) {
+    try {
+      const [contextResponse, qsoResponse] = await Promise.all([
+        fetch(`/api/context-logs/${stationId}`),
+        fetch(`/api/qso-logs/${stationId}`),
+      ])
+      if (contextResponse.ok) {
+        setContextLogs((await contextResponse.json()) as ContextLog[])
+      }
+      if (qsoResponse.ok) {
+        setQsoLogs((await qsoResponse.json()) as QsoLog[])
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function fetchServices() {
+    try {
+      const response = await fetch('/api/services')
+      if (response.ok) {
+        setServices((await response.json()) as ServiceStatus)
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function fetchContest() {
+    try {
+      const response = await fetch('/api/contests/active/current')
+      if (response.ok) {
+        setContest((await response.json()) as Contest)
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function fetchAdminList() {
+    try {
+      const response = await fetch('/api/admin/callsigns')
+      if (response.ok) {
+        const data = await response.json()
+        setAdminCallsigns(data.callsigns || [])
+        // Check if current callsign is admin
+        const currentCall = localStorage.getItem(storageKey) || ''
+        if (data.callsigns.length === 0) {
+          setIsAdmin(true) // No list = everyone is admin
+        } else {
+          setIsAdmin(data.callsigns.includes(currentCall))
+        }
+      }
+    } catch {
+      setIsAdmin(true) // Default to admin on error
+    }
+  }
+
+  async function fetchClubs() {
+    try {
+      const response = await fetch('/api/clubs')
+      if (response.ok) {
+        const data = await response.json()
+        setClubs(data)
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function fetchSpecialCallsigns() {
+    try {
+      const response = await fetch('/api/special-callsigns')
+      if (response.ok) {
+        const data = await response.json()
+        setSpecialCallsigns(data)
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function fetchRadios() {
+    try {
+      const response = await fetch('/api/radios')
+      if (response.ok) {
+        const data = await response.json()
+        setRadios(data)
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  /*async function fetchRadioAssignments() {
+    try {
+      const response = await fetch('/api/radio-assignments/active')
+      if (response.ok) {
+        const data = await response.json()
+        setRadioAssignments(data)
+      }
+    } catch {
+      // silent
+    }
+  }*/
+
+  async function activateFieldDay() {
+    try {
+      const response = await fetch('/api/admin/activate-field-day', {
+        method: 'POST',
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setContest(data.contest)
+        await fetchContest()
+      }
+    } catch (err) {
+      console.error('Failed to activate Field Day:', err)
+    }
+  }
+
+  async function stopContest() {
+    try {
+      const response = await fetch('/api/admin/stop-contest', {
+        method: 'POST',
+      })
+      if (response.ok) {
+        setContest(null)
+        await fetchContest()
+      }
+    } catch (err) {
+      console.error('Failed to stop contest:', err)
+    }
+  }
+
+  async function saveCallsign() {
+    const callsign = callsignInput.trim().toUpperCase()
+    if (!callsign) return
+
+    try {
+      // Check if station exists
+      let response = await fetch(`/api/stations?callsign=${callsign}`)
+      let stationsList = await response.json()
+      
+      if (stationsList.length === 0) {
+        // Create new station
+        response = await fetch('/api/stations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callsign, name: callsign }),
+        })
+        if (response.ok) {
+          await fetchStations()
+        }
+      }
+      
+      localStorage.setItem(storageKey, callsign)
+      setCallsignInput(callsign)
+      await fetchAdminList() // Recheck admin status
+    } catch (error) {
+      console.error('Failed to save callsign:', error)
+    }
+  }
+
+  useEffect(() => {
+    fetchStations()
+    fetchServices()
+    fetchContest()
+    fetchAdminList()
+    fetchClubs()
+    fetchSpecialCallsigns()
+    fetchContestTemplates()
+    fetchRadios()
+    // fetchRadioAssignments()
+  }, [])
+
+  useEffect(() => {
+    // Update admin list input when admin callsigns change
+    setAdminListInput(adminCallsigns.join(', '))
+  }, [adminCallsigns])
+
+  useEffect(() => {
+    // Recheck admin status when callsign changes
+    const currentCall = localStorage.getItem(storageKey) || ''
+    if (adminCallsigns.length === 0) {
+      setIsAdmin(true)
+    } else {
+      setIsAdmin(adminCallsigns.includes(currentCall))
+    }
+  }, [callsignInput, adminCallsigns])
+
+  useEffect(() => {
+    if (!selectedStationId) return
+    fetchStationDetails(selectedStationId)
+  }, [selectedStationId])
+
+  useEffect(() => {
+    if (!autoRefresh) return
+    const interval = setInterval(() => {
+      fetchStations()
+      if (selectedStationId) {
+        fetchStationDetails(selectedStationId)
+      }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [autoRefresh, selectedStationId])
+
+  const currentCallsign = localStorage.getItem(storageKey) || 'Not set'
+
+  function renderDashboard() {
+    return (
+      <div className="dashboard-grid">
+        <section className="panel system-panel">
+          <h2>System Status</h2>
+          <div className="toggle-row">
+            <label>
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(event) => setAutoRefresh(event.target.checked)}
+              />
+              Auto refresh (5s)
+            </label>
+          </div>
+          
+          <div className="services-grid">
+            {services && (
+              <>
+                <div className="service-card">
+                  <div className="service-label">API Server</div>
+                  <div className="service-port">{services.api.port}</div>
+                  <div className="service-status running">Running</div>
+                </div>
+                <div className="service-card">
+                  <div className="service-label">Relay (TCP)</div>
+                  <div className="service-port">{services.relay.port}</div>
+                  <div className="service-status running">Running</div>
+                </div>
+                <div className="service-card">
+                  <div className="service-label">UDP Log</div>
+                  <div className="service-port">{services.udp.port}</div>
+                  <div className="service-status running">Running</div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="stats">
+            <div>
+              <span className="label">Stations</span>
+              <strong>{stations.length}</strong>
+            </div>
+            <div>
+              <span className="label">Total QSOs</span>
+              <strong>
+                {stations.reduce((sum, s) => sum + s._count.qsoLogs, 0)}
+              </strong>
+            </div>
+            <div>
+              <span className="label">Events</span>
+              <strong>
+                {stations.reduce((sum, s) => sum + s._count.contextLogs, 0)}
+              </strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel stations-panel">
+          <div className="panel-header">
+            <h2>Active Stations</h2>
+            {loading && <span className="pill">Loading...</span>}
+            {error && <span className="pill error">{error}</span>}
+          </div>
+          <div className="station-list">
+            {stations.map((station) => {
+              const active = station.bandActivities[0]
+              const isSelected = station.id === selectedStationId
+              const connected = station.networkStatus?.isConnected
+              return (
+                <button
+                  key={station.id}
+                  className={`station-card ${isSelected ? 'selected' : ''}`}
+                  onClick={() => setSelectedStationId(station.id)}
+                >
+                  <div className="station-main">
+                    <div>
+                      <div className="callsign">{station.callsign}</div>
+                      <div className="details">
+                        {station.class || '--'} {station.section || ''}
+                      </div>
+                    </div>
+                    <div className={`status ${connected ? 'up' : 'down'}`}>
+                      {connected ? 'LIVE' : 'OFF'}
+                    </div>
+                  </div>
+                  <div className="station-meta">
+                    <span>{active?.band || '--'}m</span>
+                    <span>{active?.mode || '--'}</span>
+                    <span>{active?.power ? `${active.power}W` : '–'}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        <section className="panel activity-panel">
+          <h2>Recent Activity</h2>
+          {selectedStation ? (
+            <div className="activity-feed">
+              {contextLogs.slice(0, 12).map((log) => (
+                <div key={log.id} className="activity-item">
+                  <span className={`tag ${log.level.toLowerCase()}`}>
+                    {log.level}
+                  </span>
+                  <span className="activity-message">{log.message}</span>
+                  <span className="activity-time">
+                    {new Date(log.createdAt).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+              {contextLogs.length === 0 && <p className="empty">No activity</p>}
+            </div>
+          ) : (
+            <p className="empty-state">Select a station to view activity</p>
+          )}
+        </section>
+      </div>
+    )
+  }
+
+  function renderClubView() {
+    const saveClub = async () => {
+      if (!clubCallsign || !clubName) {
+        return
+      }
+      
+      // Ensure we have an active contest first
+      if (!contest) {
+        return
+      }
+      
+      // Parse alternative callsigns
+      const altCallsigns = altCallsignsInput
+        .split(',')
+        .map(c => c.trim().toUpperCase())
+        .filter(c => c.length > 0)
+      
+      try {
+        const response = await fetch('/api/clubs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callsign: clubCallsign.toUpperCase(),
+            name: clubName,
+            section: clubSection || undefined,
+            grid: clubGrid || undefined,
+            altCallsigns: altCallsigns.length > 0 ? JSON.stringify(altCallsigns) : undefined,
+            contestId: contest.id,
+          }),
+        })
+        if (response.ok) {
+          await fetchClubs()
+          setClubCallsign('')
+          setClubName('')
+          setClubSection('')
+          setClubGrid('')
+          setAltCallsignsInput('')
+        }
+      } catch (error) {
+        console.error('Failed to save club:', error)
+      }
+    }
+    
+    const saveSpecialCallsign = async () => {
+      if (!specialCallsign || !specialEventName || !specialStartDate || !specialEndDate) {
+        return
+      }
+      
+      try {
+        const response = await fetch('/api/special-callsigns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callsign: specialCallsign.toUpperCase(),
+            eventName: specialEventName,
+            description: specialDescription || undefined,
+            startDate: specialStartDate,
+            endDate: specialEndDate,
+            clubId: specialClubId || undefined,
+          }),
+        })
+        if (response.ok) {
+          await fetchSpecialCallsigns()
+          setSpecialCallsign('')
+          setSpecialEventName('')
+          setSpecialDescription('')
+          setSpecialStartDate('')
+          setSpecialEndDate('')
+          setSpecialClubId('')
+        }
+      } catch (error) {
+        console.error('Failed to save special callsign:', error)
+      }
+    }
+    
+    const deleteSpecialCallsign = async (id: string) => {
+      try {
+        const response = await fetch(`/api/special-callsigns/${id}`, {
+          method: 'DELETE',
+        })
+        if (response.ok) {
+          await fetchSpecialCallsigns()
+          setDeleteConfirmId(null)
+          setDeleteConfirmType(null)
+        }
+      } catch (error) {
+        console.error('Failed to delete special callsign:', error)
+      }
+    }
+    
+    const toggleClubActive = async (clubId: string, currentStatus: boolean) => {
+      try {
+        const response = await fetch(`/api/clubs/${clubId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isActive: !currentStatus }),
+        })
+        if (response.ok) {
+          await fetchClubs()
+        }
+      } catch (error) {
+        console.error('Failed to toggle club status:', error)
+      }
+    }
+    
+    const deleteClub = async (clubId: string) => {
+      try {
+        const response = await fetch(`/api/clubs/${clubId}`, {
+          method: 'DELETE',
+        })
+        if (response.ok) {
+          await fetchClubs()
+          setDeleteConfirmId(null)
+          setDeleteConfirmType(null)
+        }
+      } catch (error) {
+        console.error('Failed to delete club:', error)
+      }
+    }
+    
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>Club & Event Setup</h1>
+          <p className="view-description">
+            Configure club callsigns, special event calls, operating location, and contest details
+          </p>
+        </div>
+        <div className="view-content">
+          {clubs.length > 0 && (
+            <section className="panel">
+              <h2>Existing Clubs</h2>
+              {clubs.map((club: any) => {
+                const hasLogs = club.stations?.some((s: any) => s.qsoLogs?.length > 0) || false
+                const stationCount = club.stations?.length || 0
+                const qsoCount = club.stations?.reduce((sum: number, s: any) => sum + (s.qsoLogs?.length || 0), 0) || 0
+                
+                return (
+                  <div 
+                    key={club.id} 
+                    style={{ 
+                      padding: '1rem', 
+                      background: club.isActive ? 'var(--surface-muted)' : 'var(--surface)', 
+                      borderRadius: '6px', 
+                      marginBottom: '0.5rem',
+                      opacity: club.isActive ? 1 : 0.6,
+                      border: club.isActive ? 'none' : '1px dashed var(--border)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <strong style={{ fontSize: '1.1rem' }}>{club.callsign}</strong>
+                          {!club.isActive && (
+                            <span style={{ 
+                              fontSize: '0.75rem', 
+                              padding: '0.25rem 0.5rem', 
+                              background: 'var(--text-muted)', 
+                              borderRadius: '4px' 
+                            }}>
+                              DISABLED
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ marginTop: '0.25rem' }}>{club.name}</div>
+                        {club.section && <div style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '0.25rem' }}>Section: {club.section}</div>}
+                        {club.grid && <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Grid: {club.grid}</div>}
+                        {club.altCallsigns && (
+                          <div style={{ fontSize: '0.85rem', opacity: 0.7, marginTop: '0.25rem' }}>
+                            Alt Calls: {JSON.parse(club.altCallsigns).join(', ')}
+                          </div>
+                        )}
+                        <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '0.5rem' }}>
+                          {stationCount} station{stationCount !== 1 ? 's' : ''} • {qsoCount} QSO{qsoCount !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button 
+                          className={`btn ${club.isActive ? 'secondary' : 'primary'}`}
+                          style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                          onClick={() => toggleClubActive(club.id, club.isActive)}
+                        >
+                          {club.isActive ? '⏸ Disable' : '▶️ Enable'}
+                        </button>
+                        {!hasLogs && (
+                          deleteConfirmId === club.id && deleteConfirmType === 'club' ? (
+                            <>
+                              <span style={{ fontSize: '0.85rem', opacity: 0.8, alignSelf: 'center' }}>Sure?</span>
+                              <button 
+                                className="btn danger" 
+                                style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                                onClick={() => deleteClub(club.id)}
+                              >
+                                Yes
+                              </button>
+                              <button 
+                                className="btn secondary" 
+                                style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                                onClick={() => { setDeleteConfirmId(null); setDeleteConfirmType(null); }}
+                              >
+                                No
+                              </button>
+                            </>
+                          ) : (
+                            <button 
+                              className="btn danger" 
+                              style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                              onClick={() => { setDeleteConfirmId(club.id); setDeleteConfirmType('club'); }}
+                            >
+                              🗑 Delete
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </section>
+          )}
+          
+          <section className="panel">
+            <h2>Add New Club</h2>
+            <div className="form-grid">
+              <div className="field">
+                <label>Club Callsign *</label>
+                <input 
+                  type="text" 
+                  placeholder="W1AW" 
+                  value={clubCallsign}
+                  onChange={(e) => setClubCallsign(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Club Name *</label>
+                <input 
+                  type="text" 
+                  placeholder="ARRL HQ" 
+                  value={clubName}
+                  onChange={(e) => setClubName(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>ARRL Section</label>
+                <input 
+                  type="text" 
+                  placeholder="CT" 
+                  value={clubSection}
+                  onChange={(e) => setClubSection(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Grid Square</label>
+                <input 
+                  type="text" 
+                  placeholder="FN31pr" 
+                  value={clubGrid}
+                  onChange={(e) => setClubGrid(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="action-buttons" style={{ marginTop: '0' }}>
+              <button className="btn primary" onClick={saveClub}>
+                💾 Save Club
+              </button>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Alternative Club Callsigns</h2>
+            <p className="hint">Comma-separated list of alternative callsigns this club may use</p>
+            <div className="field">
+              <label>Alternative Callsigns</label>
+              <input
+                type="text"
+                placeholder="N1ABC, W1XYZ, K1DEF"
+                value={altCallsignsInput}
+                onChange={(e) => setAltCallsignsInput(e.target.value)}
+              />
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Special Event Callsigns</h2>
+            <p className="hint">Manage special event callsigns with specific date ranges</p>
+            
+            {specialCallsigns.length > 0 && (
+              <div style={{ marginBottom: '1.5rem' }}>
+                <h3 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', opacity: 0.8 }}>Active & Scheduled</h3>
+                {specialCallsigns.map((sc: any) => {
+                  const now = new Date()
+                  const start = new Date(sc.startDate)
+                  const end = new Date(sc.endDate)
+                  const isActive = sc.isActive && now >= start && now <= end
+                  const isPending = now < start
+                  const isExpired = now > end
+                  
+                  return (
+                    <div key={sc.id} style={{ 
+                      padding: '1rem', 
+                      background: isActive ? 'var(--accent-muted)' : 'var(--surface-muted)', 
+                      borderRadius: '6px', 
+                      marginBottom: '0.5rem',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <div>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <strong>{sc.callsign}</strong>
+                          {isActive && <span style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', background: 'var(--accent)', borderRadius: '4px' }}>ACTIVE</span>}
+                          {isPending && <span style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', background: 'var(--border)', borderRadius: '4px' }}>PENDING</span>}
+                          {isExpired && <span style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', background: 'var(--text-muted)', borderRadius: '4px' }}>EXPIRED</span>}
+                        </div>
+                        <div style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>{sc.eventName}</div>
+                        <div style={{ fontSize: '0.8rem', opacity: 0.7, marginTop: '0.25rem' }}>
+                          {new Date(sc.startDate).toLocaleDateString()} - {new Date(sc.endDate).toLocaleDateString()}
+                        </div>
+                        {sc.description && <div style={{ fontSize: '0.85rem', marginTop: '0.25rem', opacity: 0.8 }}>{sc.description}</div>}
+                      </div>
+                      {deleteConfirmId === sc.id && deleteConfirmType === 'special' ? (
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.85rem', opacity: 0.8 }}>Sure?</span>
+                          <button 
+                            className="btn danger" 
+                            style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                            onClick={() => deleteSpecialCallsign(sc.id)}
+                          >
+                            Yes
+                          </button>
+                          <button 
+                            className="btn secondary" 
+                            style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                            onClick={() => { setDeleteConfirmId(null); setDeleteConfirmType(null); }}
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <button 
+                          className="btn danger" 
+                          style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                          onClick={() => { setDeleteConfirmId(sc.id); setDeleteConfirmType('special'); }}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            
+            <h3 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', opacity: 0.8 }}>Add New Special Event Callsign</h3>
+            <div className="form-grid">
+              <div className="field">
+                <label>Callsign *</label>
+                <input
+                  type="text"
+                  placeholder="W1AW"
+                  value={specialCallsign}
+                  onChange={(e) => setSpecialCallsign(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Event Name *</label>
+                <input
+                  type="text"
+                  placeholder="Field Day 2026"
+                  value={specialEventName}
+                  onChange={(e) => setSpecialEventName(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Start Date/Time *</label>
+                <input
+                  type="datetime-local"
+                  value={specialStartDate}
+                  onChange={(e) => setSpecialStartDate(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>End Date/Time *</label>
+                <input
+                  type="datetime-local"
+                  value={specialEndDate}
+                  onChange={(e) => setSpecialEndDate(e.target.value)}
+                />
+              </div>
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>Description</label>
+                <input
+                  type="text"
+                  placeholder="Annual Field Day operation"
+                  value={specialDescription}
+                  onChange={(e) => setSpecialDescription(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Associated Club (Optional)</label>
+                <select
+                  value={specialClubId}
+                  onChange={(e) => setSpecialClubId(e.target.value)}
+                >
+                  <option value="">-- None --</option>
+                  {clubs.map((club: any) => (
+                    <option key={club.id} value={club.id}>
+                      {club.name} ({club.callsign})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="action-buttons" style={{ marginTop: '0' }}>
+              <button className="btn primary" onClick={saveSpecialCallsign}>
+                💾 Save Special Callsign
+              </button>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Operating Location</h2>
+            <p className="hint">Location details for field operations (coming soon)</p>
+            <div className="form-grid">
+              <div className="field">
+                <label>Location Name</label>
+                <input type="text" placeholder="Field Day Site" />
+              </div>
+              <div className="field">
+                <label>Address</label>
+                <input type="text" placeholder="123 Radio Lane" />
+              </div>
+              <div className="field">
+                <label>Latitude/Longitude</label>
+                <input type="text" placeholder="41.7142, -72.7267" />
+              </div>
+              <div className="field">
+                <label>Elevation (ft)</label>
+                <input type="number" placeholder="500" />
+              </div>
+            </div>
+            <div className="action-buttons" style={{ marginTop: '0' }}>
+              <button className="btn secondary">📍 Auto-detect from GPS</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  function renderContestsView() {
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>Contest Management</h1>
+          <p className="view-description">
+            Upcoming contests, rules, templates, and contest-specific configurations
+          </p>
+        </div>
+        <div className="view-content">
+          <section className="panel">
+            <h2>Active Contest</h2>
+            {contest && contest.isActive ? (
+              <div className="contest-card active-contest">
+                <h3>{contest.name}</h3>
+                <div className="contest-stats">
+                  <div>
+                    <span>Mode:</span>
+                    <strong>{contest.mode}</strong>
+                  </div>
+                  <div>
+                    <span>QSOs:</span>
+                    <strong>{contest.totalQsos}</strong>
+                  </div>
+                  <div>
+                    <span>Points:</span>
+                    <strong>{contest.totalPoints}</strong>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="empty">No active contest</p>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Upcoming Contests</h2>
+            <p className="hint">Calendar integration coming soon - link to contest sites and rules</p>
+            <div className="contest-list-placeholder">
+              <div className="placeholder-item">📅 ARRL Field Day - June 2026</div>
+              <div className="placeholder-item">📅 Winter Field Day - January 2026</div>
+              <div className="placeholder-item">📅 CQ WW DX - October 2026</div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Contest Templates</h2>
+            <p className="hint">
+              Select a template to create a new contest with predefined rules and scoring
+            </p>
+            <div className="contest-templates">
+              {contestTemplates.map((template) => {
+                const ui = template.uiConfig ? JSON.parse(template.uiConfig) : {}
+                const scoring = JSON.parse(template.scoringRules)
+                const required = JSON.parse(template.requiredFields)
+                
+                return (
+                  <div key={template.id} className="contest-template-card">
+                    <div className="template-header">
+                      <span className="template-icon">{ui.icon || '📋'}</span>
+                      <div>
+                        <h3>{template.name}</h3>
+                        <p className="template-org">{template.organization}</p>
+                      </div>
+                    </div>
+                    <p className="template-description">{template.description}</p>
+                    
+                    <div className="template-details">
+                      <div className="template-detail">
+                        <strong>Scoring:</strong>
+                        <span>{scoring.formula || 'Points per QSO'}</span>
+                      </div>
+                      {scoring.bonuses && (
+                        <div className="template-detail">
+                          <strong>Bonuses:</strong>
+                          <span>{scoring.bonuses.length} available</span>
+                        </div>
+                      )}
+                      {required.class && (
+                        <div className="template-detail">
+                          <strong>Classes:</strong>
+                          <span>{required.class.options ? required.class.options.join(', ') : 'Multiple'}</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <button 
+                      className="btn btn-primary"
+                      onClick={async () => {
+                        try {
+                          const response = await fetch('/api/contests/from-template', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              templateId: template.id,
+                              name: template.name + ' ' + new Date().getFullYear(),
+                            }),
+                          })
+                          if (response.ok) {
+                            await fetchContest()
+                          }
+                        } catch (error) {
+                          console.error('Failed to create contest:', error)
+                        }
+                      }}
+                    >
+                      Create Contest from Template
+                    </button>
+                    
+                    {ui.helpUrl && (
+                      <a 
+                        href={ui.helpUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="template-link"
+                      >
+                        📖 Official Rules
+                      </a>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  function renderRigView() {
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>📻 Radio Control (Hamlib)</h1>
+          <p className="view-description">
+            Manage radio connections via rigctld and assign radios to stations
+          </p>
+        </div>
+        <div className="view-content">
+          {/* Add Radio Form */}
+          <section className="panel">
+            <h2>Add Radio Connection</h2>
+            <div className="form-grid">
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>Radio Name *</label>
+                <input
+                  value={radioName}
+                  onChange={(e) => {
+                    setRadioName(e.target.value)
+                    setRadioTestResult(null)
+                  }}
+                  placeholder="IC-7300 Station 1"
+                />
+              </div>
+              <div className="field">
+                <label>Host *</label>
+                <input
+                  value={radioHost}
+                  onChange={(e) => {
+                    setRadioHost(e.target.value)
+                    setRadioTestResult(null)
+                  }}
+                  placeholder="192.168.1.100"
+                />
+              </div>
+              <div className="field">
+                <label>Port *</label>
+                <input
+                  value={radioPort}
+                  onChange={(e) => {
+                    setRadioPort(e.target.value)
+                    setRadioTestResult(null)
+                  }}
+                  placeholder="4532"
+                />
+              </div>
+              <div className="field">
+                <label>Poll Interval (ms)</label>
+                <input
+                  value={radioPollInterval}
+                  onChange={(e) => setRadioPollInterval(e.target.value)}
+                  placeholder="1000"
+                />
+              </div>
+            </div>
+            
+            {/* Test Result Display */}
+            {radioTestResult && (
+              <div className={`test-result ${radioTestResult.success ? 'success' : 'error'}`}>
+                {radioTestResult.success ? (
+                  <>
+                    <div className="test-result-header">✅ {radioTestResult.message}</div>
+                    {radioTestResult.info && (
+                      <div className="test-result-detail">Radio: {radioTestResult.info}</div>
+                    )}
+                    {radioTestResult.state?.frequency && (
+                      <div className="test-result-detail">
+                        Frequency: {(parseInt(radioTestResult.state.frequency) / 1000000).toFixed(3)} MHz
+                      </div>
+                    )}
+                    {radioTestResult.state?.mode && (
+                      <div className="test-result-detail">Mode: {radioTestResult.state.mode}</div>
+                    )}
+                    {radioTestResult.state?.power !== null && radioTestResult.state?.power !== undefined && (
+                      <div className="test-result-detail">Power: {radioTestResult.state.power}W</div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="test-result-header">❌ Connection Failed</div>
+                    <div className="test-result-detail">{radioTestResult.error}</div>
+                  </>
+                )}
+              </div>
+            )}
+            
+            <div className="action-buttons">
+              <button 
+                className="btn secondary"
+                disabled={!radioHost || radioTesting}
+                onClick={async () => {
+                  if (!radioHost) {
+                    return
+                  }
+                  setRadioTesting(true)
+                  setRadioTestResult(null)
+                  try {
+                    const response = await fetch('/api/radios/test-connection', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        host: radioHost,
+                        port: parseInt(radioPort),
+                      }),
+                    })
+                    const data = await response.json()
+                    setRadioTestResult(data)
+                  } catch (error) {
+                    setRadioTestResult({
+                      success: false,
+                      error: 'Network error: ' + error,
+                    })
+                  } finally {
+                    setRadioTesting(false)
+                  }
+                }}
+              >
+                {radioTesting ? '⏳ Testing...' : '🔌 Test Connection'}
+              </button>
+              <button 
+                className="btn primary"
+                disabled={!radioName || !radioHost || !radioTestResult?.success}
+                onClick={async () => {
+                  if (!radioName || !radioHost) {
+                    alert('Name and host are required')
+                    return
+                  }
+                try {
+                  const response = await fetch('/api/radios', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      name: radioName,
+                      host: radioHost,
+                      port: parseInt(radioPort),
+                      pollInterval: parseInt(radioPollInterval),
+                    }),
+                  })
+                  if (response.ok) {
+                    setRadioName('')
+                    setRadioHost('')
+                    setRadioPort('4532')
+                    setRadioPollInterval('1000')
+                    setRadioTestResult(null)
+                    await fetchRadios()
+                  }
+                } catch (error) {
+                  console.error('Failed to create radio:', error)
+                }
+              }}
+            >
+              {radioTestResult?.success ? '✅ Add Radio' : 'Add Radio'}
+            </button>
+            </div>
+          </section>
+
+          {/* Radio List */}
+          <section className="panel">
+            <h2>Radio Connections</h2>
+            <div className="radios-list">
+              {radios.length === 0 && (
+                <p style={{ color: '#666' }}>No radios configured. Add one above.</p>
+              )}
+              {radios.map((radio) => {
+                const assignment = radio.assignments?.find(a => a.isActive)
+                return (
+                  <div key={radio.id} className="radio-card">
+                    <div className="radio-header">
+                      <h3>{radio.name}</h3>
+                      <span className={`status-badge ${radio.isConnected ? 'connected' : 'disconnected'}`}>
+                        {radio.isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+                      </span>
+                    </div>
+                    <div className="radio-details">
+                      <div className="radio-info">
+                        <strong>Host:</strong> {radio.host}:{radio.port}
+                      </div>
+                      {radio.frequency && (
+                        <div className="radio-info">
+                          <strong>Frequency:</strong> {(parseInt(radio.frequency) / 1000000).toFixed(3)} MHz
+                        </div>
+                      )}
+                      {radio.mode && (
+                        <div className="radio-info">
+                          <strong>Mode:</strong> {radio.mode}
+                        </div>
+                      )}
+                      {radio.power !== null && radio.power !== undefined && (
+                        <div className="radio-info">
+                          <strong>Power:</strong> {radio.power}W
+                        </div>
+                      )}
+                      {assignment && (
+                        <div className="radio-info">
+                          <strong>Assigned to:</strong> {assignment.station?.callsign}
+                        </div>
+                      )}
+                      {radio.lastError && (
+                        <div className="radio-info error">
+                          <strong>Error:</strong> {radio.lastError}
+                        </div>
+                      )}
+                    </div>
+                    <div className="radio-actions">
+                      {!radio.isEnabled ? (
+                        <button
+                          className="btn btn-success"
+                          onClick={async () => {
+                            try {
+                              const response = await fetch(`/api/radios/${radio.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ isEnabled: true }),
+                              })
+                              if (response.ok) {
+                                await fetchRadios()
+                              }
+                            } catch (error) {
+                              console.error('Failed to enable radio:', error)
+                            }
+                          }}
+                        >
+                          Enable & Connect
+                        </button>
+                      ) : (
+                        <button
+                          className="btn btn-warning"
+                          onClick={async () => {
+                            try {
+                              const response = await fetch(`/api/radios/${radio.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ isEnabled: false }),
+                              })
+                              if (response.ok) {
+                                await fetchRadios()
+                              }
+                            } catch (error) {
+                              console.error('Failed to disable radio:', error)
+                            }
+                          }}
+                        >
+                          Disable
+                        </button>
+                      )}
+                      <button
+                        className="btn"
+                        onClick={async () => {
+                          try {
+                            const response = await fetch(`/api/radios/${radio.id}/test`, {
+                              method: 'POST',
+                            })
+                            const data = await response.json()
+                            if (response.ok) {
+                              alert(`Radio test successful!\n\nFrequency: ${(parseInt(data.state.frequency || '0') / 1000000).toFixed(3)} MHz\nMode: ${data.state.mode || 'N/A'}\nPower: ${data.state.power || 'N/A'}W`)
+                            } else {
+                              alert(`Test failed: ${data.error}`)
+                            }
+                          } catch (error) {
+                            alert('Test failed: ' + error)
+                          }
+                        }}
+                      >
+                        Test
+                      </button>
+                      {!assignment && (
+                        <select
+                          onChange={async (e) => {
+                            const stationId = e.target.value
+                            if (!stationId) return
+                            try {
+                              const response = await fetch('/api/radio-assignments', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  radioId: radio.id,
+                                  stationId,
+                                }),
+                              })
+                              if (response.ok) {
+                                await fetchRadios()
+                                // await fetchRadioAssignments()
+                              }
+                            } catch (error) {
+                              console.error('Failed to assign radio:', error)
+                            }
+                            e.target.value = ''
+                          }}
+                          defaultValue=""
+                        >
+                          <option value="">Assign to station...</option>
+                          {stations.map(station => (
+                            <option key={station.id} value={station.id}>
+                              {station.callsign}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {assignment && (
+                        <button
+                          className="btn"
+                          onClick={async () => {
+                            try {
+                              const response = await fetch(`/api/radio-assignments/${assignment.id}/unassign`, {
+                                method: 'POST',
+                              })
+                              if (response.ok) {
+                                await fetchRadios()
+                                // await fetchRadioAssignments()
+                              }
+                            } catch (error) {
+                              console.error('Failed to unassign radio:', error)
+                            }
+                          }}
+                        >
+                          Unassign
+                        </button>
+                      )}
+                      {deleteConfirmId === radio.id && deleteConfirmType === 'radio' ? (
+                        <>
+                          <span style={{ fontSize: '0.85rem', opacity: 0.8, alignSelf: 'center' }}>Sure?</span>
+                          <button 
+                            className="btn danger" 
+                            style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                            onClick={async () => {
+                              try {
+                                const response = await fetch(`/api/radios/${radio.id}`, {
+                                  method: 'DELETE',
+                                })
+                                if (response.ok) {
+                                  await fetchRadios()
+                                  setDeleteConfirmId(null)
+                                  setDeleteConfirmType(null)
+                                }
+                              } catch (error) {
+                                console.error('Failed to delete radio:', error)
+                              }
+                            }}
+                          >
+                            Yes
+                          </button>
+                          <button 
+                            className="btn secondary" 
+                            style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                            onClick={() => { setDeleteConfirmId(null); setDeleteConfirmType(null); }}
+                          >
+                            No
+                          </button>
+                        </>
+                      ) : (
+                        <button 
+                          className="btn btn-danger" 
+                          onClick={() => { setDeleteConfirmId(radio.id); setDeleteConfirmType('radio'); }}
+                        >
+                          🗑 Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  function renderStationView() {
+    const currentCall = localStorage.getItem(storageKey) || 'Not set'
+    const currentStation = stations.find(s => s.callsign === currentCall)
+    
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>Station Configuration</h1>
+          <p className="view-description">
+            Personal callsign details, club association, and contest participation
+          </p>
+        </div>
+        <div className="view-content">
+          <section className="panel">
+            <h2>Operator Callsign</h2>
+            <div className="field">
+              <label>Your Callsign *</label>
+              <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+                <input
+                  value={callsignInput}
+                  onChange={(event) => setCallsignInput(event.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && saveCallsign()}
+                  placeholder="W1AW"
+                  style={{ flex: 1 }}
+                />
+                <button className="btn primary" onClick={saveCallsign}>
+                  💾 Save
+                </button>
+              </div>
+            </div>
+            <p className="hint">Currently active: <strong>{currentCall}</strong></p>
+            {currentStation && (
+              <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--surface-muted)', borderRadius: '6px' }}>
+                <div><strong>Name:</strong> {currentStation.name}</div>
+                {currentStation.grid && <div><strong>Grid:</strong> {currentStation.grid}</div>}
+                {currentStation.section && <div><strong>Section:</strong> {currentStation.section}</div>}
+                <div><strong>QSOs:</strong> {currentStation._count?.qsoLogs || 0}</div>
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Station Details</h2>
+            <div className="form-grid">
+              <div className="field">
+                <label>Name</label>
+                <input type="text" placeholder="Your Name" />
+              </div>
+              <div className="field">
+                <label>Grid Square</label>
+                <input type="text" placeholder="FN31pr" />
+              </div>
+              <div className="field">
+                <label>ARRL Section</label>
+                <input type="text" placeholder="CT" />
+              </div>
+              <div className="field">
+                <label>License Class</label>
+                <select>
+                  <option>Extra</option>
+                  <option>General</option>
+                  <option>Technician</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Club Association</h2>
+            <p className="hint">Link this station to a club for coordinated operations</p>
+            <div className="field">
+              <label>Associated Club</label>
+              <select>
+                <option value="">Independent Operator</option>
+                <option>ARRL HQ (W1AW)</option>
+              </select>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Contest Participation</h2>
+            <p className="hint">Select active contest for this operating session</p>
+            <div className="field">
+              <label>Active Contest</label>
+              <select>
+                <option value="">No Contest</option>
+                <option>Field Day 2026</option>
+              </select>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>OAuth Authentication</h2>
+            <p className="hint">Optional: For remote access and cloud sync</p>
+            <div className="action-buttons">
+              <button className="btn secondary">🔗 GitHub OAuth</button>
+              <button className="btn secondary">🔗 Google OAuth</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  function renderLoggingView() {
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>Logging Interface</h1>
+          <p className="view-description">
+            Main QSO logging interface - where everything comes together
+          </p>
+        </div>
+        <div className="view-content">
+          <section className="panel">
+            <h2>Quick Log Entry</h2>
+            <p className="hint">Fast QSO entry with auto-complete and contest-aware fields</p>
+            <div className="form-grid">
+              <div className="field">
+                <label>Callsign *</label>
+                <input type="text" placeholder="W1AW" />
+              </div>
+              <div className="field">
+                <label>Band</label>
+                <input type="text" placeholder="20" />
+              </div>
+              <div className="field">
+                <label>Mode</label>
+                <input type="text" placeholder="SSB" />
+              </div>
+              <div className="field">
+                <label>RST Sent</label>
+                <input type="text" placeholder="59" />
+              </div>
+              <div className="field">
+                <label>RST Rcvd</label>
+                <input type="text" placeholder="59" />
+              </div>
+              <div className="field" style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <button className="btn primary" style={{ width: '100%' }}>📝 Log QSO</button>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Recent QSOs</h2>
+            {selectedStation && qsoLogs.length > 0 ? (
+              <div className="qso-log-table">
+                {qsoLogs.map((qso) => (
+                  <div key={qso.id} className="qso-row">
+                    <span className="qso-call">{qso.callsign}</span>
+                    <span>{qso.band}m</span>
+                    <span>{qso.mode}</span>
+                    <span>{qso.qsoTime}</span>
+                    <span>{qso.points} pts</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty">No QSOs logged yet</p>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Log Actions</h2>
+            <div className="action-buttons">
+              <button className="btn secondary">📥 Import ADIF</button>
+              <button className="btn secondary">📤 Export ADIF</button>
+              <button className="btn secondary">📋 View Full Log</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  function renderAdminView() {
+    const saveAdminList = async () => {
+      const callsigns = adminListInput
+        .split(',')
+        .map(c => c.trim().toUpperCase())
+        .filter(c => c.length > 0)
+      
+      try {
+        const response = await fetch('/api/admin/callsigns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callsigns }),
+        })
+        if (response.ok) {
+          await fetchAdminList()
+        }
+      } catch (error) {
+        console.error('Failed to save admin list:', error)
+      }
+    }
+    
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>Admin Controls</h1>
+          <p className="view-description">
+            Global system settings and administrative controls
+          </p>
+        </div>
+        <div className="view-content">
+          <section className="panel">
+            <h2>Admin Authorization</h2>
+            <p className="hint">
+              <strong>Current Status:</strong> {isAdmin ? '✅ You have admin access' : '❌ Not authorized'}
+            </p>
+            <p className="hint" style={{ marginTop: '0.5rem' }}>
+              Leave empty to allow all users admin access. Add callsigns to restrict.
+            </p>
+          </section>
+
+          <section className="panel">
+            <h2>Contest Management</h2>
+            {contest && contest.isActive ? (
+              <div className="contest-active">
+                <div className="contest-info">
+                  <div className="info-row">
+                    <span>Mode:</span>
+                    <strong>{contest.mode}</strong>
+                  </div>
+                  <div className="info-row">
+                    <span>Duration:</span>
+                    <strong>{contest.duration || '?'} hours</strong>
+                  </div>
+                  <div className="info-row">
+                    <span>QSOs:</span>
+                    <strong>{contest.totalQsos}</strong>
+                  </div>
+                  <div className="info-row">
+                    <span>Points:</span>
+                    <strong>{contest.totalPoints}</strong>
+                  </div>
+                </div>
+                <button className="btn danger" onClick={stopContest}>
+                  Stop Contest
+                </button>
+              </div>
+            ) : (
+              <div className="contest-inactive">
+                <p>No active contest</p>
+                <button className="btn primary" onClick={activateFieldDay}>
+                  🎯 Activate Field Day
+                </button>
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Admin Callsigns Whitelist</h2>
+            <p className="hint">
+              Restrict admin controls to specific callsigns (comma-separated). Leave empty for unrestricted access.
+            </p>
+            <div className="field">
+              <label>Admin Callsigns</label>
+              <textarea
+                rows={3}
+                value={adminListInput}
+                onChange={(e) => setAdminListInput(e.target.value)}
+                placeholder="W1AW, K1LI, N1XYZ"
+              ></textarea>
+            </div>
+            <div className="action-buttons">
+              <button className="btn primary" onClick={saveAdminList}>
+                💾 Save Admin List
+              </button>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>System Info</h2>
+            <div className="info-row">
+              <span>Active Stations:</span>
+              <strong>{stations.length}</strong>
+            </div>
+            <div className="info-row">
+              <span>Total QSOs:</span>
+              <strong>
+                {stations.reduce((sum, s) => sum + s._count.qsoLogs, 0)}
+              </strong>
+            </div>
+            <div className="info-row">
+              <span>Database:</span>
+              <strong>SQLite</strong>
+            </div>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="app">
+      <header className="navbar">
+        <div className="navbar-left">
+          <div className="brand">
+            <div className="logo">YH</div>
+            <span className="title">YAHAML</span>
+          </div>
+          
+          <nav className="nav-items">
+            <button
+              className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setCurrentView('dashboard')}
+            >
+              Dashboard
+            </button>
+            <button
+              className={`nav-btn ${currentView === 'club' ? 'active' : ''}`}
+              onClick={() => setCurrentView('club')}
+            >
+              Club
+            </button>
+            <button
+              className={`nav-btn ${currentView === 'contests' ? 'active' : ''}`}
+              onClick={() => setCurrentView('contests')}
+            >
+              Contests
+            </button>
+            <button
+              className={`nav-btn ${currentView === 'station' ? 'active' : ''}`}
+              onClick={() => setCurrentView('station')}
+            >
+              Station
+            </button>
+            <button
+              className={`nav-btn ${currentView === 'logging' ? 'active' : ''}`}
+              onClick={() => setCurrentView('logging')}
+            >
+              Logging
+            </button>
+            <button
+              className={`nav-btn ${currentView === 'rig' ? 'active' : ''}`}
+              onClick={() => setCurrentView('rig')}
+            >
+              Rig
+            </button>
+            {isAdmin && (
+              <button
+                className={`nav-btn ${currentView === 'admin' ? 'active' : ''}`}
+                onClick={() => setCurrentView('admin')}
+              >
+                Admin
+              </button>
+            )}
+          </nav>
+        </div>
+
+        <div className="navbar-right">
+          {contest && contest.isActive && (
+            <div className="contest-badge">
+              <span>📡</span>
+              <span>{contest.name}</span>
+            </div>
+          )}
+          
+          <select 
+            value={theme} 
+            onChange={(e) => setTheme(e.target.value as 'light' | 'dark' | 'auto')}
+            className="theme-select"
+          >
+            <option value="auto">🔄</option>
+            <option value="light">☀️</option>
+            <option value="dark">🌙</option>
+          </select>
+          
+          <button className="btn-icon" onClick={fetchStations} title="Refresh">
+            🔄
+          </button>
+          
+          <span className="callsign-chip">{currentCallsign}</span>
+        </div>
+      </header>
+
+      <main>
+        {currentView === 'dashboard' && renderDashboard()}
+        {currentView === 'club' && renderClubView()}
+        {currentView === 'contests' && renderContestsView()}
+        {currentView === 'station' && renderStationView()}
+        {currentView === 'logging' && renderLoggingView()}
+        {currentView === 'rig' && renderRigView()}
+        {currentView === 'admin' && renderAdminView()}
+      </main>
+    </div>
+  )
+}
+
+export default App

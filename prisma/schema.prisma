@@ -1,0 +1,380 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Station/Operator information
+model Station {
+  id        String   @id @default(cuid())
+  callsign  String   @unique
+  name      String
+  class     String?  // Field Day class (1A, 2A, 3A, etc.)
+  section   String?  // ARRL section
+  grid      String?  // Grid square
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Club membership
+  clubId    String?
+  club      Club?    @relation(fields: [clubId], references: [id], onDelete: SetNull)
+
+  // Relations
+  bandActivities BandActivity[]
+  qsoLogs        QSOLog[]
+  contextLogs    ContextLog[]
+  networkStatus  NetworkStatus?
+  radioAssignments RadioAssignment[]
+
+  @@index([clubId])
+  @@map("stations")
+}
+
+// Current band/mode activity for each station
+model BandActivity {
+  id        String   @id @default(cuid())
+  stationId String
+  band      String   // "20", "15", "10", "40", "80", "160", "2", "3", "6"
+  mode      String   // "CW", "PH", "DIG"
+  frequency String?  // Optional: actual frequency
+  power     Int?     // Power in watts
+  active    Boolean  @default(true)
+  lastSeen  DateTime @default(now()) @updatedAt
+  createdAt DateTime @default(now())
+
+  // Relations
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([stationId])
+  @@index([lastSeen])
+  @@map("band_activities")
+}
+
+// QSO (contact) log entries
+model QSOLog {
+  id        String   @id @default(cuid())
+  stationId String
+  
+  // QSO details
+  callsign  String   // Remote station callsign
+  band      String   // "20", "15", "10", "40", "80", "160", "2", "3", "6"
+  mode      String   // "CW", "PH", "DIG"
+  frequency String?  // Frequency worked
+  rstSent   String?  // RST sent (e.g., "599")
+  rstRcvd   String?  // RST received
+  power     Int?     // Power used in watts
+  
+  // Timing
+  qsoDate   DateTime
+  qsoTime   String   // Time in HH:MM or HH:MM:SS
+  duration  Int?     // Duration in seconds (optional)
+  
+  // Points calculation
+  points    Int      @default(0)
+  multiplier String? // Multiplier info if applicable
+  
+  // ADIF compatibility
+  name      String?  // Remote operator name
+  state     String?  // State/Province
+  grid      String?  // Grid square
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([stationId])
+  @@index([qsoDate])
+  @@index([callsign])
+  @@map("qso_logs")
+}
+
+// Context/notes logging (what's happening, issues, etc.)
+model ContextLog {
+  id        String   @id @default(cuid())
+  stationId String
+  
+  // Log entry
+  level     String   // "INFO", "WARN", "ERROR", "SUCCESS"
+  category  String   // "BAND_CHANGE", "QSO_LOGGED", "NETWORK", "EQUIPMENT", "NOTE"
+  message   String
+  details   String?  // JSON-stringified details
+  
+  createdAt DateTime @default(now())
+
+  // Relations
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([stationId])
+  @@index([createdAt])
+  @@index([level])
+  @@map("context_logs")
+}
+
+// Network connectivity status
+model NetworkStatus {
+  id            String   @id @default(cuid())
+  stationId     String   @unique
+  
+  // Connection info
+  isConnected   Boolean  @default(false)
+  lastConnected DateTime?
+  ip            String?
+  port          Int?
+  
+  // Relay server details
+  relayHost     String?
+  relayPort     Int?
+  relayVersion  String?
+  
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  station       Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@map("network_status")
+}
+
+// ADIF file imports (metadata)
+model ADIFImport {
+  id           String   @id @default(cuid())
+  filename     String
+  fileContent  String   // Raw file content
+  recordCount  Int      @default(0)
+  importDate   DateTime @default(now())
+  notes        String?
+
+  @@map("adif_imports")
+}
+
+// Contest Template - defines rules for different contest types
+model ContestTemplate {
+  id                String   @id @default(cuid())
+  type              String   @unique // "ARRL_FD", "WINTER_FD", "POTA", "SOTA", "CQ_WW", etc.
+  name              String   // Display name
+  description       String?
+  organization      String?  // "ARRL", "WWFF", "SOTA", "CQ", etc.
+  
+  // Scoring configuration (JSON)
+  scoringRules      String   // JSON: { pointsPerQso, multipliers, bonuses, etc. }
+  
+  // Field requirements (JSON)
+  requiredFields    String   // JSON: { class, section, power, location, etc. }
+  
+  // Validation rules (JSON)
+  validationRules   String   // JSON: { bands, modes, exchanges, time limits, etc. }
+  
+  // UI configuration (JSON)
+  uiConfig          String?  // JSON: { forms, displays, help text, etc. }
+  
+  // Metadata
+  isActive          Boolean  @default(true)
+  isPublic          Boolean  @default(true)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Relations
+  contests          Contest[]
+  
+  @@map("contest_templates")
+}
+
+// Contest/Event configuration - instance of a contest
+model Contest {
+  id             String   @id @default(cuid())
+  name           String   // "Field Day 2024", "VHF Contest", etc.
+  isActive       Boolean  @default(false)
+  
+  // Contest type
+  templateId     String?
+  template       ContestTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  
+  // Legacy mode field for backward compatibility
+  mode           String   @default("FIELD_DAY") // "FIELD_DAY", "VHF", "HF", "OTHER"
+  
+  // Timing
+  startTime      DateTime?
+  endTime        DateTime?
+  duration       Int?     // Duration in hours
+  
+  // Contest-specific configuration (JSON - overrides template defaults)
+  config         String?  // JSON: { class, section, power, exchangeFields, etc. }
+  
+  // Legacy fields (kept for backward compatibility)
+  scoringMode    String   @default("ARRL") // "ARRL", "CUSTOM", "SIMPLE"
+  pointsPerQso   Int      @default(1)
+  multiplierRule String?  // Description of multiplier rules
+  powerBonus     Boolean  @default(false) // Battery/generator bonus
+  
+  // Contest settings
+  maxStations    Int      @default(6) // Max stations per club
+  allowRemote    Boolean  @default(true)
+  bandSelection  String?  // JSON array of allowed bands
+  modeSelection  String?  // JSON array of allowed modes
+  
+  // State
+  totalQsos      Int      @default(0)
+  totalPoints    Int      @default(0)
+  
+  // Statistics (JSON for flexible contest-specific stats)
+  statistics     String?  // JSON: { multipliers, bonuses, sections worked, etc. }
+  
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  // Relations
+  clubs          Club[]
+  
+  @@index([templateId])
+  @@map("contests")
+}
+
+// Club/Team support for multi-operator coordinated efforts
+model Club {
+  id             String   @id @default(cuid())
+  callsign       String   @unique // Primary club/group call sign
+  name           String
+  section        String?  // ARRL section
+  grid           String?  // Primary grid
+  
+  // Contest participation
+  contestId      String
+  contest        Contest  @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  
+  // Configuration
+  description    String?
+  location       String?
+  contactEmail   String?
+  
+  // Alternative callsigns (JSON array of strings)
+  altCallsigns   String?  // JSON array of alternative club callsigns
+  
+  // Status
+  isActive       Boolean  @default(true)
+  
+  // Club-level stats
+  totalQsos      Int      @default(0)
+  totalPoints    Int      @default(0)
+  
+  // Admin/operator list (simple, space-separated callsigns for now)
+  operatorList   String?  // JSON array of operator callsigns
+  adminList      String?  // JSON array of admin callsigns
+  
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  // Relations
+  stations       Station[]
+  specialCallsigns SpecialCallsign[]
+  
+  @@index([contestId])
+  @@map("clubs")
+}
+
+// Special Event Callsigns with time-based availability
+model SpecialCallsign {
+  id             String   @id @default(cuid())
+  callsign       String   @unique
+  eventName      String
+  description    String?
+  
+  // Timing - when this callsign is valid
+  startDate      DateTime
+  endDate        DateTime
+  
+  // Optional club association
+  clubId         String?
+  club           Club?    @relation(fields: [clubId], references: [id], onDelete: SetNull)
+  
+  // Status
+  isActive       Boolean  @default(true)
+  autoActivate   Boolean  @default(true) // Auto-activate based on date range
+  
+  // Usage tracking
+  usageCount     Int      @default(0)
+  lastUsed       DateTime?
+  
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  @@index([clubId])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([isActive])
+  @@map("special_callsigns")
+}
+
+// Radio connection to Hamlib rigctld server
+model RadioConnection {
+  id            String   @id @default(cuid())
+  name          String   // Friendly name (e.g., "IC-7300 Station 1")
+  host          String   // Hostname or IP of rigctld server
+  port          Int      @default(4532) // rigctld port
+  manufacturer  String?  // Radio manufacturer (e.g., "Icom", "Yaesu")
+  model         String?  // Radio model (e.g., "IC-7300")
+  
+  // Connection state
+  isConnected   Boolean  @default(false)
+  lastSeen      DateTime?
+  lastError     String?
+  
+  // Current radio state (cached from last poll)
+  frequency     String?  // Current frequency in Hz
+  mode          String?  // Current mode (USB, LSB, CW, FM, etc.)
+  bandwidth     Int?     // Filter bandwidth in Hz
+  power         Int?     // Power level in watts
+  
+  // Configuration
+  pollInterval  Int      @default(1000) // Polling interval in ms
+  isEnabled     Boolean  @default(true)
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  assignments   RadioAssignment[]
+  
+  @@unique([host, port])
+  @@index([isEnabled])
+  @@index([isConnected])
+  @@map("radio_connections")
+}
+
+// Assignment of radio to operator/callsign
+model RadioAssignment {
+  id              String   @id @default(cuid())
+  radioId         String
+  stationId       String
+  
+  // Assignment state
+  isActive        Boolean  @default(true)
+  assignedAt      DateTime @default(now())
+  unassignedAt    DateTime?
+  
+  // Tracking
+  qsoCount        Int      @default(0) // QSOs logged while assigned
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  radio           RadioConnection @relation(fields: [radioId], references: [id], onDelete: Cascade)
+  station         Station         @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  
+  @@unique([radioId, stationId, isActive]) // Only one active assignment per radio-station pair
+  @@index([radioId])
+  @@index([stationId])
+  @@index([isActive])
+  @@map("radio_assignments")
+}
+
+// Add radioAssignments to Station
+// (Updated Station model below)

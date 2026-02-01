@@ -1,0 +1,7 @@
+services:
+  net-capture:
+    image: nicolaka/netshoot:latest
+    network_mode: host
+    volumes:
+      - ./captures:/captures
+    command: ["sleep", "infinity"]
