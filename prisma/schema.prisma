@@ -274,16 +274,13 @@ model Club {
   grid           String?  // Primary grid
   
   // Contest participation
-  contestId      String
-  contest        Contest  @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  contestId      String?
+  contest        Contest? @relation(fields: [contestId], references: [id], onDelete: SetNull)
   
   // Configuration
   description    String?
   location       String?
   contactEmail   String?
-  
-  // Alternative callsigns (JSON array of strings)
-  altCallsigns   String?  // JSON array of alternative club callsigns
   
   // Status
   isActive       Boolean  @default(true)

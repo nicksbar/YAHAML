@@ -4,7 +4,6 @@
  */
 
 export default async function globalTeardown() {
-  // Force-close any remaining handles by terminating the process
-  // This is safe because all cleanup has already happened in test afterAll hooks
-  await new Promise(resolve => setTimeout(resolve, 100));
+  // Give async operations a moment to finish
+  await new Promise(resolve => setTimeout(resolve, 200));
 }

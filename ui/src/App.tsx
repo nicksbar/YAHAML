@@ -129,6 +129,7 @@ function App() {
   const [qsoLogs, setQsoLogs] = useState<QsoLog[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [globalErrors, setGlobalErrors] = useState<string[]>([])
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [callsignInput, setCallsignInput] = useState(
     localStorage.getItem(storageKey) || '',
@@ -169,7 +170,8 @@ function App() {
   const [clubName, setClubName] = useState('')
   const [clubSection, setClubSection] = useState('')
   const [clubGrid, setClubGrid] = useState('')
-  const [altCallsignsInput, setAltCallsignsInput] = useState('')
+  const [clubSaveError, setClubSaveError] = useState<string | null>(null)
+  const [clubContestId, setClubContestId] = useState('')
   
   // Special callsign form state
   const [specialCallsigns, setSpecialCallsigns] = useState<any[]>([])
@@ -195,6 +197,15 @@ function App() {
   } | null>(null)
   const [radioTesting, setRadioTesting] = useState(false)
   const [specialClubId, setSpecialClubId] = useState('')
+  
+  // Station location state
+  const [stationLatitude, setStationLatitude] = useState('')
+  const [stationLongitude, setStationLongitude] = useState('')
+  const [stationLocationName, setStationLocationName] = useState('')
+  const [stationGrid, setStationGrid] = useState('')
+  const [stationSection, setStationSection] = useState('')
+  const [locationDetecting, setLocationDetecting] = useState(false)
+  
   const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
     const saved = localStorage.getItem('yahaml-theme')
     return (saved as any) || 'auto'
@@ -685,6 +696,30 @@ function App() {
     }
   }, [currentView])
 
+  useEffect(() => {
+    if (currentView === 'club') {
+      fetchAvailableContests()
+    }
+  }, [currentView])
+
+  useEffect(() => {
+    if (clubContestId) return
+    if (contest?.isActive) {
+      setClubContestId(contest.id)
+      return
+    }
+    if (availableContests.length > 0) {
+      setClubContestId(availableContests[0].id)
+    }
+  }, [clubContestId, contest, availableContests])
+
+  const addError = (msg: string) => {
+    setGlobalErrors(prev => [...prev, msg])
+    setTimeout(() => {
+      setGlobalErrors(prev => prev.slice(1))
+    }, 5000)
+  }
+
   const currentCallsign = localStorage.getItem(storageKey) || 'Not set'
 
   function renderDashboard() {
@@ -812,20 +847,10 @@ function App() {
   function renderClubView() {
     const saveClub = async () => {
       if (!clubCallsign || !clubName) {
+        addError('Club callsign and name are required.')
         return
       }
-      
-      // Ensure we have an active contest first
-      if (!contest) {
-        return
-      }
-      
-      // Parse alternative callsigns
-      const altCallsigns = altCallsignsInput
-        .split(',')
-        .map(c => c.trim().toUpperCase())
-        .filter(c => c.length > 0)
-      
+
       try {
         const response = await fetch('/api/clubs', {
           method: 'POST',
@@ -835,25 +860,41 @@ function App() {
             name: clubName,
             section: clubSection || undefined,
             grid: clubGrid || undefined,
-            altCallsigns: altCallsigns.length > 0 ? JSON.stringify(altCallsigns) : undefined,
-            contestId: contest.id,
           }),
         })
         if (response.ok) {
+          setClubSaveError(null)
           await fetchClubs()
           setClubCallsign('')
           setClubName('')
           setClubSection('')
           setClubGrid('')
-          setAltCallsignsInput('')
+        } else {
+          const errData = await response.json()
+          addError(`Failed to save club: ${errData.error || 'Unknown error'}`)
         }
-      } catch (error) {
-        console.error('Failed to save club:', error)
+      } catch (error: any) {
+        addError(`Club save failed: ${error.message}`)
       }
     }
     
+    const validateSpecialCallsignForm = () => {
+      if (!specialCallsign) return 'Callsign is required'
+      if (!specialEventName) return 'Event name is required'
+      if (!specialStartDate) return 'Start date/time is required'
+      if (!specialEndDate) return 'End date/time is required'
+      
+      const start = new Date(specialStartDate)
+      const end = new Date(specialEndDate)
+      if (end <= start) return 'End date must be after start date'
+      
+      return null
+    }
+
     const saveSpecialCallsign = async () => {
-      if (!specialCallsign || !specialEventName || !specialStartDate || !specialEndDate) {
+      const error = validateSpecialCallsignForm()
+      if (error) {
+        addError(error)
         return
       }
       
@@ -878,9 +919,12 @@ function App() {
           setSpecialStartDate('')
           setSpecialEndDate('')
           setSpecialClubId('')
+        } else {
+          const data = await response.json()
+          addError(data.error || 'Failed to save special callsign')
         }
       } catch (error) {
-        console.error('Failed to save special callsign:', error)
+        addError('Failed to save special callsign')
       }
     }
     
@@ -893,9 +937,12 @@ function App() {
           await fetchSpecialCallsigns()
           setDeleteConfirmId(null)
           setDeleteConfirmType(null)
+        } else {
+          const data = await response.json()
+          addError(data.error || 'Failed to delete special callsign')
         }
       } catch (error) {
-        console.error('Failed to delete special callsign:', error)
+        addError('Failed to delete special callsign')
       }
     }
     
@@ -934,7 +981,7 @@ function App() {
         <div className="view-header">
           <h1>Club & Event Setup</h1>
           <p className="view-description">
-            Configure club callsigns, special event calls, operating location, and contest details
+            Configure club callsigns, special event calls, and contest details
           </p>
         </div>
         <div className="view-content">
@@ -976,11 +1023,6 @@ function App() {
                         <div style={{ marginTop: '0.25rem' }}>{club.name}</div>
                         {club.section && <div style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '0.25rem' }}>Section: {club.section}</div>}
                         {club.grid && <div style={{ fontSize: '0.9rem', opacity: 0.7 }}>Grid: {club.grid}</div>}
-                        {club.altCallsigns && (
-                          <div style={{ fontSize: '0.85rem', opacity: 0.7, marginTop: '0.25rem' }}>
-                            Alt Calls: {JSON.parse(club.altCallsigns).join(', ')}
-                          </div>
-                        )}
                         <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '0.5rem' }}>
                           {stationCount} station{stationCount !== 1 ? 's' : ''} • {qsoCount} QSO{qsoCount !== 1 ? 's' : ''}
                         </div>
@@ -1071,23 +1113,13 @@ function App() {
               </div>
             </div>
             <div className="action-buttons" style={{ marginTop: '0' }}>
-              <button className="btn primary" onClick={saveClub}>
+              <button
+                className="btn primary"
+                onClick={saveClub}
+                disabled={!clubCallsign || !clubName}
+              >
                 💾 Save Club
               </button>
-            </div>
-          </section>
-
-          <section className="panel">
-            <h2>Alternative Club Callsigns</h2>
-            <p className="hint">Comma-separated list of alternative callsigns this club may use</p>
-            <div className="field">
-              <label>Alternative Callsigns</label>
-              <input
-                type="text"
-                placeholder="N1ABC, W1XYZ, K1DEF"
-                value={altCallsignsInput}
-                onChange={(e) => setAltCallsignsInput(e.target.value)}
-              />
             </div>
           </section>
 
@@ -1223,37 +1255,17 @@ function App() {
               </div>
             </div>
             <div className="action-buttons" style={{ marginTop: '0' }}>
-              <button className="btn primary" onClick={saveSpecialCallsign}>
+              <button 
+                className="btn primary" 
+                onClick={saveSpecialCallsign}
+                disabled={Boolean(validateSpecialCallsignForm())}
+              >
                 💾 Save Special Callsign
               </button>
             </div>
           </section>
 
-          <section className="panel">
-            <h2>Operating Location</h2>
-            <p className="hint">Location details for field operations (coming soon)</p>
-            <div className="form-grid">
-              <div className="field">
-                <label>Location Name</label>
-                <input type="text" placeholder="Field Day Site" />
-              </div>
-              <div className="field">
-                <label>Address</label>
-                <input type="text" placeholder="123 Radio Lane" />
-              </div>
-              <div className="field">
-                <label>Latitude/Longitude</label>
-                <input type="text" placeholder="41.7142, -72.7267" />
-              </div>
-              <div className="field">
-                <label>Elevation (ft)</label>
-                <input type="number" placeholder="500" />
-              </div>
-            </div>
-            <div className="action-buttons" style={{ marginTop: '0' }}>
-              <button className="btn secondary">📍 Auto-detect from GPS</button>
-            </div>
-          </section>
+
         </div>
       </div>
     )
@@ -2213,6 +2225,104 @@ function App() {
     )
   }
 
+  // Utility functions for location-based calculations
+  function latLonToGridSquare(lat: number, lon: number): string {
+    // Convert to Maidenhead grid square
+    // Normalize latitude and longitude to 0-180, 0-360 respectively
+    lat = lat + 90
+    lon = lon + 180
+
+    // First letter
+    let letter1 = String.fromCharCode(65 + Math.floor(lon / 20))
+    let letter2 = String.fromCharCode(65 + Math.floor(lat / 10))
+
+    // First number
+    let num1 = Math.floor((lon % 20) / 2)
+    let num2 = Math.floor((lat % 10) / 1)
+
+    // Second letter
+    let sub_lon = ((lon % 20) - Math.floor((lon % 20) / 2) * 2) * 60 / 2
+    let sub_lat = ((lat % 10) - Math.floor((lat % 10) / 1) * 1) * 60 / 1
+    let letter3 = String.fromCharCode(97 + Math.floor(sub_lon / 5))
+    let letter4 = String.fromCharCode(97 + Math.floor(sub_lat / 2.5))
+
+    return letter1 + letter2 + num1 + num2 + letter3 + letter4
+  }
+
+  function getARRLSection(lat: number, lon: number): string {
+    // Simplified ARRL section lookup based on coordinates
+    // Returns 2-letter ARRL section code
+    if (lat < 25) return 'SFL' // South Florida
+    if (lat < 27 && lon < -80) return 'NFL' // North Florida
+    if (lat < 30 && lon < -81) return 'GA' // Georgia  
+    if (lat < 35 && lon < -80) return 'SC' // South Carolina
+    if (lat < 37 && lon < -77) return 'VA' // Virginia
+    if (lat < 40 && lon < -74) return 'NJ' // New Jersey
+    if (lat < 42 && lon < -71) return 'CT' // Connecticut
+    if (lat < 45 && lon < -70) return 'VT' // Vermont
+    if (lat < 48 && lon < -68) return 'ME' // Maine
+    if (lat < 40 && lon < -72) return 'NY' // New York
+    if (lat < 42 && lon < -76) return 'PA' // Pennsylvania
+    if (lat < 40 && lon < -78) return 'VA' // Virginia (western)
+    if (lat < 38 && lon < -80) return 'WV' // West Virginia
+    if (lat < 40 && lon < -82) return 'OH' // Ohio
+    if (lat < 42 && lon < -84) return 'MI' // Michigan
+    if (lat < 45 && lon < -87) return 'IN' // Indiana
+    if (lat < 48 && lon < -89) return 'WI' // Wisconsin
+    if (lat < 45 && lon < -92) return 'MN' // Minnesota
+    if (lat < 41 && lon < -88) return 'IL' // Illinois
+    if (lat < 40 && lon < -85) return 'KY' // Kentucky
+    if (lat < 36 && lon < -88) return 'TN' // Tennessee
+    if (lat < 35 && lon < -90) return 'AR' // Arkansas
+    if (lat < 33 && lon < -91) return 'LA' // Louisiana
+    if (lat < 35 && lon < -93) return 'OK' // Oklahoma
+    if (lat < 37 && lon < -97) return 'KS' // Kansas
+    if (lat < 41 && lon < -99) return 'NE' // Nebraska
+    if (lat < 45 && lon < -103) return 'SD' // South Dakota
+    if (lat < 48 && lon < -105) return 'MT' // Montana
+    if (lat < 42 && lon < -107) return 'WY' // Wyoming
+    if (lat < 40 && lon < -109) return 'UT' // Utah
+    if (lat < 38 && lon < -109) return 'AZ' // Arizona
+    if (lat < 36 && lon < -108) return 'NM' // New Mexico
+    if (lat < 33 && lon < -100) return 'TX' // Texas (north)
+    if (lat < 29 && lon < -99) return 'TX' // Texas (south)
+    if (lat < 42 && lon < -120) return 'OR' // Oregon
+    if (lat < 49 && lon < -121) return 'WA' // Washington
+    if (lat < 40 && lon < -124) return 'NCA' // California (north)
+    if (lat < 36 && lon < -120) return 'SCA' // California (south)
+    if (lat < 21 && lon < -158) return 'HI' // Hawaii
+    if (lat < 45 && lon < -95) return 'MO' // Missouri
+    if (lat < 42 && lon < -91) return 'IA' // Iowa
+    if (lat < 44 && lon < -123) return 'OR' // Oregon
+    return 'XX' // Unknown
+  }
+
+  async function autoDetectLocation() {
+    setLocationDetecting(true)
+    try {
+      const position = await new Promise<GeolocationCoordinates>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve(pos.coords),
+          (err) => reject(err),
+          { timeout: 10000 }
+        )
+      })
+
+      const grid = latLonToGridSquare(position.latitude, position.longitude)
+      const section = getARRLSection(position.latitude, position.longitude)
+
+      setStationLatitude(position.latitude.toFixed(4))
+      setStationLongitude(position.longitude.toFixed(4))
+      setStationGrid(grid)
+      setStationSection(section)
+    } catch (error: any) {
+      const message = error.code === 1 ? 'Location permission denied' : 'Failed to get location'
+      addError(message)
+    } finally {
+      setLocationDetecting(false)
+    }
+  }
+
   function renderStationView() {
     const currentCall = localStorage.getItem(storageKey) || 'Not set'
     const currentStation = stations.find(s => s.callsign === currentCall)
@@ -2262,14 +2372,6 @@ function App() {
                 <input type="text" placeholder="Your Name" />
               </div>
               <div className="field">
-                <label>Grid Square</label>
-                <input type="text" placeholder="FN31pr" />
-              </div>
-              <div className="field">
-                <label>ARRL Section</label>
-                <input type="text" placeholder="CT" />
-              </div>
-              <div className="field">
                 <label>License Class</label>
                 <select>
                   <option>Extra</option>
@@ -2278,6 +2380,83 @@ function App() {
                 </select>
               </div>
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>Operating Location</h2>
+            <p className="hint">Automatically determine grid square and section from GPS coordinates</p>
+            <div className="form-grid">
+              <div className="field">
+                <label>Latitude</label>
+                <input 
+                  type="number" 
+                  placeholder="41.7142" 
+                  value={stationLatitude}
+                  onChange={(e) => setStationLatitude(e.target.value)}
+                  step="0.0001"
+                />
+              </div>
+              <div className="field">
+                <label>Longitude</label>
+                <input 
+                  type="number" 
+                  placeholder="-72.7267" 
+                  value={stationLongitude}
+                  onChange={(e) => setStationLongitude(e.target.value)}
+                  step="0.0001"
+                />
+              </div>
+              <div className="field">
+                <label>Grid Square</label>
+                <input 
+                  type="text" 
+                  placeholder="FN31pr"
+                  value={stationGrid}
+                  onChange={(e) => setStationGrid(e.target.value.toUpperCase())}
+                  readOnly={!!stationLatitude && !!stationLongitude}
+                />
+              </div>
+              <div className="field">
+                <label>ARRL Section</label>
+                <input 
+                  type="text" 
+                  placeholder="CT"
+                  value={stationSection}
+                  onChange={(e) => setStationSection(e.target.value.toUpperCase())}
+                  readOnly={!!stationLatitude && !!stationLongitude}
+                />
+              </div>
+              <div className="field">
+                <label>Location Name (Optional)</label>
+                <input 
+                  type="text" 
+                  placeholder="Field Day Site" 
+                  value={stationLocationName}
+                  onChange={(e) => setStationLocationName(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="action-buttons" style={{ marginTop: '0' }}>
+              <button 
+                className="btn secondary" 
+                onClick={autoDetectLocation}
+                disabled={locationDetecting}
+              >
+                📍 {locationDetecting ? 'Detecting...' : 'Auto-detect from GPS'}
+              </button>
+            </div>
+            {stationGrid && stationSection && (
+              <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--accent-muted)', borderRadius: '6px' }}>
+                <div style={{ fontSize: '0.9rem' }}>
+                  <strong>Detected:</strong> Grid {stationGrid} in {stationSection}
+                </div>
+                {stationLatitude && stationLongitude && (
+                  <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '0.5rem' }}>
+                    {stationLatitude}, {stationLongitude}
+                  </div>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="panel">
@@ -2561,6 +2740,25 @@ function App() {
       </header>
 
       <main>
+        {globalErrors.length > 0 && (
+          <div style={{
+            position: 'fixed',
+            top: '70px',
+            left: 0,
+            right: 0,
+            zIndex: 1000,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+            padding: '1rem',
+            backgroundColor: 'rgba(200, 50, 50, 0.95)',
+            color: 'white',
+          }}>
+            {globalErrors.map((err, idx) => (
+              <div key={idx}>{err}</div>
+            ))}
+          </div>
+        )}
         {currentView === 'dashboard' && renderDashboard()}
         {currentView === 'club' && renderClubView()}
         {currentView === 'contests' && renderContestsView()}

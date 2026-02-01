@@ -39,17 +39,38 @@ export async function startTestServer(): Promise<{ server: http.Server; prisma: 
 
 export async function stopTestServer(): Promise<void> {
   return new Promise(async (resolve, reject) => {
-    if (server) {
-      server.close((err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    } else {
-      resolve();
+    // Disconnect Prisma first
+    if (prisma) {
+      try {
+        await prisma.$disconnect();
+      } catch (error) {
+        console.error('Error disconnecting Prisma:', error);
+      }
     }
 
-    if (prisma) {
-      await prisma.$disconnect();
+    // Then close the server
+    if (server) {
+      const httpServer = server;
+      server = null;
+      
+      // Give connections time to settle
+      await new Promise(r => setTimeout(r, 50));
+      
+      httpServer.close((err) => {
+        if (err) {
+          console.error('Error closing server:', err);
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+
+      // Force close after 5 seconds if still open
+      setTimeout(() => {
+        httpServer.closeAllConnections?.();
+      }, 5000);
+    } else {
+      resolve();
     }
   });
 }

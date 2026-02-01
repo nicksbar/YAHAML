@@ -15,6 +15,18 @@ beforeAll(async () => {
 
 // Clean up after all tests are done
 afterAll(async () => {
-  await cleanDatabase({ preserveTemplates: false });
-  await prisma.$disconnect();
+  try {
+    await cleanDatabase({ preserveTemplates: false });
+  } catch (error) {
+    console.error('[Jest Cleanup] Error cleaning database:', error);
+  }
+  
+  try {
+    await prisma.$disconnect();
+  } catch (error) {
+    console.error('[Jest Cleanup] Error disconnecting Prisma:', error);
+  }
+  
+  // Allow time for any pending operations to finish
+  await new Promise(resolve => setTimeout(resolve, 100));
 });

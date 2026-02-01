@@ -101,8 +101,8 @@ Special event callsigns allow you to schedule temporary callsigns for specific e
 
 ### Clubs
 
-- `GET /api/clubs` - List all clubs (includes altCallsigns field)
-- `POST /api/clubs` - Create a new club (accepts altCallsigns as JSON string)
+- `GET /api/clubs` - List all clubs
+- `POST /api/clubs` - Create a new club
 - `PATCH /api/clubs/:id` - Update a club
 
 ## Database Schema
@@ -127,11 +127,6 @@ model SpecialCallsign {
   updatedAt      DateTime @updatedAt
 }
 ```
-
-### Club Model Updates
-
-- Added `altCallsigns` field (String, JSON array)
-- Added `specialCallsigns` relation
 
 ## Use Cases
 

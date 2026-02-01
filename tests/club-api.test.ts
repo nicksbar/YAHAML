@@ -42,50 +42,30 @@ describe('Club API', () => {
         .send({
           callsign: 'W1TEST',
           name: 'Test Club',
-          contestId: testContestId,
         });
 
       expect(response.status).toBe(201);
       expect(response.body.callsign).toBe('W1TEST');
       expect(response.body.name).toBe('Test Club');
-      expect(response.body.contestId).toBe(testContestId);
       expect(response.body.isActive).toBe(true); // default value
 
       testClubId = response.body.id;
     });
 
-    test('creates club with alternative callsigns', async () => {
-      const altCalls = ['N1ABC', 'K1XYZ', 'W1DEF'];
+    test('creates club with optional fields', async () => {
       const response = await request(app)
         .post('/api/clubs')
         .send({
-          callsign: 'W1MULTI',
-          name: 'Multi Call Club',
-          contestId: testContestId,
-          altCallsigns: JSON.stringify(altCalls),
+          callsign: 'W1OPTIONAL',
+          name: 'Optional Fields Club',
+          section: 'CT',
+          grid: 'FN31pr',
         });
 
       expect(response.status).toBe(201);
-      expect(response.body.callsign).toBe('W1MULTI');
-      
-      // Verify altCallsigns stored as JSON
-      const parsed = JSON.parse(response.body.altCallsigns);
-      expect(parsed).toEqual(altCalls);
-    });
-
-    test('creates club with empty altCallsigns', async () => {
-      const response = await request(app)
-        .post('/api/clubs')
-        .send({
-          callsign: 'W1EMPTY',
-          name: 'Empty Alt Calls',
-          contestId: testContestId,
-          altCallsigns: '[]',
-        });
-
-      expect(response.status).toBe(201);
-      const parsed = JSON.parse(response.body.altCallsigns);
-      expect(parsed).toEqual([]);
+      expect(response.body.callsign).toBe('W1OPTIONAL');
+      expect(response.body.section).toBe('CT');
+      expect(response.body.grid).toBe('FN31pr');
     });
 
     test('requires callsign field', async () => {
@@ -101,14 +81,12 @@ describe('Club API', () => {
   });
 
   describe('GET /api/clubs', () => {
-    beforeEach(async () => {
+  beforeEach(async () => {
       // Create test clubs
       await prisma.club.create({
         data: {
           callsign: 'W1GET1',
           name: 'Get Test 1',
-          contestId: testContestId,
-          altCallsigns: JSON.stringify(['N1A', 'N1B']),
         },
       });
 
@@ -116,7 +94,6 @@ describe('Club API', () => {
         data: {
           callsign: 'W1GET2',
           name: 'Get Test 2',
-          contestId: testContestId,
           isActive: false, // disabled club
         },
       });
@@ -137,16 +114,6 @@ describe('Club API', () => {
 
       const club2 = response.body.find((c: any) => c.callsign === 'W1GET2');
       expect(club2.isActive).toBe(false);
-    });
-
-    test('includes altCallsigns in response', async () => {
-      const response = await request(app).get('/api/clubs');
-
-      const club = response.body.find((c: any) => c.callsign === 'W1GET1');
-      expect(club.altCallsigns).toBeDefined();
-      
-      const parsed = JSON.parse(club.altCallsigns);
-      expect(parsed).toEqual(['N1A', 'N1B']);
     });
   });
 

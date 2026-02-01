@@ -97,11 +97,35 @@ async function main() {
     },
   });
 
+  // Get an ARRL template to create a sample contest
+  const arrlTemplate = await prisma.contestTemplate.findFirst({
+    where: { organization: 'ARRL' },
+  });
+
+  if (arrlTemplate) {
+    // Create a sample contest from the template
+    await prisma.contest.create({
+      data: {
+        name: 'Field Day 2026',
+        templateId: arrlTemplate.id,
+        mode: arrlTemplate.type,
+        isActive: false,
+        totalQsos: 0,
+        totalPoints: 0,
+        scoringMode: 'ARRL',
+        pointsPerQso: 1,
+      },
+    });
+  }
+
   console.log('✓ Database seeded with sample data');
   console.log('  - Created 2 stations (W1AW, K1LI)');
   console.log('  - Created band activities');
   console.log('  - Created sample QSO log');
   console.log('  - Created network status and context logs');
+  if (arrlTemplate) {
+    console.log('  - Created sample contest (Field Day 2026)');
+  }
 }
 
 main()
