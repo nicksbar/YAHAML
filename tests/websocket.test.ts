@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import WebSocket from 'ws';
 import { PrismaClient } from '@prisma/client';
+import { ensureServerRunning, stopTestServer, cleanupTestRecords } from './test-helpers';
 
 const API_URL = 'http://127.0.0.1:3000';
 const WS_URL = 'ws://127.0.0.1:3000/ws';
@@ -25,14 +26,46 @@ function waitForMessage(ws: WebSocket, timeout = 5000): Promise<any> {
   });
 }
 
+async function openWebSocket(): Promise<WebSocket> {
+  const socket = new WebSocket(WS_URL);
+  const welcomePromise = waitForMessage(socket, 10000);
+  await new Promise((resolve, reject) => {
+    socket.on('open', resolve);
+    socket.on('error', reject);
+  });
+  await welcomePromise;
+  return socket;
+}
+
+async function subscribeToContest(socket: WebSocket, id: string): Promise<void> {
+  const subscriptionPromise = waitForMessage(socket, 10000);
+  socket.send(JSON.stringify({
+    type: 'subscribe',
+    channel: `contest:${id}`,
+  }));
+  await subscriptionPromise;
+}
+
 describe('WebSocket Integration', () => {
+  let weStartedServer = false;
   let ws: WebSocket;
   let stationId: string;
   let contestId: string;
+  let testStationIds: string[] = [];
+  let testContestIds: string[] = [];
 
   beforeAll(async () => {
-    // Server is already running; just wait a bit for stability
+    weStartedServer = await ensureServerRunning(3000);
+    // Wait a bit for WebSocket to be ready
     await new Promise(resolve => setTimeout(resolve, 500));
+  });
+
+  afterAll(async () => {
+    await cleanupTestRecords({ 
+      contestIds: testContestIds,
+      stationIds: testStationIds
+    });
+    await stopTestServer(weStartedServer);
   });
 
   beforeEach(async () => {
@@ -46,6 +79,7 @@ describe('WebSocket Integration', () => {
       },
     });
     stationId = station.id;
+    testStationIds.push(stationId);
 
     // Create test contest
     const contest = await prisma.contest.create({
@@ -54,6 +88,7 @@ describe('WebSocket Integration', () => {
       },
     });
     contestId = contest.id;
+    testContestIds.push(contestId);
   });
 
   afterEach(async () => {
@@ -113,9 +148,13 @@ describe('WebSocket Integration', () => {
 
   describe('Subscriptions', () => {
     beforeEach(async () => {
-      ws = new WebSocket(WS_URL);
-      await new Promise((resolve) => ws.on('open', resolve));
-      await waitForMessage(ws); // Consume welcome message
+      ws = await openWebSocket();
+    });
+
+    afterEach(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     });
 
     it('should subscribe to a channel', async () => {
@@ -164,16 +203,14 @@ describe('WebSocket Integration', () => {
 
   describe('Real-time Updates', () => {
     beforeEach(async () => {
-      ws = new WebSocket(WS_URL);
-      await new Promise((resolve) => ws.on('open', resolve));
-      await waitForMessage(ws); // Consume welcome message
+      ws = await openWebSocket();
+      await subscribeToContest(ws, contestId);
+    });
 
-      // Subscribe to contest channel
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        channel: `contest:${contestId}`,
-      }));
-      await waitForMessage(ws); // Consume subscription confirmation
+    afterEach(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     });
 
     it('should broadcast logEntry:created on new QSO', async () => {
@@ -206,24 +243,38 @@ describe('WebSocket Integration', () => {
     });
 
     it('should broadcast aggregate:updated after new QSO', async () => {
-      // Skip first message (logEntry:created)
-      const firstMessagePromise = waitForMessage(ws, 10000);
-      const secondMessagePromise = new Promise((resolve, reject) => {
-        let messageCount = 0;
-        const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
-        
-        ws.on('message', (data) => {
-          messageCount++;
-          if (messageCount === 2) {
-            clearTimeout(timeout);
-            try {
-              resolve(JSON.parse(data.toString()));
-            } catch (error) {
-              reject(error);
-            }
-          }
-        });
+      // Create promises for both messages BEFORE the POST
+      let messageCount = 0;
+      let resolveFirstMsg: any;
+      let resolveSecondMsg: any;
+      const firstMessagePromise = new Promise((resolve) => {
+        resolveFirstMsg = resolve;
       });
+      const secondMessagePromise = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Timeout waiting for 2 messages')), 10000);
+        resolveSecondMsg = (msg: any) => {
+          clearTimeout(timeout);
+          resolve(msg);
+        };
+      });
+
+      const messageHandler = (data: any) => {
+        messageCount++;
+        try {
+          const msg = JSON.parse(data.toString());
+          if (messageCount === 1) {
+            resolveFirstMsg(msg);
+          } else if (messageCount === 2) {
+            resolveSecondMsg(msg);
+            ws.off('message', messageHandler); // Stop listening after 2 messages
+          }
+        } catch (error) {
+          console.error('Failed to parse message:', error);
+        }
+      };
+
+      // Set up the listener BEFORE the POST
+      ws.on('message', messageHandler);
 
       // Create log entry
       await fetch(`${API_URL}/api/qso-logs`, {
@@ -243,18 +294,23 @@ describe('WebSocket Integration', () => {
         }),
       });
 
-      await firstMessagePromise; // logEntry:created
-      const message: any = await secondMessagePromise; // aggregate:updated
+      const firstMsg: any = await firstMessagePromise;
+      const secondMsg: any = await secondMessagePromise;
 
-      expect(message.type).toBe('aggregate:updated');
-      expect(message.data.totalQsos).toBeGreaterThan(0);
+      expect(firstMsg.type).toBe('logEntry:created');
+      expect(secondMsg.type).toBe('aggregate:updated');
+      expect(secondMsg.data.totalQsos).toBeGreaterThan(0);
     });
 
     it('should broadcast dupe:detected for duplicate entries', async () => {
       const timestamp = Date.now();
       
+      // Set up listeners BEFORE making the first POST
+      const msg1Promise = waitForMessage(ws, 10000);
+      const msg2Promise = waitForMessage(ws, 10000);
+      
       // Create first entry
-      await fetch(`${API_URL}/api/qso-logs`, {
+      const response1 = await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -270,33 +326,30 @@ describe('WebSocket Integration', () => {
           dedupeKey: `ws-dupe-1-${timestamp}`,
         }),
       });
+      await response1.json();
 
       // Wait for broadcasts to complete
-      await waitForMessage(ws); // logEntry:created
-      await waitForMessage(ws); // aggregate:updated
+      await msg1Promise; // logEntry:created
+      await msg2Promise; // aggregate:updated
 
       // Create duplicate entry (same callsign, band, mode)
       const dupePromise = new Promise((resolve, reject) => {
         let messageCount = 0;
-        const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+        const timeout = setTimeout(() => {
+          reject(new Error(`Timeout waiting for dupe:detected (got ${messageCount} messages)`));
+        }, 10000);
         
         ws.on('message', (data) => {
           messageCount++;
-          if (messageCount === 3) { // Should be 3rd message (after logEntry + aggregate)
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'dupe:detected') {
             clearTimeout(timeout);
-            try {
-              const msg = JSON.parse(data.toString());
-              if (msg.type === 'dupe:detected') {
-                resolve(msg);
-              }
-            } catch (error) {
-              reject(error);
-            }
+            resolve(msg);
           }
         });
       });
 
-      await fetch(`${API_URL}/api/qso-logs`, {
+      const response2 = await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -312,6 +365,9 @@ describe('WebSocket Integration', () => {
           dedupeKey: `ws-dupe-2-${timestamp}`,
         }),
       });
+      console.log('Second entry response:', response2.status);
+      const entry2: any = await response2.json();
+      console.log('Second entry created:', entry2.id);
 
       const message: any = await dupePromise;
 
@@ -332,24 +388,12 @@ describe('WebSocket Integration', () => {
 
     it('should broadcast to all subscribed clients', async () => {
       // Setup first client
-      ws = new WebSocket(WS_URL);
-      await new Promise((resolve) => ws.on('open', resolve));
-      await waitForMessage(ws);
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        channel: `contest:${contestId}`,
-      }));
-      await waitForMessage(ws);
+      ws = await openWebSocket();
+      await subscribeToContest(ws, contestId);
 
       // Setup second client
-      ws2 = new WebSocket(WS_URL);
-      await new Promise((resolve) => ws2.on('open', resolve));
-      await waitForMessage(ws2);
-      ws2.send(JSON.stringify({
-        type: 'subscribe',
-        channel: `contest:${contestId}`,
-      }));
-      await waitForMessage(ws2);
+      ws2 = await openWebSocket();
+      await subscribeToContest(ws2, contestId);
 
       // Setup listeners
       const ws1Promise = waitForMessage(ws, 10000);
@@ -385,19 +429,11 @@ describe('WebSocket Integration', () => {
 
     it('should not broadcast to unsubscribed clients', async () => {
       // Setup first client (subscribed)
-      ws = new WebSocket(WS_URL);
-      await new Promise((resolve) => ws.on('open', resolve));
-      await waitForMessage(ws);
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        channel: `contest:${contestId}`,
-      }));
-      await waitForMessage(ws);
+      ws = await openWebSocket();
+      await subscribeToContest(ws, contestId);
 
       // Setup second client (not subscribed to this contest)
-      ws2 = new WebSocket(WS_URL);
-      await new Promise((resolve) => ws2.on('open', resolve));
-      await waitForMessage(ws2);
+      ws2 = await openWebSocket();
 
       // Setup listener on ws2 that should timeout
       let ws2ReceivedMessage = false;

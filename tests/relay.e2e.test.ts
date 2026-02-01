@@ -8,7 +8,7 @@ import { connectToTestDB, teardownTestDB } from './setup';
 
 describe('Relay Server E2E', () => {
   let server: net.Server;
-  const relayPort = 10001; // Use different port for tests
+  const relayPort = 10002; // Use different port for tests to avoid conflict with main server
 
   beforeAll(async () => {
     await connectToTestDB();

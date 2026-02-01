@@ -119,14 +119,15 @@ async function logBandActivity(stationId: string, band: string, mode: string) {
     });
     
     return activity;
-  } catch (error) {
-    console.error('Error logging band activity:', error);
+  } catch (error: any) {
+    console.error('Error logging band activity:', error.message);
     return null;
   }
 }
 
 /**
  * Update network status
+
  */
 async function updateNetworkStatus(
   stationId: string,
@@ -165,8 +166,8 @@ async function updateNetworkStatus(
     }
     
     return status;
-  } catch (error) {
-    console.error('Error updating network status:', error);
+  } catch (error: any) {
+    console.error('Error updating network status:', error.message);
     return null;
   }
 }
@@ -199,16 +200,18 @@ async function handleClientData(clientId: string, data: Buffer) {
   try {
     const msg = decodeMessage(data);
     
-    // Log all relay messages
-    await prisma.contextLog.create({
-      data: {
-        stationId: client.stationId || 'unknown',
-        level: 'INFO',
-        category: 'NETWORK',
-        message: `Relay received: ${msg.substring(0, 100)}...`,
-        details: JSON.stringify({ msgType: msg.substring(0, 10), length: msg.length }),
-      },
-    }).catch(() => {}); // Ignore errors for logging
+    // Log all relay messages (only if we have a stationId)
+    if (client.stationId) {
+      await prisma.contextLog.create({
+        data: {
+          stationId: client.stationId,
+          level: 'INFO',
+          category: 'NETWORK',
+          message: `Relay received: ${msg.substring(0, 100)}...`,
+          details: JSON.stringify({ msgType: msg.substring(0, 10), length: msg.length }),
+        },
+      }).catch(() => {}); // Ignore errors for logging
+    }
     
     // Parse BAMS message for band changes
     if (msg.includes('<BAMS>')) {

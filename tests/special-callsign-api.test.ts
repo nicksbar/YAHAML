@@ -4,7 +4,7 @@
 import request from 'supertest';
 import prisma from '../src/db';
 
-const API_BASE = 'http://localhost:3000';
+import app from '../src/index';
 
 describe('Special Callsign API', () => {
   let testContestId: string;
@@ -32,10 +32,10 @@ describe('Special Callsign API', () => {
   });
 
   afterAll(async () => {
-    // Cleanup
+    // Cleanup - only delete data we created
     await prisma.specialCallsign.deleteMany({});
-    await prisma.club.deleteMany({});
-    await prisma.contest.deleteMany({});
+    await prisma.club.deleteMany({ where: { id: testClubId } });
+    await prisma.contest.deleteMany({ where: { id: testContestId } });
     await prisma.$disconnect();
   });
 
@@ -49,7 +49,7 @@ describe('Special Callsign API', () => {
       const startDate = new Date('2026-06-01');
       const endDate = new Date('2026-06-30');
 
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/special-callsigns')
         .send({
           callsign: 'W1FD',
@@ -67,7 +67,7 @@ describe('Special Callsign API', () => {
     });
 
     test('creates special callsign with optional fields', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/special-callsigns')
         .send({
           callsign: 'W100AW',
@@ -88,7 +88,7 @@ describe('Special Callsign API', () => {
     });
 
     test('requires callsign field', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/special-callsigns')
         .send({
           eventName: 'No Callsign Event',
@@ -100,7 +100,7 @@ describe('Special Callsign API', () => {
     });
 
     test('requires eventName field', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/special-callsigns')
         .send({
           callsign: 'W1NOEVENT',
@@ -136,7 +136,7 @@ describe('Special Callsign API', () => {
     });
 
     test('returns all special callsigns', async () => {
-      const response = await request(API_BASE).get('/api/special-callsigns');
+      const response = await request(app).get('/api/special-callsigns');
 
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
@@ -148,7 +148,7 @@ describe('Special Callsign API', () => {
     });
 
     test('includes club relation when present', async () => {
-      const response = await request(API_BASE).get('/api/special-callsigns');
+      const response = await request(app).get('/api/special-callsigns');
 
       const sc2 = response.body.find((s: any) => s.callsign === 'W1GET2');
       expect(sc2.club).toBeDefined();
@@ -211,7 +211,7 @@ describe('Special Callsign API', () => {
     });
 
     test('returns only currently active special callsigns', async () => {
-      const response = await request(API_BASE).get('/api/special-callsigns/active');
+      const response = await request(app).get('/api/special-callsigns/active');
 
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
@@ -228,21 +228,21 @@ describe('Special Callsign API', () => {
     });
 
     test('filters by isActive flag', async () => {
-      const response = await request(API_BASE).get('/api/special-callsigns/active');
+      const response = await request(app).get('/api/special-callsigns/active');
 
       const disabled = response.body.find((s: any) => s.callsign === 'W1DISABLED');
       expect(disabled).toBeUndefined();
     });
 
     test('filters by date range (startDate <= now)', async () => {
-      const response = await request(API_BASE).get('/api/special-callsigns/active');
+      const response = await request(app).get('/api/special-callsigns/active');
 
       const pending = response.body.find((s: any) => s.callsign === 'W1PENDING');
       expect(pending).toBeUndefined(); // starts tomorrow, should not be included
     });
 
     test('filters by date range (endDate >= now)', async () => {
-      const response = await request(API_BASE).get('/api/special-callsigns/active');
+      const response = await request(app).get('/api/special-callsigns/active');
 
       const expired = response.body.find((s: any) => s.callsign === 'W1EXPIRED');
       expect(expired).toBeUndefined(); // ended yesterday, should not be included
@@ -265,7 +265,7 @@ describe('Special Callsign API', () => {
     });
 
     test('updates eventName', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch(`/api/special-callsigns/${testId}`)
         .send({ eventName: 'Updated Event Name' });
 
@@ -277,7 +277,7 @@ describe('Special Callsign API', () => {
       const newStart = new Date('2027-01-01');
       const newEnd = new Date('2027-12-31');
 
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch(`/api/special-callsigns/${testId}`)
         .send({
           startDate: newStart.toISOString(),
@@ -290,7 +290,7 @@ describe('Special Callsign API', () => {
     });
 
     test('toggles isActive flag', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch(`/api/special-callsigns/${testId}`)
         .send({ isActive: false });
 
@@ -299,7 +299,7 @@ describe('Special Callsign API', () => {
     });
 
     test('returns 404 for non-existent callsign', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch('/api/special-callsigns/non-existent-id')
         .send({ eventName: 'Updated' });
 
@@ -318,7 +318,7 @@ describe('Special Callsign API', () => {
         },
       });
 
-      const response = await request(API_BASE).delete(`/api/special-callsigns/${sc.id}`);
+      const response = await request(app).delete(`/api/special-callsigns/${sc.id}`);
 
       expect(response.status).toBe(204);
 
@@ -338,7 +338,7 @@ describe('Special Callsign API', () => {
         },
       });
 
-      const response = await request(API_BASE).delete(`/api/special-callsigns/${sc.id}`);
+      const response = await request(app).delete(`/api/special-callsigns/${sc.id}`);
 
       expect(response.status).toBe(204);
 
@@ -348,7 +348,7 @@ describe('Special Callsign API', () => {
     });
 
     test('returns 404 for non-existent callsign', async () => {
-      const response = await request(API_BASE).delete('/api/special-callsigns/non-existent-id');
+      const response = await request(app).delete('/api/special-callsigns/non-existent-id');
 
       expect(response.status).toBe(404);
       expect(response.body.error).toContain('not found');

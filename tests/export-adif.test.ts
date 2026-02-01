@@ -1,13 +1,30 @@
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import { PrismaClient } from '@prisma/client';
+import { ensureServerRunning, stopTestServer, cleanupTestRecords } from './test-helpers';
 
 const prisma = new PrismaClient();
 const API_URL = 'http://localhost:3000';
 
 describe('ADIF Export Endpoints', () => {
+  let weStartedServer = false;
   let stationId: string;
   let contestId: string;
   let entryId1: string;
+  let testStationIds: string[] = [];
+  let testContestIds: string[] = [];
+
+  beforeAll(async () => {
+    weStartedServer = await ensureServerRunning(3000);
+  });
+
+  afterAll(async () => {
+    await cleanupTestRecords({ 
+      contestIds: testContestIds,
+      stationIds: testStationIds
+    });
+    await stopTestServer(weStartedServer);
+    await prisma.$disconnect();
+  });
 
   beforeEach(async () => {
     const timestamp = Date.now();
@@ -19,6 +36,7 @@ describe('ADIF Export Endpoints', () => {
       },
     });
     stationId = station.id;
+    testStationIds.push(stationId);
 
     // Create test contest
     const contest = await prisma.contest.create({
@@ -27,6 +45,7 @@ describe('ADIF Export Endpoints', () => {
       },
     });
     contestId = contest.id;
+    testContestIds.push(contestId);
 
     // Create test log entries
     const entry1 = await prisma.logEntry.create({

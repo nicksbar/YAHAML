@@ -256,33 +256,33 @@ app.post('/api/qso-logs', async (req, res) => {
         },
       });
 
-      // Update aggregates (async, don't block response)
+      // Update aggregates and check for duplicates (async, don't block response)
       if (contestId) {
-        updateAggregates(qsoLog).then((aggregate) => {
+        updateAggregates(qsoLog).then(async (aggregate) => {
           // Broadcast to WebSocket clients
           wsManager.broadcast(`contest:${contestId}`, 'logEntry:created', qsoLog);
           wsManager.broadcast(`contest:${contestId}`, 'aggregate:updated', aggregate);
+
+          // Check for duplicates and broadcast alert
+          const existingEntry = await prisma.logEntry.findFirst({
+            where: {
+              stationId,
+              callsign,
+              band,
+              mode,
+              merge_status: { not: 'duplicate_of' },
+              id: { not: qsoLog.id },
+            },
+          });
+
+          if (existingEntry && contestId) {
+            wsManager.broadcast(`contest:${contestId}`, 'dupe:detected', {
+              entry: qsoLog,
+              duplicate: existingEntry,
+            });
+          }
         }).catch((error) => {
           console.error('Failed to update aggregates:', error);
-        });
-      }
-
-      // Check for duplicates and broadcast alert
-      const existingEntry = await prisma.logEntry.findFirst({
-        where: {
-          stationId,
-          callsign,
-          band,
-          mode,
-          merge_status: { not: 'duplicate_of' },
-          id: { not: qsoLog.id },
-        },
-      });
-
-      if (existingEntry && contestId) {
-        wsManager.broadcast(`contest:${contestId}`, 'dupe:detected', {
-          entry: qsoLog,
-          duplicate: existingEntry,
         });
       }
 
@@ -872,6 +872,11 @@ app.post('/api/contests/from-template', async (req, res) => {
   try {
     const { templateId, name, startTime, endTime, config } = req.body;
     
+    // Validate required fields
+    if (!templateId) {
+      return res.status(400).json({ error: 'templateId is required' });
+    }
+    
     const template = await prisma.contestTemplate.findUnique({
       where: { id: templateId },
     });
@@ -902,7 +907,14 @@ app.post('/api/contests/from-template', async (req, res) => {
       },
     });
     
-    return res.status(201).json(contest);
+    // Add computed fields
+    const contestWithStats = {
+      ...contest,
+      totalQsos: 0,
+      totalPoints: 0,
+    };
+    
+    return res.status(201).json(contestWithStats);
   } catch (error) {
     console.error('Failed to create contest from template:', error);
     return res.status(400).json({ error: 'Failed to create contest' });
@@ -1038,17 +1050,24 @@ app.get('/api/special-callsigns/active', async (_req, res) => {
 
 app.post('/api/special-callsigns', async (req, res) => {
   try {
-    const callsign = await prisma.specialCallsign.create({
+    const { callsign, eventName, startDate, endDate, clubId, ...rest } = req.body;
+    
+    // Validate required fields
+    if (!callsign || !eventName) {
+      return res.status(400).json({ error: 'callsign and eventName are required' });
+    }
+    
+    const specialCallsign = await prisma.specialCallsign.create({
       data: {
-        ...req.body,
-        startDate: new Date(req.body.startDate),
-        endDate: new Date(req.body.endDate),
-      },
-      include: {
-        club: true,
+        callsign,
+        eventName,
+        startDate: new Date(startDate),
+        endDate: new Date(endDate),
+        clubId: clubId || null, // Optional club association
+        ...rest,
       },
     });
-    return res.status(201).json(callsign);
+    return res.status(201).json(specialCallsign);
   } catch (error) {
     console.error('Failed to create special callsign:', error);
     return res.status(400).json({ error: 'Failed to create special callsign' });
@@ -1531,30 +1550,36 @@ app.get('/api/stations/:id/radio', async (req, res) => {
   }
 });
 
-// Start HTTP server (for WebSocket support)
-const server = http.createServer(app);
+// Export the app for testing
+export default app;
 
-// Initialize WebSocket server
-wsManager.initialize(server);
+// Only start servers if this file is run directly (not imported for testing)
+if (require.main === module) {
+  // Start HTTP server (for WebSocket support)
+  const server = http.createServer(app);
 
-server.listen(Number(port), host, () => {
-  const displayHost = host === '0.0.0.0' ? 'localhost' : host;
-  console.log(`✓ YAHAML API server running on http://${displayHost}:${port}`);
-  console.log(`  - Binding to: ${host}:${port} (accessible from all interfaces)`);
-  console.log(`  - Health check: http://${displayHost}:${port}/health`);
-  console.log(`  - API base: http://${displayHost}:${port}/api`);
-  console.log(`  - WebSocket: ws://${displayHost}:${port}/ws`);
-});
+  // Initialize WebSocket server
+  wsManager.initialize(server);
 
-// Start relay server
-startRelayServer(Number(relayPort), relayHost);
+  server.listen(Number(port), host, () => {
+    const displayHost = host === '0.0.0.0' ? 'localhost' : host;
+    console.log(`✓ YAHAML API server running on http://${displayHost}:${port}`);
+    console.log(`  - Binding to: ${host}:${port} (accessible from all interfaces)`);
+    console.log(`  - Health check: http://${displayHost}:${port}/health`);
+    console.log(`  - API base: http://${displayHost}:${port}/api`);
+    console.log(`  - WebSocket: ws://${displayHost}:${port}/ws`);
+  });
 
-// Start UDP log listener
-startUdpServer(Number(udpPort), udpHost, udpTargets);
+  // Start relay server
+  startRelayServer(Number(relayPort), relayHost);
 
-// Start radio manager (connect to all enabled radios)
-radioManager.startAll().then(() => {
-  console.log('✓ Radio manager initialized');
-}).catch((error) => {
-  console.error('Radio manager initialization error:', error);
-});
+  // Start UDP log listener
+  startUdpServer(Number(udpPort), udpHost, udpTargets);
+
+  // Start radio manager (connect to all enabled radios)
+  radioManager.startAll().then(() => {
+    console.log('✓ Radio manager initialized');
+  }).catch((error) => {
+    console.error('Radio manager initialization error:', error);
+  });
+}

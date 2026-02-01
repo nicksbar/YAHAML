@@ -2,9 +2,8 @@
  * Club API integration tests
  */
 import request from 'supertest';
+import app from '../src/index';
 import prisma from '../src/db';
-
-const API_BASE = 'http://localhost:3000';
 
 describe('Club API', () => {
   let testContestId: string;
@@ -23,9 +22,9 @@ describe('Club API', () => {
   });
 
   afterAll(async () => {
-    // Cleanup
-    await prisma.club.deleteMany({});
-    await prisma.contest.deleteMany({});
+    // Cleanup - only delete the test contest we created
+    await prisma.club.deleteMany({ where: { contestId: testContestId } });
+    await prisma.contest.deleteMany({ where: { id: testContestId } });
     await prisma.$disconnect();
   });
 
@@ -38,7 +37,7 @@ describe('Club API', () => {
 
   describe('POST /api/clubs', () => {
     test('creates club with basic fields', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/clubs')
         .send({
           callsign: 'W1TEST',
@@ -57,7 +56,7 @@ describe('Club API', () => {
 
     test('creates club with alternative callsigns', async () => {
       const altCalls = ['N1ABC', 'K1XYZ', 'W1DEF'];
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/clubs')
         .send({
           callsign: 'W1MULTI',
@@ -75,7 +74,7 @@ describe('Club API', () => {
     });
 
     test('creates club with empty altCallsigns', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/clubs')
         .send({
           callsign: 'W1EMPTY',
@@ -90,7 +89,7 @@ describe('Club API', () => {
     });
 
     test('requires callsign field', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/clubs')
         .send({
           name: 'No Callsign Club',
@@ -124,7 +123,7 @@ describe('Club API', () => {
     });
 
     test('returns all clubs with stations and QSO counts', async () => {
-      const response = await request(API_BASE).get('/api/clubs');
+      const response = await request(app).get('/api/clubs');
 
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
@@ -141,7 +140,7 @@ describe('Club API', () => {
     });
 
     test('includes altCallsigns in response', async () => {
-      const response = await request(API_BASE).get('/api/clubs');
+      const response = await request(app).get('/api/clubs');
 
       const club = response.body.find((c: any) => c.callsign === 'W1GET1');
       expect(club.altCallsigns).toBeDefined();
@@ -165,7 +164,7 @@ describe('Club API', () => {
     });
 
     test('toggles isActive to false', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch(`/api/clubs/${testClubId}`)
         .send({ isActive: false });
 
@@ -185,7 +184,7 @@ describe('Club API', () => {
       });
 
       // Then enable via API
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch(`/api/clubs/${testClubId}`)
         .send({ isActive: true });
 
@@ -194,7 +193,7 @@ describe('Club API', () => {
     });
 
     test('updates name field', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch(`/api/clubs/${testClubId}`)
         .send({ name: 'Updated Name' });
 
@@ -203,7 +202,7 @@ describe('Club API', () => {
     });
 
     test('returns 404 for non-existent club', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .patch('/api/clubs/non-existent-id')
         .send({ isActive: false });
 
@@ -221,7 +220,7 @@ describe('Club API', () => {
         },
       });
 
-      const response = await request(API_BASE).delete(`/api/clubs/${club.id}`);
+      const response = await request(app).delete(`/api/clubs/${club.id}`);
 
       expect(response.status).toBe(204);
 
@@ -261,7 +260,7 @@ describe('Club API', () => {
         },
       });
 
-      const response = await request(API_BASE).delete(`/api/clubs/${club.id}`);
+      const response = await request(app).delete(`/api/clubs/${club.id}`);
 
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('Cannot delete club');
@@ -290,7 +289,7 @@ describe('Club API', () => {
         },
       });
 
-      const response = await request(API_BASE).delete(`/api/clubs/${club.id}`);
+      const response = await request(app).delete(`/api/clubs/${club.id}`);
 
       expect(response.status).toBe(204);
 
@@ -300,7 +299,7 @@ describe('Club API', () => {
     });
 
     test('returns 404 for non-existent club', async () => {
-      const response = await request(API_BASE).delete('/api/clubs/non-existent-id');
+      const response = await request(app).delete('/api/clubs/non-existent-id');
 
       expect(response.status).toBe(404);
       expect(response.body.error).toContain('not found');

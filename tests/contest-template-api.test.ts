@@ -4,7 +4,7 @@
 import request from 'supertest';
 import prisma from '../src/db';
 
-const API_BASE = 'http://localhost:3000';
+import app from '../src/index';
 
 describe('Contest Template API', () => {
   beforeAll(async () => {
@@ -21,7 +21,7 @@ describe('Contest Template API', () => {
 
   describe('GET /api/contest-templates', () => {
     test('returns all public active templates', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
@@ -35,7 +35,7 @@ describe('Contest Template API', () => {
     });
 
     test('includes all required template fields', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       const template = response.body[0];
       expect(template).toHaveProperty('id');
@@ -49,7 +49,7 @@ describe('Contest Template API', () => {
     });
 
     test('includes ARRL Field Day template', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       const arrlFD = response.body.find((t: any) => t.type === 'ARRL_FD');
       expect(arrlFD).toBeDefined();
@@ -64,7 +64,7 @@ describe('Contest Template API', () => {
     });
 
     test('includes Winter Field Day template', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       const winterFD = response.body.find((t: any) => t.type === 'WINTER_FD');
       expect(winterFD).toBeDefined();
@@ -72,7 +72,7 @@ describe('Contest Template API', () => {
     });
 
     test('includes POTA template', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       const pota = response.body.find((t: any) => t.type === 'POTA');
       expect(pota).toBeDefined();
@@ -85,7 +85,7 @@ describe('Contest Template API', () => {
     });
 
     test('includes SOTA template', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       const sota = response.body.find((t: any) => t.type === 'SOTA');
       expect(sota).toBeDefined();
@@ -101,18 +101,18 @@ describe('Contest Template API', () => {
   describe('GET /api/contest-templates/:id', () => {
     test('returns template by ID', async () => {
       // First get all templates
-      const listResponse = await request(API_BASE).get('/api/contest-templates');
+      const listResponse = await request(app).get('/api/contest-templates');
       const templateId = listResponse.body[0].id;
 
       // Then get by ID
-      const response = await request(API_BASE).get(`/api/contest-templates/${templateId}`);
+      const response = await request(app).get(`/api/contest-templates/${templateId}`);
 
       expect(response.status).toBe(200);
       expect(response.body.id).toBe(templateId);
     });
 
     test('returns 404 for non-existent template', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/non-existent-id');
+      const response = await request(app).get('/api/contest-templates/non-existent-id');
 
       expect(response.status).toBe(404);
     });
@@ -120,7 +120,7 @@ describe('Contest Template API', () => {
 
   describe('GET /api/contest-templates/by-type/:type', () => {
     test('returns ARRL Field Day template by type', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/ARRL_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/ARRL_FD');
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('ARRL_FD');
@@ -128,28 +128,28 @@ describe('Contest Template API', () => {
     });
 
     test('returns Winter Field Day template by type', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/WINTER_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/WINTER_FD');
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('WINTER_FD');
     });
 
     test('returns POTA template by type', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/POTA');
+      const response = await request(app).get('/api/contest-templates/by-type/POTA');
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('POTA');
     });
 
     test('returns SOTA template by type', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/SOTA');
+      const response = await request(app).get('/api/contest-templates/by-type/SOTA');
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('SOTA');
     });
 
     test('returns 404 for non-existent type', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/NON_EXISTENT');
+      const response = await request(app).get('/api/contest-templates/by-type/NON_EXISTENT');
 
       expect(response.status).toBe(404);
     });
@@ -157,7 +157,7 @@ describe('Contest Template API', () => {
 
   describe('Template Validation', () => {
     test('ARRL FD has valid scoring rules', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/ARRL_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/ARRL_FD');
       const scoring = JSON.parse(response.body.scoringRules);
 
       expect(scoring.pointsPerQso).toBe(1);
@@ -170,7 +170,7 @@ describe('Contest Template API', () => {
     });
 
     test('ARRL FD has valid required fields', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/ARRL_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/ARRL_FD');
       const required = JSON.parse(response.body.requiredFields);
 
       expect(required.class.required).toBe(true);
@@ -182,7 +182,7 @@ describe('Contest Template API', () => {
     });
 
     test('ARRL FD has valid validation rules', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/ARRL_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/ARRL_FD');
       const validation = JSON.parse(response.body.validationRules);
 
       expect(validation.bands).toBeInstanceOf(Array);
@@ -195,7 +195,7 @@ describe('Contest Template API', () => {
     });
 
     test('POTA has park reference validation', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/POTA');
+      const response = await request(app).get('/api/contest-templates/by-type/POTA');
       const validation = JSON.parse(response.body.validationRules);
 
       expect(validation.exchange.validation.park).toBeDefined();
@@ -203,7 +203,7 @@ describe('Contest Template API', () => {
     });
 
     test('SOTA has summit reference validation', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/SOTA');
+      const response = await request(app).get('/api/contest-templates/by-type/SOTA');
       const validation = JSON.parse(response.body.validationRules);
 
       expect(validation.exchange.validation.summit).toBeDefined();
@@ -213,7 +213,7 @@ describe('Contest Template API', () => {
 
   describe('UI Configuration', () => {
     test('templates have UI config', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates');
+      const response = await request(app).get('/api/contest-templates');
 
       response.body.forEach((template: any) => {
         if (template.uiConfig) {
@@ -227,7 +227,7 @@ describe('Contest Template API', () => {
     });
 
     test('ARRL FD has field day icon', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/ARRL_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/ARRL_FD');
       const ui = JSON.parse(response.body.uiConfig);
 
       expect(ui.icon).toBe('🎯');
@@ -235,21 +235,21 @@ describe('Contest Template API', () => {
     });
 
     test('Winter FD has winter icon', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/WINTER_FD');
+      const response = await request(app).get('/api/contest-templates/by-type/WINTER_FD');
       const ui = JSON.parse(response.body.uiConfig);
 
       expect(ui.icon).toBe('❄️');
     });
 
     test('POTA has park icon', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/POTA');
+      const response = await request(app).get('/api/contest-templates/by-type/POTA');
       const ui = JSON.parse(response.body.uiConfig);
 
       expect(ui.icon).toBe('🏞️');
     });
 
     test('SOTA has mountain icon', async () => {
-      const response = await request(API_BASE).get('/api/contest-templates/by-type/SOTA');
+      const response = await request(app).get('/api/contest-templates/by-type/SOTA');
       const ui = JSON.parse(response.body.uiConfig);
 
       expect(ui.icon).toBe('⛰️');

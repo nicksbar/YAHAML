@@ -4,7 +4,7 @@
 import request from 'supertest';
 import prisma from '../src/db';
 
-const API_BASE = 'http://localhost:3000';
+import app from '../src/index';
 
 describe('Contest Instance API', () => {
   let arrlTemplateId: string;
@@ -38,7 +38,7 @@ describe('Contest Instance API', () => {
 
   describe('POST /api/contests/from-template', () => {
     test('creates contest from ARRL FD template', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -58,7 +58,7 @@ describe('Contest Instance API', () => {
       const startTime = new Date('2026-06-27T18:00:00Z');
       const endTime = new Date('2026-06-28T20:59:00Z');
 
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -79,7 +79,7 @@ describe('Contest Instance API', () => {
         power: 'LOW',
       };
 
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -97,7 +97,7 @@ describe('Contest Instance API', () => {
     });
 
     test('creates POTA contest', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: potaTemplateId,
@@ -115,7 +115,7 @@ describe('Contest Instance API', () => {
 
     test('deactivates existing active contests', async () => {
       // Create first contest
-      await request(API_BASE)
+      await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -130,7 +130,7 @@ describe('Contest Instance API', () => {
       expect(contests[0].name).toBe('First Contest');
 
       // Create second contest
-      await request(API_BASE)
+      await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: potaTemplateId,
@@ -152,7 +152,7 @@ describe('Contest Instance API', () => {
     });
 
     test('returns 404 for non-existent template', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: 'non-existent-id',
@@ -164,7 +164,7 @@ describe('Contest Instance API', () => {
     });
 
     test('requires templateId', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           name: 'No Template Contest',
@@ -174,7 +174,7 @@ describe('Contest Instance API', () => {
     });
 
     test('uses template name if no name provided', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -188,7 +188,7 @@ describe('Contest Instance API', () => {
   describe('GET /api/contests/active/current', () => {
     test('returns active contest with template', async () => {
       // Create a contest
-      await request(API_BASE)
+      await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -196,7 +196,7 @@ describe('Contest Instance API', () => {
         });
 
       // Get active contest
-      const response = await request(API_BASE).get('/api/contests/active/current');
+      const response = await request(app).get('/api/contests/active/current');
 
       expect(response.status).toBe(200);
       expect(response.body.name).toBe('Active Contest');
@@ -210,7 +210,7 @@ describe('Contest Instance API', () => {
       // Ensure no active contests
       await prisma.contest.deleteMany({});
 
-      const response = await request(API_BASE).get('/api/contests/active/current');
+      const response = await request(app).get('/api/contests/active/current');
 
       expect(response.status).toBe(200);
       expect(response.body.name).toBe('Field Day');
@@ -219,7 +219,7 @@ describe('Contest Instance API', () => {
 
     test('returns most recently activated contest', async () => {
       // Create first contest
-      await request(API_BASE)
+      await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -230,14 +230,14 @@ describe('Contest Instance API', () => {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Create second contest (should deactivate first)
-      await request(API_BASE)
+      await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: potaTemplateId,
           name: 'Second',
         });
 
-      const response = await request(API_BASE).get('/api/contests/active/current');
+      const response = await request(app).get('/api/contests/active/current');
 
       expect(response.status).toBe(200);
       expect(response.body.name).toBe('Second');
@@ -246,7 +246,7 @@ describe('Contest Instance API', () => {
 
   describe('Contest State Management', () => {
     test('new contest has zero QSOs and points', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -258,7 +258,7 @@ describe('Contest Instance API', () => {
     });
 
     test('contest includes all template configuration', async () => {
-      const response = await request(API_BASE)
+      const response = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -280,7 +280,7 @@ describe('Contest Instance API', () => {
   describe('Multiple Contest Types', () => {
     test('can create contests from different templates', async () => {
       // Create ARRL FD
-      const arrl = await request(API_BASE)
+      const arrl = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: arrlTemplateId,
@@ -290,7 +290,7 @@ describe('Contest Instance API', () => {
       expect(arrl.body.template.type).toBe('ARRL_FD');
 
       // Create POTA (deactivates ARRL FD)
-      const pota = await request(API_BASE)
+      const pota = await request(app)
         .post('/api/contests/from-template')
         .send({
           templateId: potaTemplateId,
@@ -310,7 +310,7 @@ describe('Contest Instance API', () => {
       });
 
       for (const template of templates) {
-        const response = await request(API_BASE)
+        const response = await request(app)
           .post('/api/contests/from-template')
           .send({
             templateId: template.id,
