@@ -1,0 +1,234 @@
+/* Stats Panel Widget */
+
+.stats-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.stats-panel h3 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stats-panel h4 {
+  margin: 12px 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.stats-panel.error {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  background-color: var(--surface-elevated);
+  text-align: center;
+}
+
+.stat-card:hover {
+  background-color: var(--surface-muted);
+  border-color: var(--accent);
+}
+
+.stat-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.stats-distribution {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.dist-section {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  background-color: var(--surface-elevated);
+}
+
+.band-bars,
+.mode-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.band-bar-row,
+.mode-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.band-label,
+.mode-label {
+  min-width: 40px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.band-bar,
+.mode-bar {
+  flex: 1;
+  height: 20px;
+  background-color: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.band-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #1e40af);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.mode-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--success), #047857);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.stats-top-calls {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  background-color: var(--surface-elevated);
+  margin-bottom: 12px;
+}
+
+.calls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.call-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background-color: var(--surface);
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.call-entry:hover {
+  background-color: var(--surface-elevated);
+  border-color: var(--border);
+}
+
+.rank {
+  display: inline-block;
+  min-width: 30px;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.call {
+  flex: 1;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 100px;
+}
+
+.count {
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 80px;
+  text-align: right;
+}
+
+.stats-footer {
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 768px) {
+  .stats-panel {
+    padding: 12px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .stat-card {
+    padding: 10px;
+  }
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .stats-distribution {
+    grid-template-columns: 1fr;
+  }
+
+  .band-label,
+  .mode-label {
+    min-width: 35px;
+  }
+}

@@ -1,0 +1,151 @@
+/* Band Occupancy Widget */
+
+.band-occupancy {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.band-occupancy h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.band-occupancy.error {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.occupancy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.occupancy-table thead {
+  background-color: var(--surface-muted);
+  border-bottom: 2px solid var(--border);
+}
+
+.occupancy-table th {
+  padding: 8px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.occupancy-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.occupancy-table tbody tr:hover {
+  background-color: var(--surface-elevated);
+}
+
+.band-cell {
+  font-weight: 600;
+  color: #0066cc;
+  min-width: 60px;
+}
+
+.mode-cell {
+  font-weight: 500;
+  color: #666;
+  min-width: 50px;
+}
+
+.stations-cell {
+  flex: 1;
+  max-width: 300px;
+}
+
+.callsign-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.callsign-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  background-color: #e3f2fd;
+  color: #1976d2;
+  border-radius: 3px;
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.callsign-badge:hover {
+  background-color: #bbdefb;
+}
+
+.count-cell {
+  text-align: center;
+  font-weight: 600;
+  color: #2e7d32;
+  min-width: 50px;
+}
+
+.source-cell {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.source-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.source-n3fjp {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+}
+
+.source-hamlib {
+  background-color: #cfe2ff;
+  color: #084298;
+  border: 1px solid #b6d4fe;
+}
+
+.source-ui {
+  background-color: #d1e7dd;
+  color: #0f5132;
+  border: 1px solid #badbcc;
+}
+
+@media (max-width: 768px) {
+  .occupancy-table {
+    font-size: 12px;
+  }
+
+  .occupancy-table th,
+  .occupancy-table td {
+    padding: 6px 4px;
+  }
+
+  .stations-cell {
+    max-width: 150px;
+  }
+
+  .callsign-badge {
+    padding: 2px 4px;
+    font-size: 11px;
+  }
+}

@@ -15,6 +15,7 @@ import {
   validateCabrilloQso,
 } from './export';
 import { wsManager } from './websocket';
+import { startStatsAggregationJob } from './stats';
 import {
   updateAggregates,
   getAggregates,
@@ -768,12 +769,31 @@ app.get('/api/context-logs/:stationId', async (req, res) => {
   }
 });
 
+// Get all debug logs for debug panel
+app.get('/api/debug/all-logs', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 200;
+    const logs = await prisma.contextLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        station: { select: { callsign: true } },
+      },
+    });
+    return res.json(logs);
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to fetch debug logs' });
+  }
+});
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.post('/api/context-logs', async (req, res) => {
   try {
     const log = await prisma.contextLog.create({
       data: req.body,
     });
+    // Broadcast to debug listeners
+    wsManager.broadcast('logs', 'contextLog', log);
     return res.status(201).json(log);
   } catch (error) {
     return res.status(400).json({ error: 'Failed to create context log' });
@@ -1532,6 +1552,38 @@ app.get('/api/callsign/lookup/:callsign', async (req, res) => {
 // Mount location router
 app.use('/api/locations', locationRouter);
 
+// Get active contest configuration (bands/modes for UI)
+app.get('/api/contests/active/config', async (_req, res) => {
+  try {
+    const contest = await prisma.contest.findFirst({
+      where: { isActive: true },
+      include: { template: true },
+    });
+    
+    if (!contest?.template) {
+      // Return defaults if no active contest
+      return res.json({
+        bands: ['160', '80', '40', '20', '15', '10', '6', '2', '70cm'],
+        modes: ['CW', 'DIG', 'PH'],
+      });
+    }
+    
+    const rules = typeof contest.template.validationRules === 'string'
+      ? JSON.parse(contest.template.validationRules)
+      : contest.template.validationRules;
+    
+    return res.json({
+      contestName: contest.name,
+      contestId: contest.id,
+      bands: rules.bands || ['160', '80', '40', '20', '15', '10', '6', '2', '70cm'],
+      modes: rules.modes || ['CW', 'DIG', 'PH'],
+    });
+  } catch (error) {
+    console.error('Error fetching active contest config:', error);
+    return res.status(500).json({ error: (error as any).message });
+  }
+});
+
 // Validate callsign
 app.get('/api/callsign/validate/:callsign', async (req, res) => {
   try {
@@ -1906,6 +1958,158 @@ app.get('/api/stations/:id/radio', async (req, res) => {
   }
 });
 
+// Band occupancy endpoints
+app.get('/api/band-occupancy', async (req, res) => {
+  try {
+    const { contestId } = req.query;
+    
+    const occupancy = await prisma.bandOccupancy.groupBy({
+      by: ['band', 'mode'],
+      where: contestId ? { contestId: String(contestId) } : undefined,
+      _count: {
+        stationId: true,
+      },
+    });
+
+    // Enrich with active stations
+    const enriched = await Promise.all(
+      occupancy.map(async (entry) => {
+        const stations = await prisma.bandOccupancy.findMany({
+          where: {
+            band: entry.band,
+            mode: entry.mode,
+            contestId: contestId ? String(contestId) : undefined,
+          },
+          include: {
+            station: true,
+          },
+          orderBy: { lastSeen: 'desc' },
+        });
+
+        return {
+          band: entry.band,
+          mode: entry.mode,
+          activeStations: stations.map((s) => ({
+            callsign: s.station.callsign,
+            source: s.source,
+            lastSeen: s.lastSeen.toISOString(),
+          })),
+          count: stations.length,
+        };
+      })
+    );
+
+    return res.json(enriched);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// QSO Contacts (for map)
+app.get('/api/qso-contacts', async (req, res) => {
+  try {
+    const { contestId, timeWindow = 'last-30min' } = req.query;
+    
+    // Calculate time filter
+    const now = new Date();
+    let sinceTime = new Date();
+    
+    switch (timeWindow) {
+      case 'last-1h':
+        sinceTime.setHours(sinceTime.getHours() - 1);
+        break;
+      case 'last-6h':
+        sinceTime.setHours(sinceTime.getHours() - 6);
+        break;
+      case 'last-24h':
+        sinceTime.setDate(sinceTime.getDate() - 1);
+        break;
+      case 'last-30min':
+      default:
+        sinceTime.setMinutes(sinceTime.getMinutes() - 30);
+    }
+
+    const contacts = await prisma.qSOContact.findMany({
+      where: {
+        contestId: contestId ? String(contestId) : undefined,
+        qsoDateTime: {
+          gte: sinceTime,
+          lte: now,
+        },
+      },
+      orderBy: { qsoDateTime: 'desc' },
+      take: 200,
+    });
+
+    return res.json(contacts);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// Operator messages
+app.get('/api/operator-messages', async (req, res) => {
+  try {
+    const { contestId, limit = '20' } = req.query;
+
+    const messages = await prisma.operatorMessage.findMany({
+      where: {
+        stationId: contestId ? undefined : undefined,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Number(limit),
+    });
+
+    return res.json(messages);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// Contest stats
+app.get('/api/contest-stats', async (req, res) => {
+  try {
+    const { contestId, period = 'hour' } = req.query;
+
+    const stats = await prisma.contestStats.findFirst({
+      where: {
+        contestId: contestId ? String(contestId) : undefined,
+        stationId: null, // Contest-wide only
+        period: String(period),
+      },
+      orderBy: { periodStart: 'desc' },
+    });
+
+    if (!stats) {
+      return res.json({
+        qsoCount: 0,
+        pointsTotal: 0,
+        mults: 0,
+        dupeCount: 0,
+        qsoPerHour: 0,
+        topCalls: [],
+        bandDist: {},
+        modeDist: {},
+        lastUpdated: new Date().toISOString(),
+      });
+    }
+
+    return res.json({
+      qsoCount: stats.qsoCount,
+      pointsTotal: stats.pointsTotal,
+      mults: stats.mults,
+      dupeCount: stats.dupeCount,
+      qsoPerHour: stats.qsoCount / ((stats.periodEnd.getTime() - stats.periodStart.getTime()) / (1000 * 60 * 60)),
+      topCalls: stats.topCallsign ? [{ callsign: stats.topCallsign, qsoCount: stats.topCallCount }] : [],
+      bandDist: stats.bandDist ? JSON.parse(stats.bandDist) : {},
+      modeDist: stats.modeDist ? JSON.parse(stats.modeDist) : {},
+      lastUpdated: stats.updatedAt.toISOString(),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // Export the app for testing
 export default app;
 
@@ -1931,6 +2135,9 @@ if (require.main === module) {
 
   // Start UDP log listener
   startUdpServer(Number(udpPort), udpHost, udpTargets);
+
+  // Start stats aggregation job (runs every 5 minutes)
+  startStatsAggregationJob(5);
 
   // Start radio manager (connect to all enabled radios)
   radioManager.startAll().then(() => {

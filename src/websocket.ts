@@ -10,6 +10,30 @@ export interface WSMessage {
   data?: any;
 }
 
+/**
+ * Real-time WebSocket channels available:
+ * 
+ * 'stations' - Band/mode changes
+ *   Events: bandModeChange
+ *   Data: { stationId, callsign, band, mode, timestamp }
+ * 
+ * 'messages' - Operator messages and DMs
+ *   Events: newMessage
+ *   Data: { id, fromCall, toCall, content, messageType, timestamp }
+ * 
+ * 'qsos' - QSO logging (new contacts)
+ *   Events: newQSO
+ *   Data: { id, callsign, band, mode, stationId, timestamp }
+ * 
+ * 'band-occupancy' - Current band/mode occupation state
+ *   Events: occupancyUpdate
+ *   Data: { band, mode, activeStations: [{callsign, source, lastSeen}], count }
+ * 
+ * 'stats' - Contest stats aggregates
+ *   Events: statsUpdate
+ *   Data: { qsoCount, pointsTotal, qsoPerHour, topCalls: [...] }
+ */
+
 // Client subscription info
 interface ClientSubscription {
   ws: WebSocket;

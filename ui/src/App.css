@@ -311,6 +311,18 @@ main {
    ============================================================================ */
 
 .dashboard-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  height: auto;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* Old grid layout (for backward compatibility) */
+.dashboard-grid:not(.dashboard-v2) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: auto 1fr;
@@ -319,19 +331,55 @@ main {
   height: calc(100vh - 52px);
 }
 
-.dashboard-grid .system-panel {
+.dashboard-grid:not(.dashboard-v2) .system-panel {
   grid-column: 1 / 2;
   grid-row: 1 / 2;
 }
 
-.dashboard-grid .stations-panel {
+.dashboard-grid:not(.dashboard-v2) .stations-panel {
   grid-column: 2 / 3;
   grid-row: 1 / 3;
 }
 
-.dashboard-grid .activity-panel {
+.dashboard-grid:not(.dashboard-v2) .activity-panel {
   grid-column: 1 / 2;
   grid-row: 2 / 3;
+}
+
+/* New v2 layout */
+.dashboard-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.dashboard-v2 .system-panel {
+  order: 1;
+}
+
+.dashboard-v2 .stations-panel {
+  order: 2;
+}
+
+.dashboard-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: var(--space-md);
+  width: 100%;
+}
+
+.dashboard-row .flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-v2 .activity-panel {
+  order: 5;
+  grid-column: 1 / -1;
+}
+
+.dashboard-v2 .full-width {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 1024px) {
@@ -341,19 +389,39 @@ main {
     height: auto;
   }
   
-  .dashboard-grid .system-panel {
+  .dashboard-grid:not(.dashboard-v2) {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+  
+  .dashboard-grid:not(.dashboard-v2) .system-panel {
     grid-column: 1;
     grid-row: 1;
   }
   
-  .dashboard-grid .stations-panel {
+  .dashboard-grid:not(.dashboard-v2) .stations-panel {
     grid-column: 1;
     grid-row: 2;
   }
   
-  .dashboard-grid .activity-panel {
+  .dashboard-grid:not(.dashboard-v2) .activity-panel {
     grid-column: 1;
     grid-row: 3;
+  }
+
+  .dashboard-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-grid {
+    padding: var(--space-sm);
+    gap: var(--space-sm);
+  }
+
+  .dashboard-row {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -1,11 +1,15 @@
-# Architecture
+# YAHAML Architecture
 
-## Services
-- **web-ui**: React-based browser interface for logging and station management
-- **api**: Express REST API for logging, stations, contests, and clubs
-- **udp-bridge**: UDP receiver + broadcaster for interoperability with N3FJP and other logging software
-- **rig-control**: HAMLib rigctld integration for remote rig control
-- **db**: SQLite database with Prisma ORM
+## System Overview
+
+YAHAML is a multi-service ham radio logging system with:
+- **web-ui** (Vite React): Browser interface for logging and station management
+- **api** (Express.js): REST API for logging, stations, contests, clubs, and real-time updates
+- **relay** (TCP): N3FJP protocol relay for band occupancy and rig control
+- **websocket**: Real-time event streaming for live dashboard updates
+- **database** (SQLite): Prisma ORM with contest templates and logging
+
+## Services Architecture
 
 ## Core Data Models
 

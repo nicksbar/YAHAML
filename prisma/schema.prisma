@@ -58,6 +58,10 @@ model Station {
   contextLogs    ContextLog[]
   networkStatus  NetworkStatus?
   radioAssignments RadioAssignment[]
+  operatorMessages OperatorMessage[]
+  qsoContacts    QSOContact[]
+  contestStats   ContestStats[]
+  bandOccupancy  BandOccupancy[]
 
   @@index([clubId])
   @@index([locationId])
@@ -135,6 +139,7 @@ model LogEntry {
   // Self-references for merge tracking
   merged_from       LogEntry? @relation("MergedInto", fields: [merged_into_id], references: [id], onDelete: SetNull)
   merges            LogEntry[] @relation("MergedInto")
+  qsoContact        QSOContact?
 
   @@index([stationId])
   @@index([contestId])
@@ -288,6 +293,9 @@ model Contest {
   clubs          Club[]
   logEntries     LogEntry[]
   aggregates     LogAggregate[]
+  qsoContacts    QSOContact[]
+  contestStats   ContestStats[]
+  bandOccupancy  BandOccupancy[]
   
   @@index([templateId])
   @@map("contests")
@@ -460,6 +468,140 @@ model LogAggregate {
   @@index([clubId])
   @@index([periodStart])
   @@map("log_aggregates")
+}
+
+// Operator messages and DMs from N3FJP protocol
+model OperatorMessage {
+  id          String   @id @default(cuid())
+  stationId   String
+  fromCall    String   // Sender callsign
+  toCall      String   // Recipient callsign (or "ALL" for broadcast)
+  messageType String   @default("DIRECT") // "DIRECT" | "BROADCAST" | "SYSTEM"
+  content     String
+  readAt      DateTime?
+  source      String   @default("n3fjp") // n3fjp, ui, email, etc.
+  rawPayload  String?
+  createdAt   DateTime @default(now())
+  
+  // Relations
+  station     Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  
+  @@index([stationId])
+  @@index([createdAt])
+  @@index([fromCall])
+  @@index([toCall])
+  @@map("operator_messages")
+}
+
+// Recent QSO contacts for map/display
+model QSOContact {
+  id          String   @id @default(cuid())
+  stationId   String
+  contestId   String?
+  
+  // Contact details
+  callsign    String   // Remote station
+  band        String
+  mode        String
+  frequency   String?  // Frequency worked
+  
+  // QSO metadata
+  rstSent     String?
+  rstRcvd     String?
+  name        String?  // Remote operator name
+  section     String?
+  grid        String?
+  state       String?
+  
+  // Location (for map)
+  latitude    Float?
+  longitude   Float?
+  
+  // Timing
+  qsoDateTime DateTime
+  duration    Int?     // Duration in seconds
+  
+  // Source
+  source      String   @default("unknown") // "n3fjp" | "ui" | "wsjt" | "hamlib" | etc
+  
+  // Link to raw log entry
+  logEntryId  String?  @unique
+  
+  createdAt   DateTime @default(now())
+  
+  // Relations
+  station     Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  contest     Contest? @relation(fields: [contestId], references: [id], onDelete: SetNull)
+  logEntry    LogEntry? @relation(fields: [logEntryId], references: [id], onDelete: SetNull)
+  
+  @@index([stationId])
+  @@index([contestId])
+  @@index([qsoDateTime])
+  @@index([band])
+  @@index([mode])
+  @@index([createdAt])
+  @@map("qso_contacts")
+}
+
+// Pre-aggregated contest statistics (avoid expensive queries on dashboard)
+model ContestStats {
+  id          String   @id @default(cuid())
+  contestId   String
+  stationId   String?  // null = contest-wide stats
+  
+  // Time-based aggregates
+  periodStart DateTime
+  periodEnd   DateTime
+  period      String   @default("hour") // "hour" | "6h" | "day"
+  
+  // Counts
+  qsoCount    Int      @default(0)
+  pointsTotal Int      @default(0)
+  mults       Int      @default(0) // Multiplier count
+  dupeCount   Int      @default(0)
+  
+  // Top performers (in this time period)
+  topCallsign String?  // Most QSOs
+  topCallCount Int?
+  
+  // Band/Mode distribution (JSON)
+  bandDist    String?  // JSON: {"20": 15, "40": 8, "80": 3, ...}
+  modeDist    String?  // JSON: {"CW": 12, "PH": 11, "DIG": 3, ...}
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  contest     Contest  @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  station     Station? @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  
+  @@unique([contestId, stationId, periodStart, period])
+  @@index([contestId])
+  @@index([stationId])
+  @@index([periodStart])
+  @@map("contest_stats")
+}
+
+// Band occupancy snapshot (current occupation state)
+model BandOccupancy {
+  id          String   @id @default(cuid())
+  contestId   String?
+  stationId   String
+  band        String
+  mode        String
+  source      String   // "n3fjp" | "hamlib" | "ui" | etc
+  lastSeen    DateTime @default(now()) @updatedAt
+  
+  // Relations
+  station     Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  contest     Contest? @relation(fields: [contestId], references: [id], onDelete: SetNull)
+  
+  @@unique([stationId, band, mode])
+  @@index([contestId])
+  @@index([band])
+  @@index([mode])
+  @@index([lastSeen])
+  @@map("band_occupancy")
 }
 
 // Add radioAssignments to Station

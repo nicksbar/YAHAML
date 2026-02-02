@@ -1,6 +1,8 @@
-# Deployment Readiness Changes
+# YAHAML Deployment Guide
 
-## Summary
+Complete guide for deploying YAHAML to development, staging, and production environments.
+
+## Quick Summary
 
 YAHAML has been updated to work in any deployment environment, not just localhost. All services now bind to `0.0.0.0` (all network interfaces) by default and use environment variables for configuration.
 

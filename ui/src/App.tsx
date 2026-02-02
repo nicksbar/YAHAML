@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import { ThemeProvider } from './context/ThemeContext'
+import { BandOccupancy } from './components/BandOccupancy'
+import { MessageCenter } from './components/MessageCenter'
+import { QSOMap } from './components/QSOMap'
+import { StatsPanel } from './components/StatsPanel'
+import { DebugPanel } from './components/DebugPanel'
 
 type BandActivity = {
   id: string
@@ -120,14 +126,17 @@ type RadioAssignment = {
 
 const storageKey = 'yahaml:callsign'
 
-type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin'
+type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
 
 function App() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [contextLogs, setContextLogs] = useState<ContextLog[]>([])
   const [qsoLogs, setQsoLogs] = useState<QsoLog[]>([])
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loading, setLoading] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [error, setError] = useState<string | null>(null)
   const [globalMessages, setGlobalMessages] = useState<Array<{ text: string; type: 'error' | 'success' }>>([])
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -170,6 +179,7 @@ function App() {
   const [clubName, setClubName] = useState('')
   const [clubSection, setClubSection] = useState('')
   const [clubGrid, setClubGrid] = useState('')
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [clubSaveError, setClubSaveError] = useState<string | null>(null)
   const [clubContestId, setClubContestId] = useState('')
   
@@ -238,6 +248,7 @@ function App() {
   // Admin form state
   const [adminListInput, setAdminListInput] = useState('')
   const [availableContests, setAvailableContests] = useState<any[]>([])
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loadingContests, setLoadingContests] = useState(false)
   
   // Apply theme
@@ -609,6 +620,7 @@ function App() {
     }
   }*/
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async function activateFieldDay() {
     try {
       const response = await fetch('/api/admin/activate-field-day', {
@@ -624,6 +636,7 @@ function App() {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async function stopContest() {
     try {
       const response = await fetch('/api/admin/stop-contest', {
@@ -721,6 +734,39 @@ function App() {
   }
 
   useEffect(() => {
+    // Connect to WebSocket for real-time updates
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data)
+        
+        // Handle band/mode change updates from relay
+        if (message.type === 'bandModeChange') {
+          console.log('Band/mode change:', message.data)
+          // Update the station in our state
+          setStations(prev => prev.map(station => 
+            station.id === message.data.stationId
+              ? { ...station, currentBand: message.data.band, currentMode: message.data.mode }
+              : station
+          ))
+        }
+      } catch (error) {
+        console.error('WebSocket message parse error:', error)
+      }
+    }
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error)
+    }
+    
+    return () => {
+      ws.close()
+    }
+  }, [])
+
+  useEffect(() => {
     fetchStations()
     fetchServices()
     fetchContest()
@@ -802,7 +848,8 @@ function App() {
 
   function renderDashboard() {
     return (
-      <div className="dashboard-grid">
+      <div className="dashboard-grid dashboard-v2">
+        {/* Row 1: System Status + Active Stations */}
         <section className="panel system-panel">
           <h2>System Status</h2>
           <div className="toggle-row">
@@ -858,66 +905,17 @@ function App() {
           </div>
         </section>
 
-        <section className="panel stations-panel">
-          <div className="panel-header">
-            <h2>Active Stations</h2>
-            {loading && <span className="pill">Loading...</span>}
-            {error && <span className="pill error">{error}</span>}
-          </div>
-          <div className="station-list">
-            {stations.map((station) => {
-              const active = station.bandActivities[0]
-              const isSelected = station.id === selectedStationId
-              const connected = station.networkStatus?.isConnected
-              return (
-                <button
-                  key={station.id}
-                  className={`station-card ${isSelected ? 'selected' : ''}`}
-                  onClick={() => setSelectedStationId(station.id)}
-                >
-                  <div className="station-main">
-                    <div>
-                      <div className="callsign">{station.callsign}</div>
-                      <div className="details">
-                        {station.class || '--'} {station.section || ''}
-                      </div>
-                    </div>
-                    <div className={`status ${connected ? 'up' : 'down'}`}>
-                      {connected ? 'LIVE' : 'OFF'}
-                    </div>
-                  </div>
-                  <div className="station-meta">
-                    <span>{active?.band || '--'}m</span>
-                    <span>{active?.mode || '--'}</span>
-                    <span>{active?.power ? `${active.power}W` : '–'}</span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </section>
+        {/* Row 2: Band Occupancy + Messages */}
+        <div className="dashboard-row">
+          <BandOccupancy contestId={contest?.id} className="flex-1" />
+          <MessageCenter contestId={contest?.id} className="flex-1" maxMessages={10} />
+        </div>
 
-        <section className="panel activity-panel">
-          <h2>Recent Activity</h2>
-          {selectedStation ? (
-            <div className="activity-feed">
-              {contextLogs.slice(0, 12).map((log) => (
-                <div key={log.id} className="activity-item">
-                  <span className={`tag ${log.level.toLowerCase()}`}>
-                    {log.level}
-                  </span>
-                  <span className="activity-message">{log.message}</span>
-                  <span className="activity-time">
-                    {new Date(log.createdAt).toLocaleTimeString()}
-                  </span>
-                </div>
-              ))}
-              {contextLogs.length === 0 && <p className="empty">No activity</p>}
-            </div>
-          ) : (
-            <p className="empty-state">Select a station to view activity</p>
-          )}
-        </section>
+        {/* Row 3: QSO Map + Stats */}
+        <div className="dashboard-row">
+          <QSOMap contestId={contest?.id} className="flex-1" height="500px" />
+          <StatsPanel contestId={contest?.id} className="flex-1" />
+        </div>
       </div>
     )
   }
@@ -3123,6 +3121,13 @@ function App() {
                 Admin
               </button>
             )}
+            <button
+              className={`nav-btn ${currentView === 'debug' ? 'active' : ''}`}
+              onClick={() => setCurrentView('debug')}
+              title="Debug logs and system status"
+            >
+              🐛 Debug
+            </button>
           </nav>
         </div>
 
@@ -3167,8 +3172,8 @@ function App() {
             backgroundColor: 'rgba(200, 50, 50, 0.95)',
             color: 'white',
           }}>
-            {globalErrors.map((err, idx) => (
-              <div key={idx}>{err}</div>
+            {globalMessages.map((msg, idx) => (
+              <div key={idx}>{msg.text}</div>
             ))}
           </div>
         )}
@@ -3179,9 +3184,18 @@ function App() {
         {currentView === 'logging' && renderLoggingView()}
         {currentView === 'rig' && renderRigView()}
         {currentView === 'admin' && renderAdminView()}
+        {currentView === 'debug' && <DebugPanel />}
       </main>
     </div>
   )
 }
 
-export default App
+function AppWithTheme() {
+  return (
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
+  )
+}
+
+export default AppWithTheme
