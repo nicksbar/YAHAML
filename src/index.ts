@@ -124,6 +124,223 @@ app.get('/auth/google', (_req, res) => {
   return res.status(501).json({ error: 'OAuth flow not implemented yet' });
 });
 
+// Session management endpoints
+// POST /api/sessions - Create a new session (login)
+app.post('/api/sessions', async (req, res) => {
+  try {
+    const { callsign, stationId, browserId } = req.body;
+    
+    if (!callsign || !stationId) {
+      return res.status(400).json({ error: 'callsign and stationId required' });
+    }
+    
+    // Verify station exists
+    const station = await prisma.station.findUnique({
+      where: { id: stationId }
+    });
+    
+    if (!station) {
+      return res.status(404).json({ error: 'Station not found' });
+    }
+    
+    // Generate secure token (base64 encoded random bytes)
+    const token = Buffer.from(`${Date.now()}-${Math.random()}-${callsign}`).toString('base64');
+    
+    // Create session with 20 min expiry
+    const expiresAt = new Date(Date.now() + 20 * 60 * 1000);
+    const session = await prisma.session.create({
+      data: {
+        token,
+        callsign,
+        stationId,
+        browserId: browserId || undefined,
+        expiresAt,
+      }
+    });
+    
+    res.json({ token, expiresAt, sessionId: session.id });
+    return;
+  } catch (error) {
+    console.error('Session creation error:', error);
+    return res.status(500).json({ error: 'Failed to create session' });
+  }
+});
+
+// GET /api/sessions/:token - Validate and refresh session
+app.get('/api/sessions/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    
+    // Find session and check expiry
+    const session = await prisma.session.findUnique({
+      where: { token },
+      include: { station: true }
+    });
+    
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
+    
+    // Check if expired
+    if (new Date() > session.expiresAt) {
+      // Delete expired session
+      await prisma.session.delete({ where: { id: session.id } });
+      return res.status(401).json({ error: 'Session expired' });
+    }
+    
+    // Check for inactivity (20 mins)
+    const now = new Date();
+    const inactiveMs = now.getTime() - session.lastActivity.getTime();
+    const inactiveMin = inactiveMs / (1000 * 60);
+    
+    if (inactiveMin > 20) {
+      // Delete inactive session
+      await prisma.session.delete({ where: { id: session.id } });
+      return res.status(401).json({ error: 'Session expired due to inactivity' });
+    }
+    
+    // Refresh last activity
+    const updatedSession = await prisma.session.update({
+      where: { id: session.id },
+      data: { lastActivity: now }
+    });
+    
+    res.json({
+      valid: true,
+      sessionId: session.id,
+      callsign: session.callsign,
+      stationId: session.stationId,
+      station: session.station,
+      expiresAt: updatedSession.expiresAt,
+      lastActivity: updatedSession.lastActivity
+    });
+    return;
+  } catch (error) {
+    console.error('Session validation error:', error);
+    return res.status(500).json({ error: 'Failed to validate session' });
+  }
+});
+
+// DELETE /api/sessions/:token - Logout (destroy session)
+app.delete('/api/sessions/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    
+    const session = await prisma.session.findUnique({ where: { token } });
+    
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    
+    await prisma.session.delete({ where: { id: session.id } });
+    
+    res.json({ success: true });
+    return;
+  } catch (error) {
+    console.error('Session deletion error:', error);
+    return res.status(500).json({ error: 'Failed to delete session' });
+  }
+});
+
+// Auth middleware - validates session and updates lastActivity
+interface AuthRequest extends express.Request {
+  sessionToken?: string;
+  session?: { id: string; callsign: string; stationId: string };
+}
+
+const authMiddleware = async (
+  req: AuthRequest,
+  res: express.Response,
+  next: express.NextFunction
+): Promise<void> => {
+  try {
+    // Get token from Authorization header or query param
+    const authHeader = req.get('Authorization');
+    const token = authHeader?.replace('Bearer ', '') || req.query.token as string;
+    
+    if (!token) {
+      res.status(401).json({ error: 'No session token' });
+      return;
+    }
+    
+    // Validate session
+    const session = await prisma.session.findUnique({
+      where: { token },
+      include: { station: true }
+    });
+    
+    if (!session) {
+      res.status(401).json({ error: 'Invalid session' });
+      return;
+    }
+    
+    // Check expiry and inactivity
+    const now = new Date();
+    
+    if (now > session.expiresAt) {
+      await prisma.session.delete({ where: { id: session.id } });
+      res.status(401).json({ error: 'Session expired' });
+      return;
+    }
+    
+    const inactiveMs = now.getTime() - session.lastActivity.getTime();
+    const inactiveMin = inactiveMs / (1000 * 60);
+    
+    if (inactiveMin > 20) {
+      await prisma.session.delete({ where: { id: session.id } });
+      res.status(401).json({ error: 'Session expired due to inactivity' });
+      return;
+    }
+    
+    // Update last activity
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { lastActivity: now }
+    });
+    
+    // Attach to request
+    req.sessionToken = token;
+    req.session = {
+      id: session.id,
+      callsign: session.callsign,
+      stationId: session.stationId
+    };
+    
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(500).json({ error: 'Authentication error' });
+  }
+};
+
+// Admin callsign whitelist (in-memory for now)
+let adminCallsignList: string[] = [];
+
+const isAdminCallsign = (callsign?: string | null): boolean => {
+  if (!callsign) {
+    return false;
+  }
+  return adminCallsignList.includes(callsign.toUpperCase());
+};
+
+const requireAdmin = (
+  req: AuthRequest,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  if (adminCallsignList.length === 0) {
+    res.status(403).json({ error: 'Admin callsigns not configured' });
+    return;
+  }
+
+  if (!isAdminCallsign(req.session?.callsign)) {
+    res.status(403).json({ error: 'Admin access required' });
+    return;
+  }
+
+  next();
+};
+
 // Stations endpoints
 app.get('/api/stations', async (req, res) => {
   try {
@@ -222,13 +439,31 @@ app.post('/api/stations', async (req, res) => {
   }
 });
 
-app.patch('/api/stations/:callsign', async (req, res) => {
+app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const validation = await validateCallsign(req.params.callsign);
     if (!validation.valid) {
       return res.status(400).json({
         error: 'Invalid callsign',
         details: 'Callsign format is not valid',
+      });
+    }
+
+    const existingStation = await prisma.station.findUnique({
+      where: { callsign: req.params.callsign },
+    });
+
+    if (!existingStation) {
+      return res.status(404).json({
+        error: 'Station not found',
+        details: 'Save the callsign first or create a new station.',
+      });
+    }
+
+    if (req.session?.stationId !== existingStation.id) {
+      return res.status(403).json({
+        error: 'Unauthorized station update',
+        details: 'You can only update your own station.',
       });
     }
     const { 
@@ -283,9 +518,13 @@ app.patch('/api/stations/:callsign', async (req, res) => {
   }
 });
 
-app.post('/api/band-activity', async (req, res) => {
+app.post('/api/band-activity', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const { stationId, band, mode, frequency, power } = req.body;
+
+    if (req.session?.stationId !== stationId) {
+      return res.status(403).json({ error: 'Unauthorized band activity update' });
+    }
     const activity = await prisma.bandActivity.create({
       data: {
         stationId,
@@ -314,7 +553,8 @@ app.get('/api/qso-logs/:stationId', async (req, res) => {
   }
 });
 
-app.post('/api/qso-logs', async (req, res) => {
+// POST /api/qso-logs with auth - requires valid session
+app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const {
       stationId,
@@ -331,6 +571,11 @@ app.post('/api/qso-logs', async (req, res) => {
       exchange,
       ...rest
     } = req.body;
+
+    // Validate session owns this stationId
+    if (req.session?.stationId !== stationId) {
+      return res.status(403).json({ error: 'Cannot log QSOs for this station - session mismatch' });
+    }
 
     if (!stationId || !callsign || !band || !mode || !qsoDate || !qsoTime) {
       return res.status(400).json({ error: 'Missing required QSO fields' });
@@ -437,7 +682,7 @@ app.post('/api/qso-logs', async (req, res) => {
 });
 
 // Merge QSO log entries (mark duplicates as merged into primary)
-app.post('/api/logs/merge', async (req, res) => {
+app.post('/api/logs/merge', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const { primary_id, duplicate_ids, merge_reason } = req.body;
 
@@ -471,6 +716,17 @@ app.post('/api/logs/merge', async (req, res) => {
 
     if (duplicates.length !== duplicate_ids.length) {
       return res.status(404).json({ error: 'One or more duplicate entries not found' });
+    }
+
+    if (req.session?.stationId !== primary.stationId) {
+      return res.status(403).json({ error: 'Unauthorized log merge' });
+    }
+
+    const hasForeignDuplicate = duplicates.some(
+      entry => entry.stationId !== req.session?.stationId,
+    );
+    if (hasForeignDuplicate) {
+      return res.status(403).json({ error: 'Unauthorized log merge' });
     }
 
     // Atomic merge transaction
@@ -873,10 +1129,19 @@ app.get('/api/debug/all-logs', async (req, res) => {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-app.post('/api/context-logs', async (req, res) => {
+app.post('/api/context-logs', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const stationId = req.body?.stationId || req.session?.stationId;
+
+    if (!stationId || req.session?.stationId !== stationId) {
+      return res.status(403).json({ error: 'Unauthorized context log write' });
+    }
+
     const log = await prisma.contextLog.create({
-      data: req.body,
+      data: {
+        ...req.body,
+        stationId,
+      },
     });
     // Broadcast to debug listeners
     wsManager.broadcast('logs', 'contextLog', log);
@@ -1485,132 +1750,169 @@ app.delete('/api/special-callsigns/:id', async (req, res) => {
 });
 
 // Admin endpoint: Activate a contest by ID
-app.post('/api/admin/activate-contest/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
+app.post(
+  '/api/admin/activate-contest/:id',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
 
-    // Verify contest exists
-    const contest = await prisma.contest.findUnique({
-      where: { id },
-    });
+      // Verify contest exists
+      const contest = await prisma.contest.findUnique({
+        where: { id },
+      });
 
-    if (!contest) {
-      return res.status(404).json({ error: 'Contest not found' });
+      if (!contest) {
+        return res.status(404).json({ error: 'Contest not found' });
+      }
+
+      // Deactivate any other active contests
+      await prisma.contest.updateMany({
+        where: { isActive: true, id: { not: id } },
+        data: { isActive: false },
+      });
+
+      // Activate this contest
+      const updated = await prisma.contest.update({
+        where: { id },
+        data: { isActive: true },
+        include: { clubs: true, template: true },
+      });
+
+      return res.json({ success: true, contest: updated });
+    } catch (error) {
+      return res.status(400).json({ error: 'Failed to activate contest' });
     }
-
-    // Deactivate any other active contests
-    await prisma.contest.updateMany({
-      where: { isActive: true, id: { not: id } },
-      data: { isActive: false },
-    });
-
-    // Activate this contest
-    const updated = await prisma.contest.update({
-      where: { id },
-      data: { isActive: true },
-      include: { clubs: true, template: true },
-    });
-
-    return res.json({ success: true, contest: updated });
-  } catch (error) {
-    return res.status(400).json({ error: 'Failed to activate contest' });
   }
-});
+);
 
 // Admin endpoint: Deactivate the active contest
-app.post('/api/admin/deactivate-contest', async (_req, res) => {
-  try {
-    const updated = await prisma.contest.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    });
+app.post(
+  '/api/admin/deactivate-contest',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (_req: AuthRequest, res) => {
+    try {
+      const updated = await prisma.contest.updateMany({
+        where: { isActive: true },
+        data: { isActive: false },
+      });
 
-    return res.json({ success: true, updated: updated.count });
-  } catch (error) {
-    return res.status(400).json({ error: 'Failed to deactivate contest' });
+      return res.json({ success: true, updated: updated.count });
+    } catch (error) {
+      return res.status(400).json({ error: 'Failed to deactivate contest' });
+    }
   }
-});
+);
 
 // DEPRECATED - Old hardcoded Field Day endpoint (kept for compatibility, use /activate-contest/:id instead)
-app.post('/api/admin/activate-field-day', async (_req, res) => {
-  try {
-    // Deactivate any active contests
-    await prisma.contest.updateMany({
-      where: { isActive: true },
-      data: { isActive: false, endTime: new Date() },
-    });
+app.post(
+  '/api/admin/activate-field-day',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (_req: AuthRequest, res) => {
+    try {
+      // Deactivate any active contests
+      await prisma.contest.updateMany({
+        where: { isActive: true },
+        data: { isActive: false, endTime: new Date() },
+      });
 
-    // Create or activate Field Day contest
-    const now = new Date();
-    const endTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours from now
+      // Create or activate Field Day contest
+      const now = new Date();
+      const endTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours from now
 
-    const contest = await prisma.contest.create({
-      data: {
-        name: 'Field Day',
-        mode: 'FIELD_DAY',
-        isActive: true,
-        startTime: now,
-        endTime,
-        duration: 24,
-        scoringMode: 'ARRL',
-        pointsPerQso: 1,
-        powerBonus: true,
-      },
-    });
+      const contest = await prisma.contest.create({
+        data: {
+          name: 'Field Day',
+          mode: 'FIELD_DAY',
+          isActive: true,
+          startTime: now,
+          endTime,
+          duration: 24,
+          scoringMode: 'ARRL',
+          pointsPerQso: 1,
+          powerBonus: true,
+        },
+      });
 
-    // Log the event
-    await prisma.contextLog.create({
-      data: {
-        stationId: 'admin',
-        level: 'SUCCESS',
-        category: 'NOTE',
-        message: 'Field Day mode activated',
-        details: JSON.stringify({ contestId: contest.id }),
-      },
-    });
+      // Log the event
+      await prisma.contextLog.create({
+        data: {
+          stationId: 'admin',
+          level: 'SUCCESS',
+          category: 'NOTE',
+          message: 'Field Day mode activated',
+          details: JSON.stringify({ contestId: contest.id }),
+        },
+      });
 
-    return res.json({ success: true, contest });
-  } catch (error) {
-    return res.status(400).json({ error: 'Failed to activate Field Day' });
+      return res.json({ success: true, contest });
+    } catch (error) {
+      return res.status(400).json({ error: 'Failed to activate Field Day' });
+    }
   }
-});
+);
 
 // Admin endpoint to deactivate contest
-app.post('/api/admin/stop-contest', async (_req, res) => {
-  try {
-    const contest = await prisma.contest.updateMany({
-      where: { isActive: true },
-      data: { isActive: false, endTime: new Date() },
-    });
+app.post(
+  '/api/admin/stop-contest',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (_req: AuthRequest, res) => {
+    try {
+      const contest = await prisma.contest.updateMany({
+        where: { isActive: true },
+        data: { isActive: false, endTime: new Date() },
+      });
 
-    await prisma.contextLog.create({
-      data: {
-        stationId: 'admin',
-        level: 'INFO',
-        category: 'NOTE',
-        message: 'Contest stopped',
-      },
-    });
+      await prisma.contextLog.create({
+        data: {
+          stationId: 'admin',
+          level: 'INFO',
+          category: 'NOTE',
+          message: 'Contest stopped',
+        },
+      });
 
-    return res.json({ success: true, updated: contest.count });
-  } catch (error) {
-    return res.status(400).json({ error: 'Failed to stop contest' });
+      return res.json({ success: true, updated: contest.count });
+    } catch (error) {
+      return res.status(400).json({ error: 'Failed to stop contest' });
+    }
   }
-});
+);
 
 // Admin callsign whitelist endpoints
-let adminCallsignList: string[] = []; // In-memory for now
+app.get(
+  '/api/admin/callsigns',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  (_req: AuthRequest, res) => {
+    return res.json({ callsigns: adminCallsignList });
+  }
+);
 
-app.get('/api/admin/callsigns', (_req, res) => {
-  return res.json({ callsigns: adminCallsignList });
-});
-
-app.post('/api/admin/callsigns', (req, res) => {
+app.post('/api/admin/callsigns', authMiddleware as express.RequestHandler, (req: AuthRequest, res) => {
   const { callsigns } = req.body;
   if (!Array.isArray(callsigns)) {
     return res.status(400).json({ error: 'callsigns must be an array' });
   }
-  adminCallsignList = callsigns.map((c: string) => c.toUpperCase());
+
+  const normalized = callsigns.map((c: string) => c.toUpperCase());
+  const caller = req.session?.callsign?.toUpperCase();
+
+  if (adminCallsignList.length > 0 && !isAdminCallsign(caller)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  if (adminCallsignList.length === 0 && (!caller || !normalized.includes(caller))) {
+    return res.status(403).json({
+      error: 'Bootstrap requires your callsign in the list',
+    });
+  }
+
+  adminCallsignList = normalized;
   return res.json({ callsigns: adminCallsignList });
 });
 
@@ -1957,8 +2259,8 @@ app.get('/api/radio-assignments/active', async (_req, res) => {
   }
 });
 
-// Assign radio to station
-app.post('/api/radio-assignments', async (req, res) => {
+// Assign radio to station (requires auth - locks rig to callsign when active on logging screen)
+app.post('/api/radio-assignments', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const { radioId, stationId } = req.body;
     
@@ -1966,7 +2268,12 @@ app.post('/api/radio-assignments', async (req, res) => {
       return res.status(400).json({ error: 'radioId and stationId are required' });
     }
     
-    // Deactivate any existing assignments for this radio
+    // Validate session owns this station
+    if (req.session?.stationId !== stationId) {
+      return res.status(403).json({ error: 'Cannot assign radio to this station - session mismatch' });
+    }
+    
+    // Deactivate any existing assignments for this radio (rig is freed up)
     await prisma.radioAssignment.updateMany({
       where: {
         radioId,
@@ -1978,7 +2285,7 @@ app.post('/api/radio-assignments', async (req, res) => {
       },
     });
     
-    // Create new assignment
+    // Create new assignment (rig is now locked to this callsign)
     const assignment = await prisma.radioAssignment.create({
       data: {
         radioId,
@@ -1997,10 +2304,24 @@ app.post('/api/radio-assignments', async (req, res) => {
   }
 });
 
-// Unassign radio from station
-app.post('/api/radio-assignments/:id/unassign', async (req, res) => {
+// Unassign radio from station (frees up rig when not in use)
+app.post('/api/radio-assignments/:id/unassign', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await prisma.radioAssignment.update({
+    const assignment = await prisma.radioAssignment.findUnique({
+      where: { id: req.params.id },
+      include: { station: true }
+    });
+    
+    if (!assignment) {
+      return res.status(404).json({ error: 'Assignment not found' });
+    }
+    
+    // Validate session owns this station
+    if (req.session?.stationId !== assignment.stationId) {
+      return res.status(403).json({ error: 'Cannot unassign radio from this station - session mismatch' });
+    }
+    
+    const updated = await prisma.radioAssignment.update({
       where: { id: req.params.id },
       data: {
         isActive: false,
@@ -2012,7 +2333,7 @@ app.post('/api/radio-assignments/:id/unassign', async (req, res) => {
       },
     });
     
-    return res.json(assignment);
+    return res.json(updated);
   } catch (error: any) {
     if (error.code === 'P2025') {
       return res.status(404).json({ error: 'Assignment not found' });

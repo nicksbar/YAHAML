@@ -9,6 +9,7 @@
 
 import http from 'http';
 import net from 'net';
+import crypto from 'crypto';
 import prisma from '../src/db';
 import { wsManager } from '../src/websocket';
 
@@ -97,6 +98,8 @@ export async function cleanDatabase(options?: { preserveTemplates?: boolean }) {
   
   try {
     // Delete in FK dependency order
+    await prisma.auditLog.deleteMany();
+    await prisma.session.deleteMany();
     await prisma.logAggregate.deleteMany();
     await prisma.logEntry.deleteMany();
     await prisma.radioAssignment.deleteMany();
@@ -150,6 +153,9 @@ export async function cleanupTestRecords(ids: {
       });
     }
     if (ids.stationIds?.length) {
+      await prisma.session.deleteMany({
+        where: { stationId: { in: ids.stationIds } }
+      });
       await prisma.station.deleteMany({
         where: { id: { in: ids.stationIds } }
       });
@@ -157,6 +163,31 @@ export async function cleanupTestRecords(ids: {
   } catch (error) {
     console.warn('[Test Helper] Cleanup warning:', error instanceof Error ? error.message : error);
   }
+}
+
+/**
+ * Create a test session for authenticated endpoints
+ */
+export async function createTestSession(params: {
+  stationId: string;
+  callsign: string;
+  browserId?: string;
+  expiresInMinutes?: number;
+}): Promise<{ token: string; sessionId: string }> {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = new Date(Date.now() + (params.expiresInMinutes ?? 20) * 60 * 1000);
+
+  const session = await prisma.session.create({
+    data: {
+      token,
+      callsign: params.callsign,
+      stationId: params.stationId,
+      browserId: params.browserId,
+      expiresAt,
+    },
+  });
+
+  return { token, sessionId: session.id };
 }
 
 /**

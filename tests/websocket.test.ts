@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import WebSocket from 'ws';
 import { PrismaClient } from '@prisma/client';
-import { ensureServerRunning, stopTestServer, cleanupTestRecords } from './test-helpers';
+import { ensureServerRunning, stopTestServer, cleanupTestRecords, createTestSession } from './test-helpers';
 
 const API_URL = 'http://127.0.0.1:3000';
 const WS_URL = 'ws://127.0.0.1:3000/ws';
@@ -51,6 +51,7 @@ describe('WebSocket Integration', () => {
   let ws: WebSocket;
   let stationId: string;
   let contestId: string;
+  let sessionToken: string;
   let testStationIds: string[] = [];
   let testContestIds: string[] = [];
 
@@ -80,6 +81,12 @@ describe('WebSocket Integration', () => {
     });
     stationId = station.id;
     testStationIds.push(stationId);
+
+    const session = await createTestSession({
+      stationId,
+      callsign: station.callsign,
+    });
+    sessionToken = session.token;
 
     // Create test contest
     const contest = await prisma.contest.create({
@@ -220,7 +227,10 @@ describe('WebSocket Integration', () => {
       // Create log entry via API
       await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           stationId,
           contestId,
@@ -279,7 +289,10 @@ describe('WebSocket Integration', () => {
       // Create log entry
       await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           stationId,
           contestId,
@@ -312,7 +325,10 @@ describe('WebSocket Integration', () => {
       // Create first entry
       const response1 = await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           stationId,
           contestId,
@@ -351,7 +367,10 @@ describe('WebSocket Integration', () => {
 
       const response2 = await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           stationId,
           contestId,
@@ -402,7 +421,10 @@ describe('WebSocket Integration', () => {
       // Create log entry
       await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           stationId,
           contestId,
@@ -446,7 +468,10 @@ describe('WebSocket Integration', () => {
       // Create log entry
       await fetch(`${API_URL}/api/qso-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           stationId,
           contestId,

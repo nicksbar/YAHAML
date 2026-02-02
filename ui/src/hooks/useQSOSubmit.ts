@@ -44,10 +44,13 @@ export function useQSOSubmit(options?: UseQSOSubmitOptions) {
           contestId: options?.contestId,
         }
 
+        const token = localStorage.getItem('yahaml:sessionToken')
+
         const response = await fetch('/api/qso-logs', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify(payload),
         })

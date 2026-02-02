@@ -72,6 +72,7 @@ model Station {
   qsoContacts    QSOContact[]
   contestStats   ContestStats[]
   bandOccupancy  BandOccupancy[]
+  sessions       Session[]
 
   @@index([clubId])
   @@index([locationId])
@@ -616,5 +617,48 @@ model BandOccupancy {
   @@map("band_occupancy")
 }
 
-// Add radioAssignments to Station
-// (Updated Station model below)
+// Session management for local multi-operator deployments
+model Session {
+  id          String   @id @default(cuid())
+  token       String   @unique
+  callsign    String   // Operator callsign
+  stationId   String
+  
+  // Session lifetime: 20 mins inactivity = logout
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime // Explicit expiry time (20 mins from now)
+  lastActivity DateTime @default(now()) @updatedAt // Updated on every API call
+  
+  // Client tracking for rig locking
+  browserId   String?  // Browser session ID for rig locking
+  
+  // Relations
+  station     Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  
+  @@index([callsign])
+  @@index([stationId])
+  @@index([expiresAt])
+  @@index([lastActivity])
+  @@map("sessions")
+}
+
+// Audit log for sensitive operations (optional but recommended)
+model AuditLog {
+  id          String   @id @default(cuid())
+  sessionId   String?  // Session that performed action (nullable for system actions)
+  callsign    String   // Operator callsign
+  action      String   // "rig_locked", "rig_released", "contest_changed", "qso_logged", etc.
+  resourceType String  // "RadioAssignment", "LogEntry", "Station", etc.
+  resourceId  String   // ID of affected resource
+  changes     String?  // JSON of what changed (optional)
+  ipAddress   String?  // Client IP (optional)
+  userAgent   String?  // Browser user agent (optional)
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([callsign])
+  @@index([sessionId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

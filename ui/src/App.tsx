@@ -125,6 +125,8 @@ type RadioAssignment = {
 }
 
 const storageKey = 'yahaml:callsign'
+const sessionTokenKey = 'yahaml:sessionToken'
+const browserIdKey = 'yahaml:browserId'
 
 type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
 
@@ -143,11 +145,16 @@ function App() {
   const [callsignInput, setCallsignInput] = useState(
     localStorage.getItem(storageKey) || '',
   )
+  const [sessionToken, setSessionToken] = useState(
+    localStorage.getItem(sessionTokenKey) || '',
+  )
   const [services, setServices] = useState<ServiceStatus | null>(null)
   const [contest, setContest] = useState<Contest | null>(null)
   const [adminCallsigns, setAdminCallsigns] = useState<string[]>([])
   const [isAdmin, setIsAdmin] = useState(true) // Default true, checked after loading admin list
   const [currentView, setCurrentView] = useState<ViewType>('dashboard')
+  const [showCallsignPicker, setShowCallsignPicker] = useState(false)
+  const [allowCallsignSetup, setAllowCallsignSetup] = useState(false)
   const [clubs, setClubs] = useState<any[]>([])
   
   // Contest templates state
@@ -274,6 +281,75 @@ function App() {
     () => stations.find((station) => station.id === selectedStationId) || null,
     [stations, selectedStationId],
   )
+
+  const sortedStations = useMemo(
+    () => [...stations].sort((a, b) => a.callsign.localeCompare(b.callsign)),
+    [stations],
+  )
+
+  const getAuthHeaders = () =>
+    sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
+
+  const getBrowserId = () => {
+    let id = localStorage.getItem(browserIdKey)
+    if (!id) {
+      id = crypto.randomUUID()
+      localStorage.setItem(browserIdKey, id)
+    }
+    return id
+  }
+
+  const clearSession = () => {
+    localStorage.removeItem(sessionTokenKey)
+    setSessionToken('')
+  }
+
+  const establishSession = async (station: Station) => {
+    try {
+      const response = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callsign: station.callsign,
+          stationId: station.id,
+          browserId: getBrowserId(),
+        }),
+      })
+
+      if (!response.ok) {
+        clearSession()
+        return
+      }
+
+      const data = await response.json()
+      localStorage.setItem(sessionTokenKey, data.token)
+      setSessionToken(data.token)
+    } catch (error) {
+      console.error('Failed to create session:', error)
+      clearSession()
+    }
+  }
+
+  const activateCallsign = async (callsign: string) => {
+    localStorage.setItem(storageKey, callsign)
+    setCallsignInput(callsign)
+
+    const station = stations.find((s) => s.callsign === callsign)
+    if (station) {
+      setSelectedStationId(station.id)
+      await establishSession(station)
+    }
+    await fetchAdminList()
+  }
+
+  const clearCallsign = () => {
+    localStorage.removeItem(storageKey)
+    clearSession()
+    setCallsignInput('')
+    setSelectedStationId(null)
+    setCurrentView('dashboard')
+    setAllowCallsignSetup(false)
+  }
   
   async function fetchContestTemplates() {
     try {
@@ -463,8 +539,12 @@ function App() {
       if (!response.ok) throw new Error('Failed to load stations')
       const data = (await response.json()) as Station[]
       setStations(data)
-      if (!selectedStationId && data.length > 0) {
-        setSelectedStationId(data[0].id)
+      const storedCallsign = localStorage.getItem(storageKey)
+      if (!selectedStationId && storedCallsign) {
+        const matched = data.find((station) => station.callsign === storedCallsign)
+        if (matched) {
+          setSelectedStationId(matched.id)
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -541,7 +621,13 @@ function App() {
 
   async function fetchAdminList() {
     try {
-      const response = await fetch('/api/admin/callsigns')
+      if (!sessionToken) {
+        setIsAdmin(false)
+        return
+      }
+      const response = await fetch('/api/admin/callsigns', {
+        headers: getAuthHeaders(),
+      })
       if (response.ok) {
         const data = await response.json()
         setAdminCallsigns(data.callsigns || [])
@@ -554,7 +640,7 @@ function App() {
         }
       }
     } catch {
-      setIsAdmin(true) // Default to admin on error
+      setIsAdmin(false)
     }
   }
 
@@ -577,7 +663,7 @@ function App() {
     try {
       const response = await fetch(`/api/admin/activate-contest/${contestId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({}),
       })
       if (response.ok) {
@@ -594,7 +680,7 @@ function App() {
     try {
       const response = await fetch('/api/admin/deactivate-contest', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ contestId: contest.id }),
       })
       if (response.ok) {
@@ -659,6 +745,7 @@ function App() {
     try {
       const response = await fetch('/api/admin/activate-field-day', {
         method: 'POST',
+        headers: { ...getAuthHeaders() },
       })
       if (response.ok) {
         const data = await response.json()
@@ -675,6 +762,7 @@ function App() {
     try {
       const response = await fetch('/api/admin/stop-contest', {
         method: 'POST',
+        headers: { ...getAuthHeaders() },
       })
       if (response.ok) {
         setContest(null)
@@ -695,6 +783,7 @@ function App() {
     setStationFormErrors((prev) => ({ ...prev, callsign: undefined }))
 
     try {
+      let stationRecord: Station | null = null
       // Check if station exists
       let response = await fetch(`/api/stations?callsign=${encodeURIComponent(callsign)}`)
       let stationsList = await response.json()
@@ -712,6 +801,7 @@ function App() {
         })
         if (response.ok) {
           const newStation = await response.json()
+          stationRecord = newStation
           // Add to local state without triggering fetchStationDetails
           setStations((prev) => [...prev, newStation])
         } else {
@@ -739,11 +829,17 @@ function App() {
         }
       } else {
         // Station already exists, load its profile
-        await fetchStationDetails(callsign)
+        stationRecord = stationsList[0] || null
       }
       
       localStorage.setItem(storageKey, callsign)
       setCallsignInput(callsign)
+      if (stationRecord?.id) {
+        setSelectedStationId(stationRecord.id)
+        await fetchStationDetails(stationRecord.id)
+        await establishSession(stationRecord)
+        setAllowCallsignSetup(false)
+      }
       setStationFormErrors((prev) => ({ ...prev, callsign: undefined }))
       await fetchAdminList() // Recheck admin status
       // Don't load station details here - let user keep their HamDB lookup results
@@ -752,6 +848,28 @@ function App() {
       console.error('Failed to save callsign:', error)
       addError('Failed to save callsign')
     }
+  }
+
+  const handleCallsignSelect = async (value: string) => {
+    if (value === '__new__') {
+      setCallsignInput('')
+      setAllowCallsignSetup(true)
+      setCurrentView('station')
+      setShowCallsignPicker(false)
+      return
+    }
+    if (value === '__unset__') {
+      clearCallsign()
+      setAllowCallsignSetup(false)
+      setShowCallsignPicker(false)
+      return
+    }
+    if (!value) {
+      return
+    }
+    await activateCallsign(value)
+    setAllowCallsignSetup(false)
+    setShowCallsignPicker(false)
   }
 
   async function lookupCallsignInHamDB(callsign: string) {
@@ -792,7 +910,7 @@ function App() {
     try {
       const response = await fetch(`/api/stations/${callsign}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           name: stationName,
           class: stationLicenseClass,
@@ -833,7 +951,7 @@ function App() {
           }
           const retryResponse = await fetch(`/api/stations/${callsign}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({
               name: stationName,
               class: stationLicenseClass,
@@ -888,7 +1006,7 @@ function App() {
     try {
       const response = await fetch(`/api/stations/${callsign}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ clubId: clubId || null }),
       })
       if (response.ok) {
@@ -910,7 +1028,7 @@ function App() {
     try {
       const response = await fetch(`/api/stations/${callsign}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ contestId: contestId || null }),
       })
       if (response.ok) {
@@ -987,12 +1105,24 @@ function App() {
   }, [callsignInput, adminCallsigns])
 
   useEffect(() => {
-    // Only load form data on initial page load from localStorage callsign
-    const currentCall = localStorage.getItem(storageKey)
-    if (currentCall) {
-      fetchStationDetails(currentCall)
+    if (selectedStationId) {
+      fetchStationDetails(selectedStationId)
     }
-  }, []) // Only run once on mount
+  }, [selectedStationId])
+
+  useEffect(() => {
+    const storedCall = localStorage.getItem(storageKey)
+    if (!storedCall) return
+    const station = stations.find((s) => s.callsign === storedCall)
+    if (station) {
+      if (selectedStationId !== station.id) {
+        setSelectedStationId(station.id)
+      }
+      if (!sessionToken) {
+        establishSession(station)
+      }
+    }
+  }, [stations, selectedStationId, sessionToken])
 
   useEffect(() => {
     if (!autoRefresh) return
@@ -1037,7 +1167,22 @@ function App() {
   const addError = (msg: string) => addMessage(msg, 'error')
   const addSuccess = (msg: string) => addMessage(msg, 'success')
 
-  const currentCallsign = localStorage.getItem(storageKey) || 'Not set'
+  const currentCallsign = localStorage.getItem(storageKey) || ''
+  const callsignDisplay = currentCallsign || 'Not set'
+  const hasActiveCallsign = currentCallsign.trim().length > 0
+  const effectiveView = hasActiveCallsign
+    ? currentView
+    : allowCallsignSetup
+      ? 'station'
+      : 'dashboard'
+
+  const handleViewChange = (view: ViewType) => {
+    if (!hasActiveCallsign && view !== 'dashboard' && !(view === 'station' && allowCallsignSetup)) {
+      addError('Select a callsign to continue.')
+      return
+    }
+    setCurrentView(view)
+  }
 
   function renderDashboard() {
     return (
@@ -2407,7 +2552,7 @@ function App() {
                             try {
                               const response = await fetch('/api/radio-assignments', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                                 body: JSON.stringify({
                                   radioId: radio.id,
                                   stationId,
@@ -2439,6 +2584,7 @@ function App() {
                             try {
                               const response = await fetch(`/api/radio-assignments/${assignment.id}/unassign`, {
                                 method: 'POST',
+                                headers: { ...getAuthHeaders() },
                               })
                               if (response.ok) {
                                 await fetchRadios()
@@ -2742,7 +2888,7 @@ function App() {
     try {
       const response = await fetch(`/api/stations/${callsign}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           locationId: selectedLocationId,
         }),
@@ -3206,7 +3352,7 @@ function App() {
       try {
         const response = await fetch('/api/admin/callsigns', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({ callsigns }),
         })
         if (response.ok) {
@@ -3287,56 +3433,67 @@ function App() {
           
           <nav className="nav-items">
             <button
-              className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setCurrentView('dashboard')}
+              className={`nav-btn ${effectiveView === 'dashboard' ? 'active' : ''}`}
+              onClick={() => handleViewChange('dashboard')}
             >
               Dashboard
             </button>
             <button
-              className={`nav-btn ${currentView === 'club' ? 'active' : ''}`}
-              onClick={() => setCurrentView('club')}
+              className={`nav-btn ${effectiveView === 'club' ? 'active' : ''}`}
+              onClick={() => handleViewChange('club')}
+              disabled={!hasActiveCallsign}
             >
               Club
             </button>
             <button
-              className={`nav-btn ${currentView === 'contests' ? 'active' : ''}`}
+              className={`nav-btn ${effectiveView === 'contests' ? 'active' : ''}`}
               onClick={() => {
-                setCurrentView('contests')
+                if (!hasActiveCallsign) {
+                  addError('Select a callsign to continue.')
+                  return
+                }
+                handleViewChange('contests')
                 fetchContestTemplates()
                 fetchUpcomingContests()
               }}
+              disabled={!hasActiveCallsign}
             >
               Contests
             </button>
             <button
-              className={`nav-btn ${currentView === 'station' ? 'active' : ''}`}
-              onClick={() => setCurrentView('station')}
+              className={`nav-btn ${effectiveView === 'station' ? 'active' : ''}`}
+              onClick={() => handleViewChange('station')}
+              disabled={!hasActiveCallsign}
             >
               Station
             </button>
             <button
-              className={`nav-btn ${currentView === 'logging' ? 'active' : ''}`}
-              onClick={() => setCurrentView('logging')}
+              className={`nav-btn ${effectiveView === 'logging' ? 'active' : ''}`}
+              onClick={() => handleViewChange('logging')}
+              disabled={!hasActiveCallsign}
             >
               Logging
             </button>
             <button
-              className={`nav-btn ${currentView === 'rig' ? 'active' : ''}`}
-              onClick={() => setCurrentView('rig')}
+              className={`nav-btn ${effectiveView === 'rig' ? 'active' : ''}`}
+              onClick={() => handleViewChange('rig')}
+              disabled={!hasActiveCallsign}
             >
               Rig
             </button>
             {isAdmin && (
               <button
-                className={`nav-btn ${currentView === 'admin' ? 'active' : ''}`}
-                onClick={() => setCurrentView('admin')}
+                className={`nav-btn ${effectiveView === 'admin' ? 'active' : ''}`}
+                onClick={() => handleViewChange('admin')}
+                disabled={!hasActiveCallsign}
               >
                 Admin
               </button>
             )}
             <button
-              className={`nav-btn ${currentView === 'debug' ? 'active' : ''}`}
-              onClick={() => setCurrentView('debug')}
+              className={`nav-btn ${effectiveView === 'debug' ? 'active' : ''}`}
+              onClick={() => handleViewChange('debug')}
+              disabled={!hasActiveCallsign}
               title="Debug logs and system status"
             >
               🐛 Debug
@@ -3379,8 +3536,42 @@ function App() {
           <button className="btn-icon" onClick={fetchStations} title="Refresh">
             🔄
           </button>
-          
-          <span className="callsign-chip">{currentCallsign}</span>
+
+          <div className="callsign-picker">
+            <button
+              className={`callsign-toggle ${hasActiveCallsign ? '' : 'callsign-toggle--empty'}`}
+              onClick={() => setShowCallsignPicker((prev) => !prev)}
+              aria-expanded={showCallsignPicker}
+            >
+              <span>{callsignDisplay}</span>
+              <span className="callsign-toggle-caret">▾</span>
+            </button>
+            {showCallsignPicker && (
+              <div className="callsign-picker-panel">
+                <div className="callsign-picker-title">Select Callsign</div>
+                <div className="quick-select">
+                  {sortedStations.map((station) => (
+                    <button
+                      key={station.id}
+                      className={`quick-btn ${station.callsign === currentCallsign ? 'active' : ''}`}
+                      onClick={() => handleCallsignSelect(station.callsign)}
+                    >
+                      {station.callsign}
+                    </button>
+                  ))}
+                  <button className="quick-btn secondary" onClick={() => handleCallsignSelect('__new__')}>
+                    ＋ Add new callsign
+                  </button>
+                  {hasActiveCallsign && (
+                    <button className="quick-btn" onClick={() => handleCallsignSelect('__unset__')}>
+                      Unset callsign
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
         </div>
       </header>
 
@@ -3392,14 +3583,19 @@ function App() {
             ))}
           </div>
         )}
-        {currentView === 'dashboard' && renderDashboard()}
-        {currentView === 'club' && renderClubView()}
-        {currentView === 'contests' && renderContestsView()}
-        {currentView === 'station' && renderStationView()}
-        {currentView === 'logging' && renderLoggingView()}
-        {currentView === 'rig' && renderRigView()}
-        {currentView === 'admin' && renderAdminView()}
-        {currentView === 'debug' && <DebugPanel />}
+        {!hasActiveCallsign && !allowCallsignSetup && (
+          <div className="callsign-gate">
+            <strong>Callsign required.</strong> Select one from the top-right selector to unlock logging, station, and rig tabs.
+          </div>
+        )}
+        {effectiveView === 'dashboard' && renderDashboard()}
+        {effectiveView === 'club' && renderClubView()}
+        {effectiveView === 'contests' && renderContestsView()}
+        {effectiveView === 'station' && renderStationView()}
+        {effectiveView === 'logging' && renderLoggingView()}
+        {effectiveView === 'rig' && renderRigView()}
+        {effectiveView === 'admin' && renderAdminView()}
+        {effectiveView === 'debug' && <DebugPanel />}
       </main>
     </div>
   )

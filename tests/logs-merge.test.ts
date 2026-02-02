@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import { PrismaClient } from '@prisma/client';
-import { ensureServerRunning, stopTestServer, cleanupTestRecords } from './test-helpers';
+import { ensureServerRunning, stopTestServer, cleanupTestRecords, createTestSession } from './test-helpers';
 
 const prisma = new PrismaClient();
 const API_URL = 'http://localhost:3000';
@@ -12,6 +12,7 @@ describe('Merge API Endpoints', () => {
   let primaryId: string;
   let duplicate1Id: string;
   let duplicate2Id: string;
+  let sessionToken: string;
   let testStationIds: string[] = [];
   let testContestIds: string[] = [];
 
@@ -38,6 +39,12 @@ describe('Merge API Endpoints', () => {
     });
     stationId = station.id;
     testStationIds.push(stationId);
+
+    const session = await createTestSession({
+      stationId,
+      callsign: station.callsign,
+    });
+    sessionToken = session.token;
 
     // Create test contest
     const contest = await prisma.contest.create({
@@ -108,7 +115,10 @@ describe('Merge API Endpoints', () => {
     it('should merge duplicate entries into primary', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           primary_id: primaryId,
           duplicate_ids: [duplicate1Id, duplicate2Id],
@@ -137,7 +147,10 @@ describe('Merge API Endpoints', () => {
     it('should return 400 if primary_id is missing', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           duplicate_ids: [duplicate1Id],
         }),
@@ -151,7 +164,10 @@ describe('Merge API Endpoints', () => {
     it('should return 400 if duplicate_ids is empty', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           primary_id: primaryId,
           duplicate_ids: [],
@@ -164,7 +180,10 @@ describe('Merge API Endpoints', () => {
     it('should return 400 if primary_id is in duplicate_ids', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           primary_id: primaryId,
           duplicate_ids: [primaryId, duplicate1Id],
@@ -179,7 +198,10 @@ describe('Merge API Endpoints', () => {
     it('should return 404 if primary entry does not exist', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           primary_id: 'nonexistent',
           duplicate_ids: [duplicate1Id],
@@ -194,7 +216,10 @@ describe('Merge API Endpoints', () => {
     it('should return 404 if one or more duplicate entries do not exist', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           primary_id: primaryId,
           duplicate_ids: [duplicate1Id, 'nonexistent'],
@@ -207,7 +232,10 @@ describe('Merge API Endpoints', () => {
     it('should use default merge_reason if not provided', async () => {
       const response = await fetch(`${API_URL}/api/logs/merge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           primary_id: primaryId,
           duplicate_ids: [duplicate1Id],
