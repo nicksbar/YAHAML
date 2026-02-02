@@ -30,7 +30,7 @@ describe('Location API', () => {
 
   beforeEach(async () => {
     await teardownTestDB(); // Clean first
-    await setupTestDB();
+    await setupTestDB({ skipTestData: true });
     app = createTestApp();
   });
 

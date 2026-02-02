@@ -125,9 +125,19 @@ app.get('/auth/google', (_req, res) => {
 });
 
 // Stations endpoints
-app.get('/api/stations', async (_req, res) => {
+app.get('/api/stations', async (req, res) => {
   try {
+    const callsignQuery = typeof req.query.callsign === 'string' ? req.query.callsign.trim() : '';
+    const whereClause = callsignQuery
+      ? {
+          callsign: {
+            equals: callsignQuery,
+            mode: 'insensitive',
+          },
+        }
+      : undefined;
     const stations = await prisma.station.findMany({
+      where: whereClause,
       include: {
         location: true,
         bandActivities: true,
@@ -145,8 +155,13 @@ app.get('/api/stations', async (_req, res) => {
 
 app.get('/api/stations/:id', async (req, res) => {
   try {
+    // Support both ID and callsign lookups
+    const isId = /^[a-z0-9]+$/.test(req.params.id) && req.params.id.length > 10;
+    console.log(`Fetching station: id="${req.params.id}", isId=${isId}`);
     const station = await prisma.station.findUnique({
-      where: { id: req.params.id },
+      where: isId 
+        ? { id: req.params.id }
+        : { callsign: req.params.id.toUpperCase() },
       include: {
         location: true,
         bandActivities: true,
@@ -155,8 +170,13 @@ app.get('/api/stations/:id', async (req, res) => {
         networkStatus: true,
       },
     });
+    console.log(`Station result:`, station);
+    if (!station) {
+      return res.status(404).json({ error: 'Station not found' });
+    }
     return res.json(station);
   } catch (error) {
+    console.error('Error fetching station:', error);
     return res.status(500).json({ error: 'Failed to fetch station' });
   }
 });
@@ -164,6 +184,13 @@ app.get('/api/stations/:id', async (req, res) => {
 app.post('/api/stations', async (req, res) => {
   try {
     const { callsign, name, class: stationClass, locationId } = req.body;
+    const validation = await validateCallsign(callsign);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: 'Invalid callsign',
+        details: 'Callsign format is not valid',
+      });
+    }
     const station = await prisma.station.create({
       data: {
         callsign,
@@ -174,26 +201,85 @@ app.post('/api/stations', async (req, res) => {
     });
     return res.status(201).json(station);
   } catch (error) {
-    return res.status(400).json({ error: 'Failed to create station' });
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        return res.status(409).json({
+          error: 'Callsign already exists',
+          details: 'A station with this callsign is already registered.',
+        });
+      }
+      if (error.code === 'P2003') {
+        return res.status(400).json({
+          error: 'Invalid location',
+          details: 'The selected location does not exist.',
+        });
+      }
+    }
+    return res.status(400).json({
+      error: 'Failed to create station',
+      details: 'Please verify the callsign and required fields and try again.',
+    });
   }
 });
 
 app.patch('/api/stations/:callsign', async (req, res) => {
   try {
-    const { name, class: stationClass, section, locationId, clubId } = req.body;
+    const validation = await validateCallsign(req.params.callsign);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: 'Invalid callsign',
+        details: 'Callsign format is not valid',
+      });
+    }
+    const { 
+      name, 
+      class: stationClass, 
+      section,
+      address,
+      city,
+      state,
+      zip,
+      country,
+      locationId, 
+      clubId,
+      contestId
+    } = req.body;
     const station = await prisma.station.update({
       where: { callsign: req.params.callsign },
       data: {
         name,
         class: stationClass,
         section, // Deprecated but still supported for backward compatibility
+        address,
+        city,
+        state,
+        zip,
+        country,
         locationId,
         clubId,
+        contestId,
       },
     });
     return res.json(station);
   } catch (error) {
-    return res.status(400).json({ error: 'Failed to update station' });
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2025') {
+        return res.status(404).json({
+          error: 'Station not found',
+          details: 'Save the callsign first or create a new station.',
+        });
+      }
+      if (error.code === 'P2003') {
+        return res.status(400).json({
+          error: 'Invalid reference',
+          details: 'The selected club or location does not exist.',
+        });
+      }
+    }
+    return res.status(400).json({
+      error: 'Failed to update station',
+      details: 'Please check the form values and try again.',
+    });
   }
 });
 

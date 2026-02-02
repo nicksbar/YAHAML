@@ -3,15 +3,43 @@
  */
 import prisma from '../src/db';
 
-export async function setupTestDB() {
-  // Create test data
+export async function setupTestDB(options?: { skipTestData?: boolean }) {
+  const { skipTestData = false } = options || {};
+
+  if (skipTestData) {
+    return { 
+      station: undefined as any, 
+      club: undefined as any, 
+      location: undefined as any 
+    };
+  }
+
+  // Always create test data (station, club, location)
   const station = await prisma.station.create({
     data: {
       callsign: 'TEST-UNIT',
       name: 'Unit Test Station',
     },
   });
-  return { station };
+
+  const club = await prisma.club.create({
+    data: {
+      name: 'Test Club',
+      callsign: 'TEST-CLUB',
+      section: 'CA',
+    },
+  });
+
+  const location = await prisma.location.create({
+    data: {
+      name: 'Test Location',
+      latitude: '40.7128',
+      longitude: '-74.0060',
+      grid: 'FN30',
+    },
+  });
+
+  return { station, club, location };
 }
 
 export async function teardownTestDB() {

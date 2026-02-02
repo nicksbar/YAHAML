@@ -6,7 +6,7 @@ import { MessageCenter } from './components/MessageCenter'
 import { QSOMap } from './components/QSOMap'
 import { StatsPanel } from './components/StatsPanel'
 import { DebugPanel } from './components/DebugPanel'
-
+import { LoggingPage } from './components/LoggingPage'
 type BandActivity = {
   id: string
   band: string
@@ -194,6 +194,13 @@ function App() {
   const [stationClubId, setStationClubId] = useState('')
   const [stationContestId, setStationContestId] = useState('')
   const [stationLookupLoading, setStationLookupLoading] = useState(false)
+  const [stationFormErrors, setStationFormErrors] = useState<{
+    callsign?: string
+    clubId?: string
+    locationId?: string
+    name?: string
+    licenseClass?: string
+  }>({})
   
   // Special callsign form state
   const [specialCallsigns, setSpecialCallsigns] = useState<any[]>([])
@@ -468,18 +475,45 @@ function App() {
 
   async function fetchStationDetails(stationId: string) {
     try {
-      const [contextResponse, qsoResponse] = await Promise.all([
-        fetch(`/api/context-logs/${stationId}`),
-        fetch(`/api/qso-logs/${stationId}`),
-      ])
-      if (contextResponse.ok) {
-        setContextLogs((await contextResponse.json()) as ContextLog[])
+      const stationResponse = await fetch(`/api/stations/${stationId}`)
+      
+      if (stationResponse.ok) {
+        const station = await stationResponse.json()
+        console.log('Loaded station:', station)
+        // Populate form with station details
+        setStationName(station.name || '')
+        setStationLicenseClass(station.class || '')
+        setStationAddress(station.address || '')
+        setStationCity(station.city || '')
+        setStationState(station.state || '')
+        setStationZip(station.zip || '')
+        setStationCountry(station.country || '')
+        if (station.clubId) setStationClubId(station.clubId)
+        if (station.locationId) setSelectedLocationId(station.locationId)
+        if (station.contestId) setStationContestId(station.contestId)
+        
+        // Only load context/QSO logs if we have the station ID
+        if (station.id) {
+          const [contextResponse, qsoResponse] = await Promise.all([
+            fetch(`/api/context-logs/${station.id}`),
+            fetch(`/api/qso-logs/${station.id}`),
+          ])
+          if (contextResponse.ok) {
+            setContextLogs((await contextResponse.json()) as ContextLog[])
+          }
+          if (qsoResponse.ok) {
+            setQsoLogs((await qsoResponse.json()) as QsoLog[])
+          }
+        }
+      } else if (stationResponse.status === 404) {
+        console.log('Station not found (new station):', stationId)
+        // Station doesn't exist yet - form stays empty for HamDB lookup
+      } else {
+        const err = await stationResponse.json().catch(() => ({}))
+        console.error('Error loading station:', err)
       }
-      if (qsoResponse.ok) {
-        setQsoLogs((await qsoResponse.json()) as QsoLog[])
-      }
-    } catch {
-      // silent
+    } catch (err) {
+      console.error('Error fetching station details:', err)
     }
   }
 
@@ -653,13 +687,22 @@ function App() {
 
   async function saveCallsign() {
     const callsign = callsignInput.trim().toUpperCase()
-    if (!callsign) return
+    if (!callsign) {
+      addError('Callsign is required')
+      setStationFormErrors((prev) => ({ ...prev, callsign: 'Callsign is required' }))
+      return
+    }
+    setStationFormErrors((prev) => ({ ...prev, callsign: undefined }))
 
     try {
       // Check if station exists
-      let response = await fetch(`/api/stations?callsign=${callsign}`)
+      let response = await fetch(`/api/stations?callsign=${encodeURIComponent(callsign)}`)
       let stationsList = await response.json()
       
+      if (!Array.isArray(stationsList)) {
+        stationsList = []
+      }
+
       if (stationsList.length === 0) {
         // Create new station
         response = await fetch('/api/stations', {
@@ -668,15 +711,46 @@ function App() {
           body: JSON.stringify({ callsign, name: callsign }),
         })
         if (response.ok) {
-          await fetchStations()
+          const newStation = await response.json()
+          // Add to local state without triggering fetchStationDetails
+          setStations((prev) => [...prev, newStation])
+        } else {
+          const data = await response.json().catch(() => ({}))
+          if (response.status === 409) {
+            addError('Callsign already exists. Select it from the station list.')
+            setStationFormErrors((prev) => ({
+              ...prev,
+              callsign: 'Callsign already exists. Select it from the station list.',
+            }))
+            return
+          }
+          if (data.details) {
+            addError(`${data.error || 'Failed to save callsign'}: ${data.details}`)
+            if ((data.details as string).toLowerCase().includes('callsign')) {
+              setStationFormErrors((prev) => ({
+                ...prev,
+                callsign: data.details,
+              }))
+            }
+            return
+          }
+          addError(data.error || 'Failed to save callsign')
+          return
         }
+      } else {
+        // Station already exists, load its profile
+        await fetchStationDetails(callsign)
       }
       
       localStorage.setItem(storageKey, callsign)
       setCallsignInput(callsign)
+      setStationFormErrors((prev) => ({ ...prev, callsign: undefined }))
       await fetchAdminList() // Recheck admin status
+      // Don't load station details here - let user keep their HamDB lookup results
+      // They'll be saved when they click "Save Operator Information"
     } catch (error) {
       console.error('Failed to save callsign:', error)
+      addError('Failed to save callsign')
     }
   }
 
@@ -707,8 +781,13 @@ function App() {
     const callsign = localStorage.getItem(storageKey)
     if (!callsign) {
       addError('No active callsign selected')
+      setStationFormErrors((prev) => ({
+        ...prev,
+        callsign: 'Save your callsign first before adding operator details.',
+      }))
       return
     }
+    setStationFormErrors((prev) => ({ ...prev, callsign: undefined, clubId: undefined }))
 
     try {
       const response = await fetch(`/api/stations/${callsign}`, {
@@ -717,7 +796,11 @@ function App() {
         body: JSON.stringify({
           name: stationName,
           class: stationLicenseClass,
-          section: stationState,
+          address: stationAddress,
+          city: stationCity,
+          state: stationState,
+          zip: stationZip,
+          country: stationCountry,
           clubId: stationClubId || null,
         }),
       })
@@ -725,11 +808,120 @@ function App() {
         await fetchStations()
         addSuccess('Station details saved')
       } else {
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        if (response.status === 404) {
+          // Auto-create station on first save, then retry update once
+          const createResponse = await fetch('/api/stations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ callsign, name: stationName || callsign }),
+          })
+          if (!createResponse.ok) {
+            const createData = await createResponse.json().catch(() => ({}))
+            if (createData.details) {
+              addError(`${createData.error || 'Failed to create station'}: ${createData.details}`)
+              if ((createData.details as string).toLowerCase().includes('callsign')) {
+                setStationFormErrors((prev) => ({
+                  ...prev,
+                  callsign: createData.details,
+                }))
+              }
+              return
+            }
+            addError(createData.error || 'Failed to create station')
+            return
+          }
+          const retryResponse = await fetch(`/api/stations/${callsign}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: stationName,
+              class: stationLicenseClass,
+              address: stationAddress,
+              city: stationCity,
+              state: stationState,
+              zip: stationZip,
+              country: stationCountry,
+              clubId: stationClubId || null,
+            }),
+          })
+          if (retryResponse.ok) {
+            await fetchStations()
+            addSuccess('Station created and details saved')
+            return
+          }
+          const retryData = await retryResponse.json().catch(() => ({}))
+          if (retryData.details) {
+            addError(`${retryData.error || 'Failed to save station details'}: ${retryData.details}`)
+            if ((retryData.details as string).toLowerCase().includes('club')) {
+              setStationFormErrors((prev) => ({
+                ...prev,
+                clubId: retryData.details,
+              }))
+            }
+            return
+          }
+          addError(retryData.error || 'Failed to save station details')
+          return
+        }
+        if (data.details) {
+          addError(`${data.error || 'Failed to save station details'}: ${data.details}`)
+          if ((data.details as string).toLowerCase().includes('club')) {
+            setStationFormErrors((prev) => ({
+              ...prev,
+              clubId: data.details,
+            }))
+          }
+          return
+        }
         addError(data.error || 'Failed to save station details')
       }
     } catch (error) {
       addError('Failed to save station details')
+    }
+  }
+
+  async function updateStationClub(clubId: string) {
+    const callsign = localStorage.getItem(storageKey)
+    if (!callsign) return
+
+    try {
+      const response = await fetch(`/api/stations/${callsign}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clubId: clubId || null }),
+      })
+      if (response.ok) {
+        setStationClubId(clubId)
+        await fetchStations()
+        addSuccess('Club association updated')
+      } else {
+        addError('Failed to update club association')
+      }
+    } catch (error) {
+      addError('Failed to update club association')
+    }
+  }
+
+  async function updateStationContest(contestId: string) {
+    const callsign = localStorage.getItem(storageKey)
+    if (!callsign) return
+
+    try {
+      const response = await fetch(`/api/stations/${callsign}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contestId: contestId || null }),
+      })
+      if (response.ok) {
+        setStationContestId(contestId)
+        await fetchStations()
+        addSuccess('Contest participation updated')
+      } else {
+        addError('Failed to update contest')
+      }
+    } catch (error) {
+      addError('Failed to update contest')
     }
   }
 
@@ -795,20 +987,21 @@ function App() {
   }, [callsignInput, adminCallsigns])
 
   useEffect(() => {
-    if (!selectedStationId) return
-    fetchStationDetails(selectedStationId)
-  }, [selectedStationId])
+    // Only load form data on initial page load from localStorage callsign
+    const currentCall = localStorage.getItem(storageKey)
+    if (currentCall) {
+      fetchStationDetails(currentCall)
+    }
+  }, []) // Only run once on mount
 
   useEffect(() => {
     if (!autoRefresh) return
     const interval = setInterval(() => {
       fetchStations()
-      if (selectedStationId) {
-        fetchStationDetails(selectedStationId)
-      }
+      // Don't fetch station details on auto-refresh - it resets the form
     }, 5000)
     return () => clearInterval(interval)
-  }, [autoRefresh, selectedStationId])
+  }, [autoRefresh])
 
   useEffect(() => {
     if (currentView === 'admin') {
@@ -1317,17 +1510,25 @@ function App() {
               </div>
               <div className="field">
                 <label>Associated Club (Optional)</label>
-                <select
-                  value={specialClubId}
-                  onChange={(e) => setSpecialClubId(e.target.value)}
-                >
-                  <option value="">-- None --</option>
+                <div className="quick-select">
+                  <button
+                    type="button"
+                    className={`quick-btn ${specialClubId === '' ? 'active' : ''}`}
+                    onClick={() => setSpecialClubId('')}
+                  >
+                    None
+                  </button>
                   {clubs.map((club: any) => (
-                    <option key={club.id} value={club.id}>
-                      {club.name} ({club.callsign})
-                    </option>
+                    <button
+                      key={club.id}
+                      type="button"
+                      className={`quick-btn ${specialClubId === club.id ? 'active' : ''}`}
+                      onClick={() => setSpecialClubId(club.id)}
+                    >
+                      {club.callsign}
+                    </button>
                   ))}
-                </select>
+                </div>
               </div>
             </div>
             <div className="action-buttons" style={{ marginTop: '0' }}>
@@ -2451,7 +2652,11 @@ function App() {
         setSelectedLocationId(newLocation.id)
         addSuccess('Location saved successfully')
       } else {
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        if (data.details) {
+          addError(`${data.error || 'Failed to save location'}: ${data.details}`)
+          return
+        }
         addError(data.error || 'Failed to save location')
       }
     } catch (error) {
@@ -2485,7 +2690,11 @@ function App() {
         await fetchLocations()
         addSuccess('Location updated successfully')
       } else {
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        if (data.details) {
+          addError(`${data.error || 'Failed to update location'}: ${data.details}`)
+          return
+        }
         addError(data.error || 'Failed to update location')
       }
     } catch (error) {
@@ -2507,7 +2716,11 @@ function App() {
         await fetchLocations()
         addSuccess('Set as default location')
       } else {
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        if (data.details) {
+          addError(`${data.error || 'Failed to set default'}: ${data.details}`)
+          return
+        }
         addError(data.error || 'Failed to set default')
       }
     } catch (error) {
@@ -2538,7 +2751,15 @@ function App() {
         await fetchStations()
         addSuccess('Location applied to station')
       } else {
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        if (response.status === 404) {
+          addError('Station not found. Save your callsign first, then try again.')
+          return
+        }
+        if (data.details) {
+          addError(`${data.error || 'Failed to apply location'}: ${data.details}`)
+          return
+        }
         addError(data.error || 'Failed to apply location')
       }
     } catch (error) {
@@ -2571,12 +2792,16 @@ function App() {
                   onChange={(event) => setCallsignInput(event.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && saveCallsign()}
                   placeholder="W1AW"
+                  className={stationFormErrors.callsign ? 'input-error' : undefined}
                   style={{ flex: 1 }}
                 />
                 <button className="btn primary" onClick={saveCallsign}>
                   💾 Save
                 </button>
               </div>
+              {stationFormErrors.callsign && (
+                <div className="field-error">{stationFormErrors.callsign}</div>
+              )}
             </div>
             <p className="hint">Currently active: <strong>{currentCall}</strong></p>
             {currentStation && (
@@ -2613,17 +2838,50 @@ function App() {
               </div>
               <div className="field">
                 <label>License Class</label>
-                <select
-                  value={stationLicenseClass}
-                  onChange={(e) => setStationLicenseClass(e.target.value)}
-                >
-                  <option value="">-- Select --</option>
-                  <option value="E">Extra (E)</option>
-                  <option value="A">Advanced (A)</option>
-                  <option value="G">General (G)</option>
-                  <option value="T">Technician (T)</option>
-                  <option value="N">Novice (N)</option>
-                </select>
+                <div className="quick-select">
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationLicenseClass === '' ? 'active' : ''}`}
+                    onClick={() => setStationLicenseClass('')}
+                  >
+                    None
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationLicenseClass === 'E' ? 'active' : ''}`}
+                    onClick={() => setStationLicenseClass('E')}
+                  >
+                    Extra
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationLicenseClass === 'A' ? 'active' : ''}`}
+                    onClick={() => setStationLicenseClass('A')}
+                  >
+                    Advanced
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationLicenseClass === 'G' ? 'active' : ''}`}
+                    onClick={() => setStationLicenseClass('G')}
+                  >
+                    General
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationLicenseClass === 'T' ? 'active' : ''}`}
+                    onClick={() => setStationLicenseClass('T')}
+                  >
+                    Tech
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationLicenseClass === 'N' ? 'active' : ''}`}
+                    onClick={() => setStationLicenseClass('N')}
+                  >
+                    Novice
+                  </button>
+                </div>
               </div>
               <div className="field" style={{ gridColumn: '1 / -1' }}>
                 <label>Address</label>
@@ -2687,17 +2945,14 @@ function App() {
             <p className="hint">Save and manage operating locations. GPS auto-detect fills coordinates. Select a saved location or create a new one.</p>
             
             {/* Location Selection */}
-            <div className="form-grid" style={{ gridTemplateColumns: '1fr auto', marginBottom: '1rem' }}>
+            <div style={{ marginBottom: '1rem' }}>
               <div className="field">
                 <label>Saved Location</label>
-                <select 
-                  value={selectedLocationId}
-                  onChange={(e) => {
-                    const loc = savedLocations.find(l => l.id === e.target.value)
-                    if (loc) {
-                      loadLocation(loc)
-                    } else {
-                      // New location
+                <div className="quick-select">
+                  <button
+                    type="button"
+                    className={`quick-btn secondary ${selectedLocationId === '' ? 'active' : ''}`}
+                    onClick={() => {
                       setSelectedLocationId('')
                       setLocationName('')
                       setStationLatitude('')
@@ -2708,18 +2963,23 @@ function App() {
                       setStationCqZone('')
                       setStationItuZone('')
                       setStationElevation('')
-                    }
-                  }}
-                >
-                  <option value="">+ New Location</option>
+                    }}
+                  >
+                    + New Location
+                  </button>
                   {savedLocations.map((loc) => (
-                    <option key={loc.id} value={loc.id}>
-                      {loc.name} {loc.isDefault ? '⭐' : ''}
-                    </option>
+                    <button
+                      key={loc.id}
+                      type="button"
+                      className={`quick-btn ${selectedLocationId === loc.id ? 'active' : ''}`}
+                      onClick={() => loadLocation(loc)}
+                    >
+                      {loc.isDefault ? '⭐ ' : ''}{loc.name}
+                    </button>
                   ))}
-                </select>
+                </div>
               </div>
-              <div className="field">
+              <div className="field" style={{ marginTop: '1rem' }}>
                 <label>Location Name</label>
                 <input 
                   type="text" 
@@ -2869,15 +3129,28 @@ function App() {
             <p className="hint">Link this station to a club for coordinated operations</p>
             <div className="field">
               <label>Associated Club</label>
-              <select
-                value={stationClubId}
-                onChange={(e) => setStationClubId(e.target.value)}
-              >
-                <option value="">Independent Operator</option>
+              <div className="quick-select">
+                <button
+                  type="button"
+                  className={`quick-btn ${stationClubId === '' ? 'active' : ''} ${stationFormErrors.clubId ? 'error' : ''}`}
+                  onClick={() => updateStationClub('')}
+                >
+                  Independent
+                </button>
                 {clubs.map((club: any) => (
-                  <option key={club.id} value={club.id}>{club.name} ({club.callsign})</option>
+                  <button
+                    key={club.id}
+                    type="button"
+                    className={`quick-btn ${stationClubId === club.id ? 'active' : ''} ${stationFormErrors.clubId ? 'error' : ''}`}
+                    onClick={() => updateStationClub(club.id)}
+                  >
+                    {club.callsign}
+                  </button>
                 ))}
-              </select>
+              </div>
+              {stationFormErrors.clubId && (
+                <div className="field-error">{stationFormErrors.clubId}</div>
+              )}
             </div>
           </section>
 
@@ -2886,15 +3159,24 @@ function App() {
             <p className="hint">Select active contest for this operating session</p>
             <div className="field">
               <label>Active Contest</label>
-              <select
-                value={stationContestId}
-                onChange={(e) => setStationContestId(e.target.value)}
-              >
-                <option value="">No Contest</option>
+              <div className="quick-select">
+                <button
+                  type="button"
+                  className={`quick-btn ${stationContestId === '' ? 'active' : ''}`}
+                  onClick={() => updateStationContest('')}
+                >
+                  No Contest
+                </button>
                 {contest && contest.isActive && (
-                  <option value={contest.id}>{contest.name} (Active)</option>
+                  <button
+                    type="button"
+                    className={`quick-btn ${stationContestId === contest.id ? 'active' : ''}`}
+                    onClick={() => updateStationContest(contest.id)}
+                  >
+                    {contest.name}
+                  </button>
                 )}
-              </select>
+              </div>
             </div>
           </section>
 
@@ -2912,77 +3194,8 @@ function App() {
   }
 
   function renderLoggingView() {
-    return (
-      <div className="view-container">
-        <div className="view-header">
-          <h1>Logging Interface</h1>
-          <p className="view-description">
-            Main QSO logging interface - where everything comes together
-          </p>
-        </div>
-        <div className="view-content">
-          <section className="panel">
-            <h2>Quick Log Entry</h2>
-            <p className="hint">Fast QSO entry with auto-complete and contest-aware fields</p>
-            <div className="form-grid">
-              <div className="field">
-                <label>Callsign *</label>
-                <input type="text" placeholder="W1AW" />
-              </div>
-              <div className="field">
-                <label>Band</label>
-                <input type="text" placeholder="20" />
-              </div>
-              <div className="field">
-                <label>Mode</label>
-                <input type="text" placeholder="SSB" />
-              </div>
-              <div className="field">
-                <label>RST Sent</label>
-                <input type="text" placeholder="59" />
-              </div>
-              <div className="field">
-                <label>RST Rcvd</label>
-                <input type="text" placeholder="59" />
-              </div>
-              <div className="field" style={{ display: 'flex', alignItems: 'flex-end' }}>
-                <button className="btn primary" style={{ width: '100%' }}>📝 Log QSO</button>
-              </div>
-            </div>
-          </section>
-
-          <section className="panel">
-            <h2>Recent QSOs</h2>
-            {selectedStation && qsoLogs.length > 0 ? (
-              <div className="qso-log-table">
-                {qsoLogs.map((qso) => (
-                  <div key={qso.id} className="qso-row">
-                    <span className="qso-call">{qso.callsign}</span>
-                    <span>{qso.band}m</span>
-                    <span>{qso.mode}</span>
-                    <span>{qso.qsoTime}</span>
-                    <span>{qso.points} pts</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="empty">No QSOs logged yet</p>
-            )}
-          </section>
-
-          <section className="panel">
-            <h2>Log Actions</h2>
-            <div className="action-buttons">
-              <button className="btn secondary">📥 Import ADIF</button>
-              <button className="btn secondary">📤 Export ADIF</button>
-              <button className="btn secondary">📋 View Full Log</button>
-            </div>
-          </section>
-        </div>
-      </div>
-    )
+    return <LoggingPage />
   }
-
   function renderAdminView() {
     const saveAdminList = async () => {
       const callsigns = adminListInput
@@ -3139,15 +3352,29 @@ function App() {
             </div>
           )}
           
-          <select 
-            value={theme} 
-            onChange={(e) => setTheme(e.target.value as 'light' | 'dark' | 'auto')}
-            className="theme-select"
-          >
-            <option value="auto">🔄</option>
-            <option value="light">☀️</option>
-            <option value="dark">🌙</option>
-          </select>
+          <div className="theme-toggle">
+            <button
+              className={`theme-btn ${theme === 'auto' ? 'active' : ''}`}
+              onClick={() => setTheme('auto')}
+              title="Auto"
+            >
+              🔄
+            </button>
+            <button
+              className={`theme-btn ${theme === 'light' ? 'active' : ''}`}
+              onClick={() => setTheme('light')}
+              title="Light Mode"
+            >
+              ☀️
+            </button>
+            <button
+              className={`theme-btn ${theme === 'dark' ? 'active' : ''}`}
+              onClick={() => setTheme('dark')}
+              title="Dark Mode"
+            >
+              🌙
+            </button>
+          </div>
           
           <button className="btn-icon" onClick={fetchStations} title="Refresh">
             🔄
@@ -3159,21 +3386,9 @@ function App() {
 
       <main>
         {globalMessages.length > 0 && (
-          <div style={{
-            position: 'fixed',
-            top: '70px',
-            left: 0,
-            right: 0,
-            zIndex: 1000,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.5rem',
-            padding: '1rem',
-            backgroundColor: 'rgba(200, 50, 50, 0.95)',
-            color: 'white',
-          }}>
+          <div className="global-messages">
             {globalMessages.map((msg, idx) => (
-              <div key={idx}>{msg.text}</div>
+              <div key={idx} className={`global-message ${msg.type}`}>{msg.text}</div>
             ))}
           </div>
         )}

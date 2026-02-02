@@ -146,39 +146,72 @@ export function DebugPanel() {
 
         <div className="filter-group">
           <label>Category</label>
-          <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-            <option value="ALL">All Categories</option>
+          <div className="filter-buttons">
+            <button
+              className={`filter-btn ${filterCategory === 'ALL' ? 'active' : ''}`}
+              onClick={() => setFilterCategory('ALL')}
+            >
+              All
+            </button>
             {Object.keys(summary.byCategory)
               .sort()
               .map((cat) => (
-                <option key={cat} value={cat}>
+                <button
+                  key={cat}
+                  className={`filter-btn ${filterCategory === cat ? 'active' : ''}`}
+                  onClick={() => setFilterCategory(cat)}
+                >
                   {cat}
-                </option>
+                </button>
               ))}
-          </select>
+          </div>
         </div>
 
         <div className="filter-group">
           <label>Source (Station)</label>
-          <select value={filterStation} onChange={(e) => setFilterStation(e.target.value)}>
-            <option value="ALL">All Stations</option>
+          <div className="filter-buttons">
+            <button
+              className={`filter-btn ${filterStation === 'ALL' ? 'active' : ''}`}
+              onClick={() => setFilterStation('ALL')}
+            >
+              All
+            </button>
             {Object.keys(summary.bySource)
               .sort()
               .map((stationId) => (
-                <option key={stationId} value={stationId}>
-                  {stationId.slice(0, 8)}... ({summary.bySource[stationId].length})
-                </option>
+                <button
+                  key={stationId}
+                  className={`filter-btn ${filterStation === stationId ? 'active' : ''}`}
+                  onClick={() => setFilterStation(stationId)}
+                >
+                  {stationId.slice(0, 8)}...
+                </button>
               ))}
-          </select>
+          </div>
         </div>
 
         <div className="filter-group">
           <label>Sort</label>
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortBy)}>
-            <option value="newest">Newest First</option>
-            <option value="oldest">Oldest First</option>
-            <option value="level">By Severity</option>
-          </select>
+          <div className="filter-buttons">
+            <button
+              className={`filter-btn ${sortBy === 'newest' ? 'active' : ''}`}
+              onClick={() => setSortBy('newest')}
+            >
+              Newest
+            </button>
+            <button
+              className={`filter-btn ${sortBy === 'oldest' ? 'active' : ''}`}
+              onClick={() => setSortBy('oldest')}
+            >
+              Oldest
+            </button>
+            <button
+              className={`filter-btn ${sortBy === 'level' ? 'active' : ''}`}
+              onClick={() => setSortBy('level')}
+            >
+              By Severity
+            </button>
+          </div>
         </div>
       </div>
 

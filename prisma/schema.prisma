@@ -38,6 +38,12 @@ model Station {
   callsign  String   @unique
   name      String
   class     String?  // Field Day class (1A, 2A, 3A, etc.)
+  licenseClass String? // Operator license class (E, A, G, T)
+  address   String?
+  city      String?
+  state     String?
+  zip       String?
+  country   String?
   section   String?  // ARRL section (deprecated - use location.section)
   grid      String?  // Grid square (deprecated - use location.grid)
   
@@ -52,6 +58,10 @@ model Station {
   clubId    String?
   club      Club?    @relation(fields: [clubId], references: [id], onDelete: SetNull)
 
+  // Active contest participation
+  contestId String?
+  contest   Contest? @relation("StationContest", fields: [contestId], references: [id], onDelete: SetNull)
+
   // Relations
   bandActivities BandActivity[]
   qsoLogs        LogEntry[]
@@ -65,6 +75,7 @@ model Station {
 
   @@index([clubId])
   @@index([locationId])
+  @@index([contestId])
   @@map("stations")
 }
 
@@ -296,6 +307,7 @@ model Contest {
   qsoContacts    QSOContact[]
   contestStats   ContestStats[]
   bandOccupancy  BandOccupancy[]
+  stations       Station[] @relation("StationContest")
   
   @@index([templateId])
   @@map("contests")

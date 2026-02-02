@@ -200,52 +200,43 @@
 
 .filter-buttons {
   display: flex;
-  gap: 6px;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
 .filter-btn {
-  padding: 6px 12px;
+  padding: 10px 16px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: all 0.2s ease;
+  min-height: 38px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.filter-btn:hover {
+.filter-btn:hover:not(.active) {
   border-color: var(--accent);
-  background: var(--surface-muted);
+  background: var(--surface-elevated);
+  color: var(--accent);
+  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.15);
+  transform: translateY(-2px);
 }
 
 .filter-btn.active {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
-}
-
-.filter-group select {
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-}
-
-.filter-group select:hover {
-  border-color: var(--accent);
-}
-
-.filter-group select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  font-weight: 600;
+  transform: translateY(-2px);
 }
 
 /* Log Entries */
