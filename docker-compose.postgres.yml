@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: yahaml
+      POSTGRES_PASSWORD: yahaml
+      POSTGRES_DB: yahaml
+    volumes:
+      - yahaml_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      - db
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://yahaml:yahaml@db:5432/yahaml?schema=public
+      PRISMA_MIGRATE: push
+      RELAY_PORT: 10000
+      RELAY_HOST: 0.0.0.0
+      UDP_PORT: 2237
+      UDP_HOST: 0.0.0.0
+      OAUTH_ENABLED: "false"
+    ports:
+      - "3000:3000"
+      - "10000:10000"
+      - "2237:2237/udp"
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+
+volumes:
+  yahaml_pgdata:

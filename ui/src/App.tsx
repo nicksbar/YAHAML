@@ -287,7 +287,7 @@ function App() {
     [stations],
   )
 
-  const getAuthHeaders = () =>
+  const getAuthHeaders = (): Record<string, string> =>
     sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
 
   const getBrowserId = () => {

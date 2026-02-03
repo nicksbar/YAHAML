@@ -1,0 +1,13 @@
+node_modules
+ui/node_modules
+dist
+ui/dist
+.prisma
+.git
+.gitignore
+.vscode
+captures
+*.log
+*.pcap
+*.sqlite
+*.db

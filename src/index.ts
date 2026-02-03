@@ -349,7 +349,7 @@ app.get('/api/stations', async (req, res) => {
       ? {
           callsign: {
             equals: callsignQuery,
-            mode: 'insensitive',
+            mode: Prisma.QueryMode.insensitive,
           },
         }
       : undefined;

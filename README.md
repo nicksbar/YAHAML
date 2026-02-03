@@ -29,6 +29,34 @@ npm run db:generate
 npm run db:push
 npm run db:seed
 npm run dev:all
+
+## Docker Deployment
+
+### Option A: SQLite (file-backed)
+
+```bash
+docker compose up -d --build
+```
+
+- UI (root): http://localhost
+- API: http://localhost:3000
+- SQLite data: ./data/yahaml.db
+
+### Option B: Postgres
+
+```bash
+docker compose -f docker-compose.postgres.yml up -d --build
+```
+
+Note: Postgres requires the Prisma datasource provider to be set to `postgresql` in [prisma/schema.prisma](prisma/schema.prisma). If you want this switch applied, ask and I’ll update it with the required migration guidance.
+
+## Proxmox (helper script)
+
+```bash
+sudo bash scripts/proxmox-deploy.sh
+```
+
+Set `COMPOSE_FILE=docker-compose.postgres.yml` to deploy with Postgres.
 ```
 
 Access the UI at http://localhost:5173

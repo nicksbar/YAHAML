@@ -1,0 +1,29 @@
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+RUN apk add --no-cache openssl
+
+COPY package.json package-lock.json ./
+COPY prisma/schema.prisma ./prisma/schema.prisma
+COPY prisma/migrations ./prisma/migrations
+RUN npm ci
+RUN npx prisma generate --schema ./prisma/schema.prisma
+
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+FROM node:20-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+
+RUN apk add --no-cache openssl
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+COPY package.json package-lock.json ./
+
+EXPOSE 3000 10000 2237
+
+CMD ["sh", "-c", "if [ \"${PRISMA_MIGRATE:-deploy}\" = \"push\" ]; then npx prisma db push --schema ./prisma/schema.prisma; else npx prisma migrate deploy --schema ./prisma/schema.prisma; fi && node dist/index.js"]

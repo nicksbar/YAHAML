@@ -72,13 +72,7 @@ export function LoggingPage() {
         {/* Right Sidebar: Stats & Band Occupancy */}
         <div className="logging-column sidebar">
           {/* Statistics Panel */}
-          {contest && (
-            <StatsPanel
-              totalQsos={contest.totalQsos}
-              totalPoints={contest.totalPoints}
-              pointsPerQso={contest.pointsPerQso}
-            />
-          )}
+          {contest && <StatsPanel contestId={contest.id} />}
 
           {/* Band Occupancy */}
           <BandOccupancy />
