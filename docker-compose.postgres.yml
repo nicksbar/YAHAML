@@ -16,6 +16,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        PRISMA_SCHEMA: ./prisma/schema.postgres.prisma
     depends_on:
       - db
     environment:
@@ -23,6 +25,7 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       DATABASE_URL: postgresql://yahaml:yahaml@db:5432/yahaml?schema=public
+      PRISMA_SCHEMA: /app/prisma/schema.postgres.prisma
       PRISMA_MIGRATE: push
       RELAY_PORT: 10000
       RELAY_HOST: 0.0.0.0

@@ -26,6 +26,7 @@ import {
 import { calculateNextOccurrence } from './contest-templates/scheduler';
 import { lookupCallsign, validateCallsign } from './hamdb';
 import { locationRouter } from './location-api';
+import { scenarios, scenarioList } from './scenarios';
 
 dotenv.config();
 
@@ -317,6 +318,10 @@ const authMiddleware = async (
 let adminCallsignList: string[] = [];
 
 const isAdminCallsign = (callsign?: string | null): boolean => {
+  // If no admin callsigns configured, allow anyone (bootstrap mode)
+  if (adminCallsignList.length === 0) {
+    return true;
+  }
   if (!callsign) {
     return false;
   }
@@ -328,11 +333,6 @@ const requireAdmin = (
   res: express.Response,
   next: express.NextFunction
 ): void => {
-  if (adminCallsignList.length === 0) {
-    res.status(403).json({ error: 'Admin callsigns not configured' });
-    return;
-  }
-
   if (!isAdminCallsign(req.session?.callsign)) {
     res.status(403).json({ error: 'Admin access required' });
     return;
@@ -349,7 +349,7 @@ app.get('/api/stations', async (req, res) => {
       ? {
           callsign: {
             equals: callsignQuery,
-            mode: Prisma.QueryMode.insensitive,
+            mode: 'insensitive' as any,
           },
         }
       : undefined;
@@ -1916,6 +1916,270 @@ app.post('/api/admin/callsigns', authMiddleware as express.RequestHandler, (req:
   return res.json({ callsigns: adminCallsignList });
 });
 
+// Station management endpoints
+app.get('/api/admin/stations', authMiddleware as express.RequestHandler, requireAdmin, async (_req: AuthRequest, res) => {
+  try {
+    const stations = await prisma.station.findMany({
+      include: {
+        bandActivities: true,
+        _count: {
+          select: { 
+            qsoLogs: true,
+            sessions: true,
+            radioAssignments: true,
+          },
+        },
+      },
+      orderBy: { callsign: 'asc' },
+    });
+
+    // Get sessions for each station
+    const stationsWithSessions = await Promise.all(
+      stations.map(async (station) => {
+        const sessions = await prisma.session.findMany({
+          where: { stationId: station.id },
+          select: {
+            id: true,
+            callsign: true,
+            token: true,
+            createdAt: true,
+            expiresAt: true,
+            lastActivity: true,
+            browserId: true,
+          },
+        });
+
+        return {
+          ...station,
+          sessions,
+        };
+      })
+    );
+
+    return res.json(stationsWithSessions);
+  } catch (error) {
+    console.error('Error fetching stations:', error);
+    return res.status(500).json({ error: 'Failed to fetch stations' });
+  }
+});
+
+// Delete a station (admin only)
+app.delete('/api/admin/stations/:id', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Prevent deleting currently logged-in station
+    if (id === req.session?.stationId) {
+      return res.status(400).json({ error: 'Cannot delete your own station' });
+    }
+
+    // Delete station (cascades to related records)
+    await prisma.station.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting station:', error);
+    return res.status(500).json({ error: 'Failed to delete station' });
+  }
+});
+
+// Clear sessions for a station (admin only)
+app.post('/api/admin/stations/:id/clear-sessions', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    
+    await prisma.session.deleteMany({ where: { stationId: id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error clearing sessions:', error);
+    return res.status(500).json({ error: 'Failed to clear sessions' });
+  }
+});
+
+// Scenario management endpoints
+app.get('/api/admin/scenarios', authMiddleware as express.RequestHandler, requireAdmin, (_req: AuthRequest, res) => {
+  return res.json({ scenarios: scenarioList });
+});
+
+app.post(
+  '/api/admin/scenarios/:scenarioId/load',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { scenarioId } = req.params;
+      const scenario = scenarios[scenarioId];
+
+      if (!scenario) {
+        return res.status(404).json({ error: 'Scenario not found' });
+      }
+
+      // Clear all data
+      await prisma.$executeRawUnsafe('DELETE FROM band_occupancy');
+      await prisma.$executeRawUnsafe('DELETE FROM contest_stats');
+      await prisma.$executeRawUnsafe('DELETE FROM qso_contacts');
+      await prisma.$executeRawUnsafe('DELETE FROM operator_messages');
+      await prisma.$executeRawUnsafe('DELETE FROM radio_assignments');
+      await prisma.$executeRawUnsafe('DELETE FROM log_aggregates');
+      await prisma.$executeRawUnsafe('DELETE FROM qso_logs');
+      await prisma.$executeRawUnsafe('DELETE FROM context_logs');
+      await prisma.$executeRawUnsafe('DELETE FROM band_activities');
+      await prisma.$executeRawUnsafe('DELETE FROM sessions');
+      await prisma.$executeRawUnsafe('DELETE FROM special_callsigns');
+      await prisma.$executeRawUnsafe('DELETE FROM radio_connections');
+      await prisma.$executeRawUnsafe('DELETE FROM clubs');
+      await prisma.$executeRawUnsafe('DELETE FROM stations');
+      await prisma.$executeRawUnsafe('DELETE FROM contests');
+      await prisma.$executeRawUnsafe('DELETE FROM locations');
+
+      // Create locations if defined in scenario
+      const locationMap = new Map<string, string>();
+      if (scenario.data.stations) {
+        for (const station of scenario.data.stations) {
+          if (station.location && !locationMap.has(station.location.name)) {
+            const location = await prisma.location.create({
+              data: {
+                name: station.location.name,
+                latitude: station.location.latitude || null,
+                longitude: station.location.longitude || null,
+                grid: station.location.grid || null,
+                section: station.location.section || null,
+                isDefault: false,
+              },
+            });
+            locationMap.set(station.location.name, location.id);
+          }
+        }
+      }
+
+      // Create stations
+      const stationMap = new Map<string, string>();
+      if (scenario.data.stations) {
+        for (const stationData of scenario.data.stations) {
+          const locationId = stationData.location ? locationMap.get(stationData.location.name) : null;
+          const station = await prisma.station.create({
+            data: {
+              callsign: stationData.callsign,
+              name: stationData.name,
+              class: stationData.class || null,
+              licenseClass: stationData.licenseClass || null,
+              locationId: locationId || null,
+            },
+          });
+          stationMap.set(stationData.callsign, station.id);
+        }
+      }
+
+      // Create clubs
+      const clubMap = new Map<string, string>();
+      if (scenario.data.clubs) {
+        for (const clubData of scenario.data.clubs) {
+          const club = await prisma.club.create({
+            data: {
+              callsign: clubData.callsign,
+              name: clubData.name,
+              section: clubData.section || null,
+              operatorList: JSON.stringify(clubData.operatorCallsigns),
+              adminList: JSON.stringify(clubData.adminCallsigns),
+            },
+          });
+          clubMap.set(clubData.callsign, club.id);
+        }
+      }
+
+      // Create contests
+      const contestMap = new Map<string, string>();
+      if (scenario.data.contests) {
+        for (const contestData of scenario.data.contests) {
+          const contest = await prisma.contest.create({
+            data: {
+              name: contestData.name,
+              mode: contestData.templateType || 'OTHER',
+              scoringMode: contestData.scoringMode || 'SIMPLE',
+              pointsPerQso: contestData.pointsPerQso || 1,
+              isActive: false,
+            },
+          });
+          contestMap.set(contestData.name, contest.id);
+        }
+      }
+
+      // Create QSOs
+      if (scenario.data.qsos) {
+        const now = new Date();
+        for (const qsoData of scenario.data.qsos) {
+          const stationId = stationMap.get(qsoData.stationCallsign);
+          if (!stationId) continue;
+
+          // Calculate QSO date
+          const qsoDate = new Date(now);
+          if (qsoData.daysAgo) {
+            qsoDate.setDate(qsoDate.getDate() - qsoData.daysAgo);
+          }
+
+          // Random time of day
+          const randomHour = Math.floor(Math.random() * 24);
+          const randomMinute = Math.floor(Math.random() * 60);
+          const qsoTime = `${String(randomHour).padStart(2, '0')}:${String(randomMinute).padStart(2, '0')}`;
+
+          const dedupeKey = `${stationId}-${qsoData.remoteCallsign}-${qsoData.band}-${qsoData.mode}-${qsoDate.toISOString().split('T')[0]}-${qsoTime}`;
+
+          const logEntry = await prisma.logEntry.create({
+            data: {
+              stationId,
+              callsign: qsoData.remoteCallsign,
+              band: qsoData.band,
+              mode: qsoData.mode,
+              qsoDate,
+              qsoTime,
+              rstSent: qsoData.rstSent || '579',
+              rstRcvd: qsoData.rstRcvd || '579',
+              grid: qsoData.grid || null,
+              state: qsoData.section || null,
+              points: 1,
+              dedupeKey,
+              source: 'scenario',
+              merge_status: 'primary',
+            },
+          });
+
+          // Create corresponding QSO contact
+          await prisma.qSOContact.create({
+            data: {
+              stationId,
+              callsign: qsoData.remoteCallsign,
+              band: qsoData.band,
+              mode: qsoData.mode,
+              rstSent: qsoData.rstSent || '579',
+              rstRcvd: qsoData.rstRcvd || '579',
+              grid: qsoData.grid || null,
+              section: qsoData.section || null,
+              qsoDateTime: new Date(qsoDate.getTime() + randomHour * 3600000 + randomMinute * 60000),
+              source: 'scenario',
+              logEntryId: logEntry.id,
+            },
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Loaded scenario: ${scenario.name}`,
+        scenario: {
+          id: scenario.id,
+          name: scenario.name,
+          description: scenario.description,
+        },
+      });
+    } catch (error: any) {
+      console.error('Failed to load scenario:', error);
+      return res.status(500).json({
+        error: 'Failed to load scenario',
+        details: error.message,
+      });
+    }
+  }
+);
+
 // Lookup callsign via HamDB API
 app.get('/api/callsign/lookup/:callsign', async (req, res) => {
   try {
@@ -2040,17 +2304,26 @@ app.get('/api/radios/:id', async (req, res) => {
 // Create radio connection
 app.post('/api/radios', async (req, res) => {
   try {
-    const { name, host, port, pollInterval } = req.body;
+    const { name, host, port, pollInterval, connectionType } = req.body;
+    const normalizedType = connectionType === 'mock' ? 'mock' : 'hamlib';
     
-    if (!name || !host) {
+    if (!name || (normalizedType === 'hamlib' && !host)) {
       return res.status(400).json({ error: 'name and host are required' });
     }
+
+    const resolvedHost = normalizedType === 'mock'
+      ? (host && String(host).trim().length > 0
+          ? String(host)
+          : `mock-${Date.now()}-${Math.floor(Math.random() * 1000)}`)
+      : String(host);
+    const resolvedPort = normalizedType === 'mock' ? (port ?? 0) : (port || 4532);
     
     const radio = await prisma.radioConnection.create({
       data: {
         name,
-        host,
-        port: port || 4532,
+        host: resolvedHost,
+        port: resolvedPort,
+        connectionType: normalizedType,
         pollInterval: pollInterval || 1000,
         isEnabled: false,
       },
@@ -2065,17 +2338,26 @@ app.post('/api/radios', async (req, res) => {
 // Update radio connection
 app.put('/api/radios/:id', async (req, res) => {
   try {
-    const { name, host, port, pollInterval, isEnabled } = req.body;
+    const { name, host, port, pollInterval, isEnabled, connectionType } = req.body;
+    const normalizedType = connectionType === 'mock' ? 'mock' : connectionType === 'hamlib' ? 'hamlib' : undefined;
     
+    const updateData: any = {
+      name: name !== undefined ? name : undefined,
+      host: host !== undefined ? host : undefined,
+      port: port !== undefined ? port : undefined,
+      pollInterval: pollInterval !== undefined ? pollInterval : undefined,
+      isEnabled: isEnabled !== undefined ? isEnabled : undefined,
+      connectionType: normalizedType,
+    };
+
+    if (normalizedType === 'mock') {
+      updateData.host = updateData.host || `mock-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      updateData.port = updateData.port ?? 0;
+    }
+
     const radio = await prisma.radioConnection.update({
       where: { id: req.params.id },
-      data: {
-        name: name !== undefined ? name : undefined,
-        host: host !== undefined ? host : undefined,
-        port: port !== undefined ? port : undefined,
-        pollInterval: pollInterval !== undefined ? pollInterval : undefined,
-        isEnabled: isEnabled !== undefined ? isEnabled : undefined,
-      },
+      data: updateData,
     });
     
     // If enabled, start the radio
@@ -2122,17 +2404,19 @@ app.delete('/api/radios/:id', async (req, res) => {
 // Test radio connection (without saving)
 app.post('/api/radios/test-connection', async (req, res) => {
   try {
-    const { host, port } = req.body;
-    
-    if (!host || !port) {
+    const { host, port, connectionType } = req.body;
+    const normalizedType = connectionType === 'mock' ? 'mock' : 'hamlib';
+
+    if (normalizedType === 'hamlib' && (!host || !port)) {
       return res.status(400).json({ error: 'host and port are required' });
     }
     
-    // Import HamlibClient dynamically to avoid circular dependency
-    const { HamlibClient } = await import('./hamlib');
+    // Import clients dynamically to avoid circular dependency
+    const { HamlibClient, MockHamlibClient } = await import('./hamlib');
     
-    // Create temporary client
-    const client = new HamlibClient(host, Number(port));
+    const client = normalizedType === 'mock'
+      ? new MockHamlibClient()
+      : new HamlibClient(host, Number(port));
     
     // Try to connect
     const connected = await client.connect();
@@ -2196,28 +2480,224 @@ app.post('/api/radios/:id/start', async (req, res) => {
 app.post('/api/radios/:id/stop', async (req, res) => {
   try {
     await radioManager.stopRadio(req.params.id);
-    
     const radio = await prisma.radioConnection.findUnique({
       where: { id: req.params.id },
     });
-    
     return res.json(radio);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Test radio connection
+// Test radio connection (existing radio)
 app.post('/api/radios/:id/test', async (req, res) => {
   try {
     const client = radioManager.getClient(req.params.id);
-    
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected. Start it first.' });
     }
-    
+
+    const state = await client.getState();
+    const info = await client.getInfo();
+    return res.json({ success: true, state, info });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// RADIO CONTROL ENDPOINTS (AUTH + ASSIGNMENT REQUIRED)
+// ============================================================================
+
+async function assertRadioControlAccess(req: AuthRequest, res: express.Response, radioId: string) {
+  const assignment = await prisma.radioAssignment.findFirst({
+    where: {
+      radioId,
+      isActive: true,
+    },
+  });
+
+  if (!assignment) {
+    res.status(403).json({ error: 'Radio is not assigned to a station' });
+    return null;
+  }
+
+  if (req.session?.stationId !== assignment.stationId) {
+    res.status(403).json({ error: 'Unauthorized radio control' });
+    return null;
+  }
+
+  return assignment;
+}
+
+app.get('/api/radios/:id/state', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
     const state = await client.getState();
     return res.json({ success: true, state });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/radios/:id/frequency', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const { frequencyHz } = req.body;
+    if (!frequencyHz) {
+      return res.status(400).json({ error: 'frequencyHz is required' });
+    }
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    const success = await client.setFrequency(String(frequencyHz));
+    return res.json({ success });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/radios/:id/mode', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const { mode, bandwidth } = req.body;
+    if (!mode || bandwidth === undefined) {
+      return res.status(400).json({ error: 'mode and bandwidth are required' });
+    }
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    const success = await client.setMode(String(mode), Number(bandwidth));
+    return res.json({ success });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/radios/:id/power', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const { power } = req.body;
+    if (power === undefined) {
+      return res.status(400).json({ error: 'power is required' });
+    }
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    const success = await client.setPower(Number(power));
+    return res.json({ success });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const { enabled } = req.body;
+    if (enabled === undefined) {
+      return res.status(400).json({ error: 'enabled is required' });
+    }
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    const success = await client.setPtt(Boolean(enabled));
+    
+    // Fetch and broadcast updated state
+    if (success) {
+      try {
+        const state = await client.getState();
+        const updated = await prisma.radioConnection.update({
+          where: { id: req.params.id },
+          data: {
+            frequency: state.frequency,
+            mode: state.mode,
+            bandwidth: state.bandwidth,
+            power: state.power,
+            lastSeen: new Date(),
+          },
+        });
+        wsManager.broadcast('radio', 'radioStateUpdate', {
+          radioId: req.params.id,
+          state: updated,
+        });
+      } catch (error) {
+        console.error('Error broadcasting radio state after PTT:', error);
+      }
+    }
+    
+    return res.json({ success });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/radios/:id/vfo', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const { vfo } = req.body;
+    if (!vfo) {
+      return res.status(400).json({ error: 'vfo is required' });
+    }
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    const success = await client.setVfo(String(vfo));
+    return res.json({ success });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/radios/:id/raw', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    if (!assignment) return;
+
+    const { command } = req.body;
+    if (!command) {
+      return res.status(400).json({ error: 'command is required' });
+    }
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    const response = await client.sendRaw(String(command));
+    return res.json(response);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -2259,6 +2739,25 @@ app.get('/api/radio-assignments/active', async (_req, res) => {
   }
 });
 
+// Get active assignment for current session station
+app.get('/api/radio-assignments/me', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const assignment = await prisma.radioAssignment.findFirst({
+      where: { isActive: true, stationId },
+      include: { radio: true, station: true },
+    });
+
+    return res.json(assignment || null);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // Assign radio to station (requires auth - locks rig to callsign when active on logging screen)
 app.post('/api/radio-assignments', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
@@ -2268,8 +2767,8 @@ app.post('/api/radio-assignments', authMiddleware as express.RequestHandler, asy
       return res.status(400).json({ error: 'radioId and stationId are required' });
     }
     
-    // Validate session owns this station
-    if (req.session?.stationId !== stationId) {
+    // Validate session owns this station (admins can override)
+    if (req.session?.stationId !== stationId && !isAdminCallsign(req.session?.callsign)) {
       return res.status(403).json({ error: 'Cannot assign radio to this station - session mismatch' });
     }
     
@@ -2316,8 +2815,8 @@ app.post('/api/radio-assignments/:id/unassign', authMiddleware as express.Reques
       return res.status(404).json({ error: 'Assignment not found' });
     }
     
-    // Validate session owns this station
-    if (req.session?.stationId !== assignment.stationId) {
+    // Validate session owns this station (admins can override)
+    if (req.session?.stationId !== assignment.stationId && !isAdminCallsign(req.session?.callsign)) {
       return res.status(403).json({ error: 'Cannot unassign radio from this station - session mismatch' });
     }
     

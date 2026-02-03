@@ -46,6 +46,88 @@
   overflow-y: auto;
 }
 
+/* Compact Assigned Radio Panel */
+.compact-radio {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+}
+
+.compact-radio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+}
+
+.compact-radio-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.status-pill {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.status-pill.connected {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.status-pill.disconnected {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.compact-radio-error {
+  color: var(--danger);
+  font-size: 0.8rem;
+  margin-bottom: var(--space-sm);
+}
+
+.compact-radio-empty {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.compact-radio-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.compact-radio-frequency {
+  font-family: 'SF Mono', 'Roboto Mono', monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.compact-radio-unit {
+  font-size: 0.8rem;
+  margin-left: 0.35rem;
+  color: var(--text-muted);
+}
+
+.compact-radio-meta {
+  display: flex;
+  gap: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.compact-radio-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
 /* Responsive: Single column on mobile/tablet */
 @media (max-width: 1024px) {
   .logging-layout {

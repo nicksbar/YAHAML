@@ -1403,6 +1403,57 @@ main {
 }
 
 /* ============================================================================
+   ALERTS - Warning, Danger, Success
+   ============================================================================ */
+
+.alert {
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-md);
+  border-left: 4px solid;
+  background-color: var(--surface-elevated);
+}
+
+.alert strong {
+  display: block;
+  margin-bottom: var(--space-sm);
+  font-size: 0.95rem;
+}
+
+.alert p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.alert-warning {
+  border-left-color: var(--warning);
+  background-color: rgba(245, 158, 11, 0.08);
+}
+
+.alert-warning strong {
+  color: var(--warning);
+}
+
+.alert-danger {
+  border-left-color: var(--danger);
+  background-color: rgba(239, 68, 68, 0.08);
+}
+
+.alert-danger strong {
+  color: var(--danger);
+}
+
+.alert-success {
+  border-left-color: var(--success);
+  background-color: rgba(16, 185, 129, 0.08);
+}
+
+.alert-success strong {
+  color: var(--success);
+}
+
+/* ============================================================================
    ACTIVITY FEED - Compact
    ============================================================================ */
 
@@ -1560,6 +1611,108 @@ main {
 .radio-actions select {
   flex: 1;
   min-width: 140px;
+}
+
+.radio-control-panel {
+  margin: var(--space-md) 0;
+  padding: var(--space-md);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.rig-display {
+  background: linear-gradient(145deg, #0f172a, #1f2937);
+  color: #e2e8f0;
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+  text-align: center;
+}
+
+.rig-display-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #94a3b8;
+}
+
+.rig-display-value {
+  font-size: 2.2rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--space-xs);
+}
+
+.rig-display-unit {
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+
+.rig-display-meta {
+  margin-top: var(--space-xs);
+  display: flex;
+  justify-content: center;
+  gap: var(--space-md);
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.rig-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-md);
+}
+
+.rig-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.rig-control label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.rig-frequency-input {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: center;
+}
+
+.rig-frequency-input input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.rig-step-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.rig-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.rig-slider input[type="range"] {
+  flex: 1;
+}
+
+.rig-ptt-row {
+  display: flex;
 }
 
 /* ============================================================================

@@ -38,6 +38,7 @@ export interface QSOEntry {
 
 interface QSOEntryFormProps {
   stations: Station[]
+  stationId: string
   activeContest?: Contest | null
   onSubmit: (qso: QSOEntry) => Promise<void>
   loading?: boolean
@@ -46,8 +47,7 @@ interface QSOEntryFormProps {
 const QUICK_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '70cm']
 const QUICK_MODES = ['CW', 'SSB', 'Digital', 'AM']
 
-export function QSOEntryForm({ stations, activeContest, onSubmit, loading }: QSOEntryFormProps) {
-  const [stationId, setStationId] = useState<string>(stations[0]?.id || '')
+export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loading }: QSOEntryFormProps) {
   const [contactCallsign, setContactCallsign] = useState('')
   const [band, setBand] = useState('')
   const [mode, setMode] = useState('')
@@ -68,7 +68,7 @@ export function QSOEntryForm({ stations, activeContest, onSubmit, loading }: QSO
   const validateForm = (): boolean => {
     const newErrors: string[] = []
 
-    if (!stationId) newErrors.push('Station is required')
+    if (!stationId) newErrors.push('No station selected')
     if (!contactCallsign.trim()) newErrors.push('Contact callsign is required')
     if (!band) newErrors.push('Band is required')
     if (!mode) newErrors.push('Mode is required')
@@ -141,26 +141,6 @@ export function QSOEntryForm({ stations, activeContest, onSubmit, loading }: QSO
           ))}
         </div>
       )}
-
-      {/* Station Selection */}
-      <div className="form-row">
-        <div className="form-group">
-          <label>Station</label>
-          <div className="quick-select">
-            {stations.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`quick-btn ${stationId === s.id ? 'active' : ''}`}
-                onClick={() => setStationId(s.id)}
-                disabled={submitting}
-              >
-                {s.callsign}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
 
       {/* Contact Information */}
       <div className="form-row">
@@ -298,7 +278,7 @@ export function QSOEntryForm({ stations, activeContest, onSubmit, loading }: QSO
         <button
           type="submit"
           className="btn primary submit-btn"
-          disabled={submitting || loading || !stationId || !contactCallsign || !band || !mode}
+          disabled={submitting || loading || !contactCallsign || !band || !mode}
         >
           {submitting ? 'Logging...' : 'Log QSO'} (Enter)
         </button>

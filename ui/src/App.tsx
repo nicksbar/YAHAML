@@ -98,6 +98,7 @@ type RadioConnection = {
   name: string
   host: string
   port: number
+  connectionType?: 'hamlib' | 'mock'
   manufacturer?: string | null
   model?: string | null
   isConnected: boolean
@@ -221,6 +222,7 @@ function App() {
   const [radios, setRadios] = useState<RadioConnection[]>([])
   // const [radioAssignments, setRadioAssignments] = useState<RadioAssignment[]>([])
   const [radioName, setRadioName] = useState('')
+  const [radioConnectionType, setRadioConnectionType] = useState<'hamlib' | 'mock'>('hamlib')
   const [radioHost, setRadioHost] = useState('')
   const [radioPort, setRadioPort] = useState('4532')
   const [radioPollInterval, setRadioPollInterval] = useState('1000')
@@ -232,6 +234,15 @@ function App() {
     error?: string
   } | null>(null)
   const [radioTesting, setRadioTesting] = useState(false)
+  const [radioCardTestResults, setRadioCardTestResults] = useState<Record<string, {
+    success: boolean
+    message: string
+    state?: any
+    info?: string
+    error?: string
+  }>>({})
+  const [radioLiveState, setRadioLiveState] = useState<Record<string, any>>({})
+  const [radioControlInputs, setRadioControlInputs] = useState<Record<string, { frequency: string; power: string; mode: string; bandwidth: string; raw: string }>>({})
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -265,6 +276,16 @@ function App() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loadingContests, setLoadingContests] = useState(false)
   
+  // Station management state
+  const [allStations, setAllStations] = useState<any[]>([])
+  const [stationsLoading, setStationsLoading] = useState(false)
+  
+  // Scenario loading state
+  const [scenarios, setScenarios] = useState<any[]>([])
+  const [scenarioLoading, setScenarioLoading] = useState(false)
+  const [scenarioLoadingId, setScenarioLoadingId] = useState<string | null>(null)
+  const [scenarioLoadConfirm, setScenarioLoadConfirm] = useState<string | null>(null)
+  
   // Apply theme
   useEffect(() => {
     localStorage.setItem('yahaml-theme', theme)
@@ -289,6 +310,70 @@ function App() {
 
   const getAuthHeaders = (): Record<string, string> =>
     sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
+
+  const formatFrequencyMHz = (frequency?: string | null) => {
+    if (!frequency) return '---.---'
+    const hz = parseInt(frequency, 10)
+    if (Number.isNaN(hz)) return '---.---'
+    return (hz / 1_000_000).toFixed(3)
+  }
+
+  const toFrequencyHz = (input: string) => {
+    const normalized = input.trim()
+    if (!normalized) return null
+    const mhz = Number(normalized)
+    if (Number.isNaN(mhz)) return null
+    return Math.round(mhz * 1_000_000)
+  }
+
+  const getRadioState = (radio: RadioConnection) => {
+    const live = radioLiveState[radio.id]
+    return {
+      frequency: live?.frequency || radio.frequency || null,
+      mode: live?.mode || radio.mode || null,
+      bandwidth: live?.bandwidth ?? radio.bandwidth ?? null,
+      power: live?.power ?? radio.power ?? null,
+      ptt: live?.ptt ?? null,
+      vfo: live?.vfo ?? null,
+    }
+  }
+
+  const getControlInputs = (radio: RadioConnection) => {
+    if (radioControlInputs[radio.id]) return radioControlInputs[radio.id]
+    const state = getRadioState(radio)
+    return {
+      frequency: formatFrequencyMHz(state.frequency),
+      power: state.power !== null && state.power !== undefined ? String(state.power) : '50',
+      mode: state.mode || 'USB',
+      bandwidth: state.bandwidth !== null && state.bandwidth !== undefined ? String(state.bandwidth) : '3000',
+      raw: '',
+    }
+  }
+
+  const setControlInput = (radioId: string, patch: Partial<{ frequency: string; power: string; mode: string; bandwidth: string; raw: string }>) => {
+    setRadioControlInputs(prev => ({
+      ...prev,
+      [radioId]: {
+        ...prev[radioId],
+        ...patch,
+      },
+    }))
+  }
+
+  const refreshRadioState = async (radioId: string) => {
+    try {
+      const response = await fetch(`/api/radios/${radioId}/state`, {
+        headers: { ...getAuthHeaders() },
+      })
+      if (!response.ok) return
+      const data = await response.json()
+      if (data?.state) {
+        setRadioLiveState(prev => ({ ...prev, [radioId]: data.state }))
+      }
+    } catch {
+      // silent
+    }
+  }
 
   const getBrowserId = () => {
     let id = localStorage.getItem(browserIdKey)
@@ -641,6 +726,100 @@ function App() {
       }
     } catch {
       setIsAdmin(false)
+    }
+  }
+
+  async function fetchScenarios() {
+    try {
+      if (!isAdmin) return
+      const response = await fetch('/api/admin/scenarios', {
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setScenarios(data.scenarios || [])
+      }
+    } catch (error) {
+      console.error('Failed to fetch scenarios:', error)
+    }
+  }
+
+  async function fetchAllStations() {
+    try {
+      setStationsLoading(true)
+      const response = await fetch('/api/admin/stations', {
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setAllStations(Array.isArray(data) ? data : [])
+      }
+    } catch (error) {
+      console.error('Failed to fetch stations:', error)
+    } finally {
+      setStationsLoading(false)
+    }
+  }
+
+  async function deleteStation(stationId: string) {
+    try {
+      const response = await fetch(`/api/admin/stations/${stationId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) {
+        addSuccess('Station deleted')
+        await fetchAllStations()
+      } else {
+        const data = await response.json().catch(() => ({}))
+        addError(data.error || 'Failed to delete station')
+      }
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to delete station')
+    }
+  }
+
+  async function clearStationSessions(stationId: string) {
+    try {
+      const response = await fetch(`/api/admin/stations/${stationId}/clear-sessions`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) {
+        addSuccess('Sessions cleared')
+        await fetchAllStations()
+      } else {
+        const data = await response.json().catch(() => ({}))
+        addError(data.error || 'Failed to clear sessions')
+      }
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to clear sessions')
+    }
+  }
+
+  async function loadScenario(scenarioId: string) {
+    try {
+      setScenarioLoading(true)
+      setScenarioLoadingId(scenarioId)
+      const response = await fetch(`/api/admin/scenarios/${scenarioId}/load`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      })
+      if (response.ok) {
+        const data = await response.json()
+        addSuccess(`Loaded: ${data.scenario.name}`)
+        setScenarioLoadConfirm(null)
+        // Refresh all data
+        await Promise.all([fetchStations(), fetchClubs(), fetchAvailableContests(), fetchAllStations()])
+      } else {
+        const error = await response.json()
+        addError(error.error || 'Failed to load scenario')
+      }
+    } catch (error: any) {
+      addError(error.message || 'Failed to load scenario')
+    } finally {
+      setScenarioLoading(false)
+      setScenarioLoadingId(null)
     }
   }
 
@@ -1081,11 +1260,13 @@ function App() {
     fetchServices()
     fetchContest()
     fetchAdminList()
+    fetchScenarios()
     fetchClubs()
     fetchSpecialCallsigns()
     fetchContestTemplates()
     fetchRadios()
     fetchLocations()
+    fetchAllStations()
     // fetchRadioAssignments()
   }, [])
 
@@ -2304,6 +2485,31 @@ function App() {
                 />
               </div>
               <div className="field">
+                <label>Connection Type</label>
+                <select
+                  value={radioConnectionType}
+                  onChange={(e) => {
+                    const nextType = e.target.value as 'hamlib' | 'mock'
+                    setRadioConnectionType(nextType)
+                    if (nextType === 'mock') {
+                      setRadioHost('')
+                      setRadioPort('0')
+                      setRadioTestResult({
+                        success: true,
+                        message: 'Mock radio ready',
+                        info: 'Simulated Hamlib connection',
+                      })
+                    } else {
+                      setRadioPort('4532')
+                      setRadioTestResult(null)
+                    }
+                  }}
+                >
+                  <option value="hamlib">Hamlib (rigctld)</option>
+                  <option value="mock">Mock (Simulated)</option>
+                </select>
+              </div>
+              <div className="field">
                 <label>Host *</label>
                 <input
                   value={radioHost}
@@ -2312,6 +2518,7 @@ function App() {
                     setRadioTestResult(null)
                   }}
                   placeholder="192.168.1.100"
+                  disabled={radioConnectionType === 'mock'}
                 />
               </div>
               <div className="field">
@@ -2323,6 +2530,7 @@ function App() {
                     setRadioTestResult(null)
                   }}
                   placeholder="4532"
+                  disabled={radioConnectionType === 'mock'}
                 />
               </div>
               <div className="field">
@@ -2368,9 +2576,9 @@ function App() {
             <div className="action-buttons">
               <button 
                 className="btn secondary"
-                disabled={!radioHost || radioTesting}
+                disabled={radioTesting || (radioConnectionType === 'hamlib' && !radioHost)}
                 onClick={async () => {
-                  if (!radioHost) {
+                  if (radioConnectionType === 'hamlib' && !radioHost) {
                     return
                   }
                   setRadioTesting(true)
@@ -2380,6 +2588,7 @@ function App() {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
+                        connectionType: radioConnectionType,
                         host: radioHost,
                         port: parseInt(radioPort),
                       }),
@@ -2400,9 +2609,11 @@ function App() {
               </button>
               <button 
                 className="btn primary"
-                disabled={!radioName || !radioHost || !radioTestResult?.success}
+                disabled={radioConnectionType === 'hamlib'
+                  ? (!radioName || !radioHost || !radioTestResult?.success)
+                  : !radioName}
                 onClick={async () => {
-                  if (!radioName || !radioHost) {
+                  if (!radioName || (radioConnectionType === 'hamlib' && !radioHost)) {
                     alert('Name and host are required')
                     return
                   }
@@ -2415,12 +2626,14 @@ function App() {
                       host: radioHost,
                       port: parseInt(radioPort),
                       pollInterval: parseInt(radioPollInterval),
+                      connectionType: radioConnectionType,
                     }),
                   })
                   if (response.ok) {
                     setRadioName('')
                     setRadioHost('')
                     setRadioPort('4532')
+                    setRadioConnectionType('hamlib')
                     setRadioPollInterval('1000')
                     setRadioTestResult(null)
                     await fetchRadios()
@@ -2444,6 +2657,8 @@ function App() {
               )}
               {radios.map((radio) => {
                 const assignment = radio.assignments?.find(a => a.isActive)
+                const state = getRadioState(radio)
+                const inputs = getControlInputs(radio)
                 return (
                   <div key={radio.id} className="radio-card">
                     <div className="radio-header">
@@ -2453,9 +2668,32 @@ function App() {
                       </span>
                     </div>
                     <div className="radio-details">
+                      {radioCardTestResults[radio.id] && (
+                        <div className={`test-result ${radioCardTestResults[radio.id].success ? 'success' : 'error'}`}>
+                          <div className="test-result-header">
+                            {radioCardTestResults[radio.id].success ? '✅ Test OK' : '❌ Test Failed'}
+                          </div>
+                          <div className="test-result-detail">
+                            {radioCardTestResults[radio.id].message || radioCardTestResults[radio.id].error}
+                          </div>
+                          {radioCardTestResults[radio.id].state?.frequency && (
+                            <div className="test-result-detail">
+                              Frequency: {(parseInt(radioCardTestResults[radio.id].state.frequency) / 1000000).toFixed(3)} MHz
+                            </div>
+                          )}
+                          {radioCardTestResults[radio.id].state?.mode && (
+                            <div className="test-result-detail">Mode: {radioCardTestResults[radio.id].state.mode}</div>
+                          )}
+                        </div>
+                      )}
                       <div className="radio-info">
-                        <strong>Host:</strong> {radio.host}:{radio.port}
+                        <strong>Type:</strong> {radio.connectionType === 'mock' ? 'Mock (Simulated)' : 'Hamlib (rigctld)'}
                       </div>
+                      {radio.connectionType !== 'mock' && (
+                        <div className="radio-info">
+                          <strong>Host:</strong> {radio.host}:{radio.port}
+                        </div>
+                      )}
                       {radio.frequency && (
                         <div className="radio-info">
                           <strong>Frequency:</strong> {(parseInt(radio.frequency) / 1000000).toFixed(3)} MHz
@@ -2482,6 +2720,237 @@ function App() {
                         </div>
                       )}
                     </div>
+                    {radio.isConnected && (
+                      <div className="radio-control-panel">
+                        <div className="rig-display">
+                          <div className="rig-display-label">Frequency</div>
+                          <div className="rig-display-value">
+                            {formatFrequencyMHz(state.frequency)}
+                            <span className="rig-display-unit">MHz</span>
+                          </div>
+                          <div className="rig-display-meta">
+                            <span>{state.mode || '---'}</span>
+                            <span>{state.vfo || 'VFO?'}</span>
+                            <span>{state.ptt ? 'PTT' : 'RX'}</span>
+                            <button
+                              className="btn secondary"
+                              onClick={() => refreshRadioState(radio.id)}
+                            >
+                              Refresh
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="rig-controls-grid">
+                          <div className="rig-control">
+                            <label>Frequency (MHz)</label>
+                            <div className="rig-frequency-input">
+                              <input
+                                value={inputs.frequency}
+                                onChange={(e) => setControlInput(radio.id, { frequency: e.target.value })}
+                                placeholder="14.074"
+                              />
+                              <button
+                                className="btn secondary"
+                                onClick={async () => {
+                                  const hz = toFrequencyHz(inputs.frequency)
+                                  if (!hz) return
+                                  await fetch(`/api/radios/${radio.id}/frequency`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                    body: JSON.stringify({ frequencyHz: hz }),
+                                  })
+                                  await refreshRadioState(radio.id)
+                                }}
+                              >
+                                Set
+                              </button>
+                            </div>
+                            <div className="rig-step-row">
+                              {[0.1, 0.5, 1].map((step) => (
+                                <button
+                                  key={step}
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    const current = toFrequencyHz(formatFrequencyMHz(state.frequency))
+                                    if (!current) return
+                                    const next = current + step * 1_000
+                                    await fetch(`/api/radios/${radio.id}/frequency`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                      body: JSON.stringify({ frequencyHz: next }),
+                                    })
+                                    await refreshRadioState(radio.id)
+                                  }}
+                                >
+                                  +{step}k
+                                </button>
+                              ))}
+                              {[0.1, 0.5, 1].map((step) => (
+                                <button
+                                  key={`-${step}`}
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    const current = toFrequencyHz(formatFrequencyMHz(state.frequency))
+                                    if (!current) return
+                                    const next = current - step * 1_000
+                                    await fetch(`/api/radios/${radio.id}/frequency`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                      body: JSON.stringify({ frequencyHz: next }),
+                                    })
+                                    await refreshRadioState(radio.id)
+                                  }}
+                                >
+                                  -{step}k
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
+                            <label>Mode</label>
+                            <div className="quick-select">
+                              {['USB', 'LSB', 'CW', 'FM', 'AM', 'DIGI'].map((mode) => (
+                                <button
+                                  key={mode}
+                                  className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                  onClick={async () => {
+                                    setControlInput(radio.id, { mode })
+                                    await fetch(`/api/radios/${radio.id}/mode`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                      body: JSON.stringify({ mode, bandwidth: Number(inputs.bandwidth) || 3000 }),
+                                    })
+                                    await refreshRadioState(radio.id)
+                                  }}
+                                >
+                                  {mode}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
+                            <label>Bandwidth (Hz)</label>
+                            <div className="rig-frequency-input">
+                              <input
+                                value={inputs.bandwidth}
+                                onChange={(e) => setControlInput(radio.id, { bandwidth: e.target.value })}
+                                placeholder="3000"
+                              />
+                              <button
+                                className="btn secondary"
+                                onClick={async () => {
+                                  await fetch(`/api/radios/${radio.id}/mode`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                    body: JSON.stringify({ mode: inputs.mode, bandwidth: Number(inputs.bandwidth) || 3000 }),
+                                  })
+                                  await refreshRadioState(radio.id)
+                                }}
+                              >
+                                Apply
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
+                            <label>Power (%)</label>
+                            <div className="rig-slider">
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                value={inputs.power}
+                                onChange={(e) => setControlInput(radio.id, { power: e.target.value })}
+                              />
+                              <span>{inputs.power}%</span>
+                              <button
+                                className="btn secondary"
+                                onClick={async () => {
+                                  await fetch(`/api/radios/${radio.id}/power`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                    body: JSON.stringify({ power: Number(inputs.power) || 0 }),
+                                  })
+                                  await refreshRadioState(radio.id)
+                                }}
+                              >
+                                Set
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
+                            <label>PTT</label>
+                            <div className="rig-ptt-row">
+                              <button
+                                className={`btn ${state.ptt ? 'danger' : 'secondary'}`}
+                                onClick={async () => {
+                                  await fetch(`/api/radios/${radio.id}/ptt`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                    body: JSON.stringify({ enabled: !state.ptt }),
+                                  })
+                                  await refreshRadioState(radio.id)
+                                }}
+                              >
+                                {state.ptt ? 'TX (PTT ON)' : 'RX (PTT OFF)'}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
+                            <label>VFO</label>
+                            <div className="quick-select">
+                              {['VFOA', 'VFOB', 'VFO'].map((vfo) => (
+                                <button
+                                  key={vfo}
+                                  className={`quick-btn ${state.vfo === vfo ? 'active' : ''}`}
+                                  onClick={async () => {
+                                    await fetch(`/api/radios/${radio.id}/vfo`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                      body: JSON.stringify({ vfo }),
+                                    })
+                                    await refreshRadioState(radio.id)
+                                  }}
+                                >
+                                  {vfo}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
+                            <label>Raw Command</label>
+                            <div className="rig-frequency-input">
+                              <input
+                                value={inputs.raw}
+                                onChange={(e) => setControlInput(radio.id, { raw: e.target.value })}
+                                placeholder="f (get freq)"
+                              />
+                              <button
+                                className="btn secondary"
+                                onClick={async () => {
+                                  if (!inputs.raw.trim()) return
+                                  await fetch(`/api/radios/${radio.id}/raw`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                    body: JSON.stringify({ command: inputs.raw.trim() }),
+                                  })
+                                  setControlInput(radio.id, { raw: '' })
+                                  await refreshRadioState(radio.id)
+                                }}
+                              >
+                                Send
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="radio-actions">
                       {!radio.isEnabled ? (
                         <button
@@ -2531,14 +3000,40 @@ function App() {
                             const response = await fetch(`/api/radios/${radio.id}/test`, {
                               method: 'POST',
                             })
-                            const data = await response.json()
+                            const data = await response.json().catch(() => ({}))
                             if (response.ok) {
-                              alert(`Radio test successful!\n\nFrequency: ${(parseInt(data.state.frequency || '0') / 1000000).toFixed(3)} MHz\nMode: ${data.state.mode || 'N/A'}\nPower: ${data.state.power || 'N/A'}W`)
+                              setRadioCardTestResults(prev => ({
+                                ...prev,
+                                [radio.id]: {
+                                  success: true,
+                                  message: data.info ? `Connected: ${data.info}` : 'Connection successful',
+                                  state: data.state,
+                                  info: data.info,
+                                },
+                              }))
+                              addSuccess('Radio test successful')
                             } else {
-                              alert(`Test failed: ${data.error}`)
+                              setRadioCardTestResults(prev => ({
+                                ...prev,
+                                [radio.id]: {
+                                  success: false,
+                                  message: data.error || 'Test failed',
+                                  error: data.error,
+                                },
+                              }))
+                              addError(`Test failed: ${data.error || 'Unknown error'}`)
                             }
                           } catch (error) {
-                            alert('Test failed: ' + error)
+                            const message = error instanceof Error ? error.message : String(error)
+                            setRadioCardTestResults(prev => ({
+                              ...prev,
+                              [radio.id]: {
+                                success: false,
+                                message,
+                                error: message,
+                              },
+                            }))
+                            addError(`Test failed: ${message}`)
                           }
                         }}
                       >
@@ -2560,10 +3055,15 @@ function App() {
                               })
                               if (response.ok) {
                                 await fetchRadios()
+                                addSuccess('Radio assigned')
                                 // await fetchRadioAssignments()
+                              } else {
+                                const data = await response.json().catch(() => ({}))
+                                addError(data.error || 'Failed to assign radio')
                               }
                             } catch (error) {
                               console.error('Failed to assign radio:', error)
+                              addError('Failed to assign radio')
                             }
                             e.target.value = ''
                           }}
@@ -2588,10 +3088,15 @@ function App() {
                               })
                               if (response.ok) {
                                 await fetchRadios()
+                                addSuccess('Radio unassigned')
                                 // await fetchRadioAssignments()
+                              } else {
+                                const data = await response.json().catch(() => ({}))
+                                addError(data.error || 'Failed to unassign radio')
                               }
                             } catch (error) {
                               console.error('Failed to unassign radio:', error)
+                              addError('Failed to unassign radio')
                             }
                           }}
                         >
@@ -3340,7 +3845,7 @@ function App() {
   }
 
   function renderLoggingView() {
-    return <LoggingPage />
+    return <LoggingPage stationId={selectedStationId || ''} />
   }
   function renderAdminView() {
     const saveAdminList = async () => {
@@ -3362,6 +3867,21 @@ function App() {
         console.error('Failed to save admin list:', error)
       }
     }
+
+    // Group scenarios by category
+    const scenariosByCategory = scenarios.reduce((acc, scenario) => {
+      const category = scenario.category || 'other'
+      if (!acc[category]) acc[category] = []
+      acc[category].push(scenario)
+      return acc
+    }, {} as Record<string, any[]>)
+
+    const categoryLabels: Record<string, string> = {
+      'home': '🏠 Home Use',
+      'pota': '🏕️ POTA - Parks on the Air',
+      'field-day': '🏕️ Field Day',
+      'complex': '🌐 Complex Scenarios',
+    }
     
     return (
       <div className="view-container">
@@ -3377,6 +3897,163 @@ function App() {
             <p className="hint">
               <strong>Current Status:</strong> {isAdmin ? '✅ You have admin access' : '❌ Not authorized'}
             </p>
+          </section>
+
+          <section className="panel">
+            <h2>👥 Station Management</h2>
+            <p className="hint">
+              View and manage all stations in the system. Check for duplicate callsigns and active sessions.
+            </p>
+            <button
+              className="btn primary"
+              onClick={() => fetchAllStations()}
+              style={{ marginBottom: '1rem' }}
+            >
+              {stationsLoading ? '⏳ Loading...' : '🔄 Refresh Stations'}
+            </button>
+            {allStations.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>No stations found.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: '0.9rem',
+                }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Callsign</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Name</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'center' }}>Sessions</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'center' }}>QSOs</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'center' }}>Radios</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allStations.map((station: any) => (
+                      <tr key={station.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '0.75rem', fontWeight: '600' }}>{station.callsign}</td>
+                        <td style={{ padding: '0.75rem' }}>{station.name}</td>
+                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '0.25rem 0.5rem',
+                            backgroundColor: station.sessions?.length > 0 ? 'var(--success-bg)' : 'var(--surface-secondary)',
+                            color: station.sessions?.length > 0 ? 'var(--success)' : 'var(--text-secondary)',
+                            borderRadius: '4px',
+                            fontSize: '0.85rem',
+                            fontWeight: '600',
+                          }}>
+                            {station.sessions?.length || 0}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>{station._count?.qsoLogs || 0}</td>
+                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>{station._count?.radioAssignments || 0}</td>
+                        <td style={{ padding: '0.75rem' }}>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            {station.sessions?.length > 0 && (
+                              <button
+                                className="btn secondary"
+                                onClick={() => clearStationSessions(station.id)}
+                                title="Clear all sessions for this station"
+                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                              >
+                                Clear Sessions
+                              </button>
+                            )}
+                            {selectedStationId !== station.id && (
+                              <button
+                                className="btn danger"
+                                onClick={() => deleteStation(station.id)}
+                                title="Delete this station"
+                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {allStations.length > 0 && (
+              <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: 'var(--surface-secondary)', borderRadius: '6px', fontSize: '0.9rem' }}>
+                <strong>💡 Tip:</strong> Look for duplicate callsigns in the list above. If you see your callsign twice, you can delete the duplicate station to clean up. All sessions will be cleared when you delete a station.
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>🎬 Scenario Loading</h2>
+            <p className="hint">
+              Fully reset the instance and load example data. Choose a scenario to get started with realistic demo configurations.
+            </p>
+            {scenarioLoadConfirm && (
+              <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+                <strong>⚠️ Confirm Scenario Load</strong>
+                <p>This will completely erase all current data and load the selected scenario. This action cannot be undone.</p>
+                <div className="action-buttons" style={{ marginTop: '0.5rem' }}>
+                  <button
+                    className="btn danger"
+                    onClick={() => loadScenario(scenarioLoadConfirm)}
+                    disabled={scenarioLoading}
+                  >
+                    {scenarioLoading ? '⏳ Loading...' : '✓ Confirm & Load'}
+                  </button>
+                  <button
+                    className="btn secondary"
+                    onClick={() => setScenarioLoadConfirm(null)}
+                    disabled={scenarioLoading}
+                  >
+                    ✗ Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            {Object.entries(scenariosByCategory).map(([category, items]) => (
+              <div key={category} style={{ marginBottom: '1.5rem' }}>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {categoryLabels[category] || category}
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-sm)' }}>
+                  {items.map((scenario: any) => (
+                    <div
+                      key={scenario.id}
+                      style={{
+                        padding: 'var(--space-md)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        backgroundColor: 'var(--surface-secondary)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 'var(--space-sm)',
+                      }}
+                    >
+                      <div>
+                        <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '0.95rem', fontWeight: '600' }}>
+                          {scenario.name}
+                        </h4>
+                        <p style={{ margin: '0', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                          {scenario.description}
+                        </p>
+                      </div>
+                      <button
+                        className="btn primary"
+                        onClick={() => setScenarioLoadConfirm(scenario.id)}
+                        disabled={scenarioLoading || scenarioLoadingId === scenario.id}
+                        style={{ marginTop: 'auto' }}
+                      >
+                        {scenarioLoadingId === scenario.id ? '⏳ Loading...' : '📥 Load Scenario'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </section>
 
           <section className="panel">

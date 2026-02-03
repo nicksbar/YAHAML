@@ -1,10 +1,37 @@
 import * as net from 'net';
 import prisma from './db';
+import { wsManager } from './websocket';
 
 interface HamlibResponse {
   success: boolean;
   data?: string;
   error?: string;
+}
+
+interface RadioClient {
+  connect(): Promise<boolean>;
+  disconnect(): void;
+  isConnected(): boolean;
+  getFrequency(): Promise<string | null>;
+  setFrequency(frequency: string): Promise<boolean>;
+  getMode(): Promise<{ mode: string; bandwidth: number } | null>;
+  setMode(mode: string, bandwidth: number): Promise<boolean>;
+  getPower(): Promise<number | null>;
+  setPower(powerPercent: number): Promise<boolean>;
+  getPtt(): Promise<boolean | null>;
+  setPtt(enabled: boolean): Promise<boolean>;
+  getVfo(): Promise<string | null>;
+  setVfo(vfo: string): Promise<boolean>;
+  sendRaw(command: string): Promise<HamlibResponse>;
+  getInfo(): Promise<string | null>;
+  getState(): Promise<{
+    frequency: string | null;
+    mode: string | null;
+    bandwidth: number | null;
+    power: number | null;
+    ptt: boolean | null;
+    vfo: string | null;
+  }>;
 }
 
 /**
@@ -205,6 +232,46 @@ export class HamlibClient {
   }
 
   /**
+   * Get PTT state (0/1)
+   */
+  async getPtt(): Promise<boolean | null> {
+    const response = await this.sendCommand('t');
+    if (!response.success || !response.data) return null;
+    return response.data.trim() === '1';
+  }
+
+  /**
+   * Set PTT state (true/false)
+   */
+  async setPtt(enabled: boolean): Promise<boolean> {
+    const response = await this.sendCommand(`T ${enabled ? 1 : 0}`);
+    return response.success;
+  }
+
+  /**
+   * Get VFO (e.g., VFOA, VFOB)
+   */
+  async getVfo(): Promise<string | null> {
+    const response = await this.sendCommand('v');
+    return response.success && response.data ? response.data.trim() : null;
+  }
+
+  /**
+   * Set VFO (e.g., VFOA, VFOB)
+   */
+  async setVfo(vfo: string): Promise<boolean> {
+    const response = await this.sendCommand(`V ${vfo}`);
+    return response.success;
+  }
+
+  /**
+   * Send raw rigctld command
+   */
+  async sendRaw(command: string): Promise<HamlibResponse> {
+    return this.sendCommand(command);
+  }
+
+  /**
    * Get radio info
    */
   async getInfo(): Promise<string | null> {
@@ -220,11 +287,15 @@ export class HamlibClient {
     mode: string | null;
     bandwidth: number | null;
     power: number | null;
+    ptt: boolean | null;
+    vfo: string | null;
   }> {
-    const [frequency, modeData, power] = await Promise.all([
+    const [frequency, modeData, power, ptt, vfo] = await Promise.all([
       this.getFrequency(),
       this.getMode(),
       this.getPower(),
+      this.getPtt(),
+      this.getVfo(),
     ]);
 
     return {
@@ -232,6 +303,150 @@ export class HamlibClient {
       mode: modeData?.mode || null,
       bandwidth: modeData?.bandwidth || null,
       power,
+      ptt,
+      vfo,
+    };
+  }
+}
+
+type MockRadioState = {
+  frequency: string;
+  mode: string;
+  bandwidth: number;
+  power: number;
+  ptt: boolean;
+  vfo: string;
+};
+
+export class MockHamlibClient implements RadioClient {
+  private connected: boolean = false;
+  private state: MockRadioState;
+
+  constructor(initial?: Partial<MockRadioState>) {
+    this.state = {
+      frequency: initial?.frequency || '14074000',
+      mode: initial?.mode || 'USB',
+      bandwidth: initial?.bandwidth ?? 2400,
+      power: initial?.power ?? 50,
+      ptt: initial?.ptt ?? false,
+      vfo: initial?.vfo || 'VFOA',
+    };
+  }
+
+  async connect(): Promise<boolean> {
+    this.connected = true;
+    return true;
+  }
+
+  disconnect(): void {
+    this.connected = false;
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  async getFrequency(): Promise<string | null> {
+    return this.state.frequency;
+  }
+
+  async setFrequency(frequency: string): Promise<boolean> {
+    this.state.frequency = frequency;
+    return true;
+  }
+
+  async getMode(): Promise<{ mode: string; bandwidth: number } | null> {
+    return { mode: this.state.mode, bandwidth: this.state.bandwidth };
+  }
+
+  async setMode(mode: string, bandwidth: number): Promise<boolean> {
+    this.state.mode = mode;
+    this.state.bandwidth = bandwidth;
+    return true;
+  }
+
+  async getPower(): Promise<number | null> {
+    return this.state.power;
+  }
+
+  async setPower(powerPercent: number): Promise<boolean> {
+    this.state.power = powerPercent;
+    return true;
+  }
+
+  async getPtt(): Promise<boolean | null> {
+    return this.state.ptt;
+  }
+
+  async setPtt(enabled: boolean): Promise<boolean> {
+    this.state.ptt = enabled;
+    return true;
+  }
+
+  async getVfo(): Promise<string | null> {
+    return this.state.vfo;
+  }
+
+  async setVfo(vfo: string): Promise<boolean> {
+    this.state.vfo = vfo;
+    return true;
+  }
+
+  async sendRaw(command: string): Promise<HamlibResponse> {
+    const trimmed = command.trim();
+    if (trimmed === 'f') return { success: true, data: this.state.frequency };
+    if (trimmed === 'm') return { success: true, data: `${this.state.mode}\n${this.state.bandwidth}` };
+    if (trimmed === 't') return { success: true, data: this.state.ptt ? '1' : '0' };
+    if (trimmed === 'v') return { success: true, data: this.state.vfo };
+    if (trimmed.startsWith('F ')) {
+      this.state.frequency = trimmed.split(' ').slice(1).join(' ').trim();
+      return { success: true };
+    }
+    if (trimmed.startsWith('M ')) {
+      const parts = trimmed.split(' ');
+      const mode = parts[1];
+      const bw = parseInt(parts[2] || '0');
+      if (mode) this.state.mode = mode;
+      if (!Number.isNaN(bw)) this.state.bandwidth = bw;
+      return { success: true };
+    }
+    if (trimmed.startsWith('L RFPOWER ')) {
+      const value = parseFloat(trimmed.replace('L RFPOWER', '').trim());
+      if (!Number.isNaN(value)) {
+        this.state.power = Math.round(value * 100);
+      }
+      return { success: true };
+    }
+    if (trimmed.startsWith('T ')) {
+      this.state.ptt = trimmed.endsWith('1');
+      return { success: true };
+    }
+    if (trimmed.startsWith('V ')) {
+      this.state.vfo = trimmed.split(' ').slice(1).join(' ').trim();
+      return { success: true };
+    }
+    return { success: true, data: 'OK' };
+  }
+
+  async getInfo(): Promise<string | null> {
+    return 'Mock Radio (Simulated Hamlib)';
+  }
+
+  async getState(): Promise<{
+    frequency: string | null;
+    mode: string | null;
+    bandwidth: number | null;
+    power: number | null;
+    ptt: boolean | null;
+    vfo: string | null;
+  }> {
+    return {
+      frequency: this.state.frequency,
+      mode: this.state.mode,
+      bandwidth: this.state.bandwidth,
+      power: this.state.power,
+      ptt: this.state.ptt,
+      vfo: this.state.vfo,
     };
   }
 }
@@ -241,7 +456,7 @@ export class HamlibClient {
  * Handles multiple radio connections and polling
  */
 export class RadioManager {
-  private connections: Map<string, HamlibClient> = new Map();
+  private connections: Map<string, RadioClient> = new Map();
   private pollIntervals: Map<string, NodeJS.Timeout> = new Map();
 
   /**
@@ -262,8 +477,16 @@ export class RadioManager {
       return true;
     }
 
-    // Create client and connect
-    const client = new HamlibClient(radio.host, radio.port);
+    const connectionType = radio.connectionType || 'hamlib';
+    const client: RadioClient = connectionType === 'mock'
+      ? new MockHamlibClient({
+          frequency: radio.frequency || undefined,
+          mode: radio.mode || undefined,
+          bandwidth: radio.bandwidth || undefined,
+          power: radio.power || undefined,
+        })
+      : new HamlibClient(radio.host, radio.port);
+
     const connected = await client.connect();
 
     if (!connected) {
@@ -348,7 +571,7 @@ export class RadioManager {
       const state = await client.getState();
 
       // Update database
-      await prisma.radioConnection.update({
+      const updated = await prisma.radioConnection.update({
         where: { id: radioId },
         data: {
           frequency: state.frequency,
@@ -361,15 +584,27 @@ export class RadioManager {
         },
       });
 
+      // Broadcast state update via WebSocket
+      wsManager.broadcast('radio', 'radioStateUpdate', {
+        radioId,
+        state: updated,
+      });
+
       // Update assigned station's band activity
       await this.updateStationBandActivity(radioId, state);
     } catch (error: any) {
       console.error(`[RadioManager] Poll error for ${radioId}:`, error.message);
-      await prisma.radioConnection.update({
+      const updated = await prisma.radioConnection.update({
         where: { id: radioId },
         data: {
           lastError: error.message,
         },
+      });
+
+      // Broadcast error via WebSocket
+      wsManager.broadcast('radio', 'radioStateUpdate', {
+        radioId,
+        state: updated,
       });
     }
   }
@@ -492,7 +727,7 @@ export class RadioManager {
   /**
    * Get client for a radio
    */
-  getClient(radioId: string): HamlibClient | undefined {
+  getClient(radioId: string): RadioClient | undefined {
     return this.connections.get(radioId);
   }
 
