@@ -28,6 +28,7 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 
 ## Features
 - **[radio-control.md](radio-control.md)** - HAMLib integration and remote rig control
+- **[DIGITAL_MODES_DECODING.md](DIGITAL_MODES_DECODING.md)** - FT8/FT4/PSK31 decoder feasibility, architecture, and implementation roadmap
 - **[callsign-management.md](callsign-management.md)** - Multi-operator and club callsign setup
 - **[contest-management.md](contest-management.md)** - Contest templates, scoring, validation
 - **[ui-quick-reference.md](ui-quick-reference.md)** - UI quick start and shortcuts
