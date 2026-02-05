@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import type { Server as HTTPServer } from 'http';
+import prisma from './db';
 
 // WebSocket message types
 export interface WSMessage {
@@ -32,6 +33,10 @@ export interface WSMessage {
  * 'stats' - Contest stats aggregates
  *   Events: statsUpdate
  *   Data: { qsoCount, pointsTotal, qsoPerHour, topCalls: [...] }
+ *
+ * 'voice' - WebRTC voice room signaling and events
+ *   Events: participantJoined, participantLeft, signal, mute, unmute
+ *   Data: varies by event type
  */
 
 // Client subscription info
@@ -39,6 +44,7 @@ interface ClientSubscription {
   ws: WebSocket;
   channels: Set<string>;
   filters: Map<string, Record<string, any>>;
+  userId?: string; // optional user/station ID for targeted messages
 }
 
 class WebSocketManager {
@@ -57,6 +63,14 @@ class WebSocketManager {
         channels: new Set<string>(),
         filters: new Map<string, Record<string, any>>(),
       });
+
+      // Identify client from token if provided
+      const token = this.getTokenFromRequest(req);
+      if (token) {
+        this.attachUserFromToken(ws, token).catch((error) => {
+          console.warn('WebSocket token validation failed:', error instanceof Error ? error.message : error);
+        });
+      }
 
       // Send welcome message
       this.send(ws, {
@@ -152,6 +166,38 @@ class WebSocketManager {
     }
   }
 
+  private getTokenFromRequest(req: IncomingMessage): string | null {
+    try {
+      const host = req.headers.host || 'localhost';
+      const url = new URL(req.url || '', `http://${host}`);
+      return url.searchParams.get('token');
+    } catch {
+      return null;
+    }
+  }
+
+  private async attachUserFromToken(ws: WebSocket, token: string): Promise<void> {
+    const client = this.clients.get(ws);
+    if (!client) return;
+
+    const session = await prisma.session.findUnique({ where: { token } });
+    if (!session) return;
+
+    const now = new Date();
+    if (now > session.expiresAt) return;
+
+    const inactiveMs = now.getTime() - session.lastActivity.getTime();
+    const inactiveMin = inactiveMs / (1000 * 60);
+    if (inactiveMin > 20) return;
+
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { lastActivity: now },
+    });
+
+    client.userId = session.stationId;
+  }
+
   private send(ws: WebSocket, message: WSMessage) {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
@@ -172,6 +218,19 @@ class WebSocketManager {
           return;
         }
 
+        this.send(client.ws, message);
+      }
+    });
+  }
+
+  /**
+   * Send message to a specific client by userId
+   */
+  sendTo(userId: string, channel: string, type: string, data: any) {
+    const message: WSMessage = { type, channel, data };
+
+    this.clients.forEach((client) => {
+      if (client.userId === userId && client.channels.has(channel)) {
         this.send(client.ws, message);
       }
     });

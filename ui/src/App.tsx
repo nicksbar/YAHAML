@@ -7,6 +7,7 @@ import { QSOMap } from './components/QSOMap'
 import { StatsPanel } from './components/StatsPanel'
 import { DebugPanel } from './components/DebugPanel'
 import { LoggingPage } from './components/LoggingPage'
+import { VoiceRoomPanel } from './components/VoiceRoomPanel'
 type BandActivity = {
   id: string
   band: string
@@ -28,6 +29,8 @@ type Station = {
   class?: string | null
   section?: string | null
   grid?: string | null
+  currentBand?: string | null
+  currentMode?: string | null
   bandActivities: BandActivity[]
   networkStatus?: NetworkStatus | null
   _count: {
@@ -111,6 +114,10 @@ type RadioConnection = {
   pollInterval: number
   isEnabled: boolean
   createdAt: string
+  audioSourceType?: string | null
+  janusRoomId?: string | null
+  janusStreamId?: string | null
+  httpStreamUrl?: string | null
   assignments?: RadioAssignment[]
 }
 
@@ -202,6 +209,7 @@ function App() {
   const [stationClubId, setStationClubId] = useState('')
   const [stationContestId, setStationContestId] = useState('')
   const [stationLookupLoading, setStationLookupLoading] = useState(false)
+  const [expandedStationId, setExpandedStationId] = useState<string | null>(null)
   const [stationFormErrors, setStationFormErrors] = useState<{
     callsign?: string
     clubId?: string
@@ -625,10 +633,36 @@ function App() {
       const data = (await response.json()) as Station[]
       setStations(data)
       const storedCallsign = localStorage.getItem(storageKey)
-      if (!selectedStationId && storedCallsign) {
+      const storedToken = localStorage.getItem(sessionTokenKey)
+      
+      // Restore session if we have both callsign and token (and haven't already selected a station)
+      if (!selectedStationId && storedCallsign && storedToken && !sessionToken) {
         const matched = data.find((station) => station.callsign === storedCallsign)
         if (matched) {
-          setSelectedStationId(matched.id)
+          console.log('[SESSION] Restoring session for', storedCallsign)
+          // Validate the token is still valid
+          try {
+            const validateResponse = await fetch('/api/sessions/me', {
+              headers: { 'Authorization': `Bearer ${storedToken}` }
+            })
+            if (validateResponse.ok) {
+              console.log('[SESSION] Session restored successfully')
+              // Use the existing valid token instead of creating a new session
+              setSessionToken(storedToken)
+              setCallsignInput(storedCallsign)
+              setSelectedStationId(matched.id)
+            } else {
+              console.log('[SESSION] Stored token invalid, clearing')
+              localStorage.removeItem(sessionTokenKey)
+              localStorage.removeItem(storageKey)
+              setSessionToken('')
+            }
+          } catch (err) {
+            console.warn('[SESSION] Failed to validate token:', err)
+            localStorage.removeItem(sessionTokenKey)
+            localStorage.removeItem(storageKey)
+            setSessionToken('')
+          }
         }
       }
     } catch (err) {
@@ -1317,6 +1351,7 @@ function App() {
   useEffect(() => {
     if (currentView === 'admin') {
       fetchAvailableContests()
+      fetchScenarios()
     }
   }, [currentView])
 
@@ -1325,6 +1360,13 @@ function App() {
       fetchAvailableContests()
     }
   }, [currentView])
+
+  useEffect(() => {
+    // Refetch scenarios when admin status changes
+    if (isAdmin) {
+      fetchScenarios()
+    }
+  }, [isAdmin])
 
   useEffect(() => {
     if (clubContestId) return
@@ -1356,6 +1398,15 @@ function App() {
     : allowCallsignSetup
       ? 'station'
       : 'dashboard'
+
+  useEffect(() => {
+    if (effectiveView === 'logging') return
+    const callsign = localStorage.getItem(storageKey) || 'Not set'
+    const station = stations.find((s) => s.id === selectedStationId)
+    const band = station?.currentBand ? `${station.currentBand}m` : '---m'
+    const mode = station?.currentMode ? station.currentMode.toUpperCase() : '---'
+    document.title = `YAHAML — ${callsign} — ${band} ${mode}`
+  }, [stations, selectedStationId, callsignInput, effectiveView])
 
   const handleViewChange = (view: ViewType) => {
     if (!hasActiveCallsign && view !== 'dashboard' && !(view === 'station' && allowCallsignSetup)) {
@@ -2951,6 +3002,100 @@ function App() {
                         </div>
                       </div>
                     )}
+
+                    {/* Audio Source Configuration */}
+                    <div className="radio-audio-config">
+                      <h4>🔊 Audio Source</h4>
+                      <div className="form-grid">
+                        <div className="field">
+                          <label>Source Type</label>
+                          <select
+                            value={radio.audioSourceType || 'none'}
+                            onChange={async (e) => {
+                              try {
+                                await fetch(`/api/radios/${radio.id}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ audioSourceType: e.target.value === 'none' ? null : e.target.value }),
+                                })
+                                await fetchRadios()
+                              } catch (error) {
+                                console.error('Failed to update audio source:', error)
+                              }
+                            }}
+                          >
+                            <option value="none">No Audio</option>
+                            <option value="janus">Janus Gateway</option>
+                            <option value="http-stream">HTTP Stream</option>
+                            <option value="loopback">Loopback (Test/Demo)</option>
+                          </select>
+                        </div>
+                        {radio.audioSourceType === 'janus' && (
+                          <>
+                            <div className="field">
+                              <label>Janus Room ID</label>
+                              <input
+                                value={radio.janusRoomId || ''}
+                                onChange={async (e) => {
+                                  try {
+                                    await fetch(`/api/radios/${radio.id}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ janusRoomId: e.target.value }),
+                                    })
+                                    await fetchRadios()
+                                  } catch (error) {
+                                    console.error('Failed to update Janus room:', error)
+                                  }
+                                }}
+                                placeholder="1234"
+                              />
+                            </div>
+                            <div className="field">
+                              <label>Janus Stream ID</label>
+                              <input
+                                value={radio.janusStreamId || ''}
+                                onChange={async (e) => {
+                                  try {
+                                    await fetch(`/api/radios/${radio.id}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ janusStreamId: e.target.value }),
+                                    })
+                                    await fetchRadios()
+                                  } catch (error) {
+                                    console.error('Failed to update stream ID:', error)
+                                  }
+                                }}
+                                placeholder="radio1"
+                              />
+                            </div>
+                          </>
+                        )}
+                        {radio.audioSourceType === 'http-stream' && (
+                          <div className="field" style={{ gridColumn: '1 / -1' }}>
+                            <label>HTTP Stream URL</label>
+                            <input
+                              value={radio.httpStreamUrl || ''}
+                              onChange={async (e) => {
+                                try {
+                                  await fetch(`/api/radios/${radio.id}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ httpStreamUrl: e.target.value }),
+                                  })
+                                  await fetchRadios()
+                                } catch (error) {
+                                  console.error('Failed to update HTTP stream URL:', error)
+                                }
+                              }}
+                              placeholder="http://192.168.1.100:8080/audio.mp3"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="radio-actions">
                       {!radio.isEnabled ? (
                         <button
@@ -3845,7 +3990,7 @@ function App() {
   }
 
   function renderLoggingView() {
-    return <LoggingPage stationId={selectedStationId || ''} />
+    return <LoggingPage stationId={selectedStationId || ''} isActive={effectiveView === 'logging'} />
   }
   function renderAdminView() {
     const saveAdminList = async () => {
@@ -3922,6 +4067,7 @@ function App() {
                 }}>
                   <thead>
                     <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                      <th style={{ padding: '0.75rem', textAlign: 'left', width: '2rem' }}></th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Callsign</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Name</th>
                       <th style={{ padding: '0.75rem', textAlign: 'center' }}>Sessions</th>
@@ -3932,49 +4078,128 @@ function App() {
                   </thead>
                   <tbody>
                     {allStations.map((station: any) => (
-                      <tr key={station.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '0.75rem', fontWeight: '600' }}>{station.callsign}</td>
-                        <td style={{ padding: '0.75rem' }}>{station.name}</td>
-                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '0.25rem 0.5rem',
-                            backgroundColor: station.sessions?.length > 0 ? 'var(--success-bg)' : 'var(--surface-secondary)',
-                            color: station.sessions?.length > 0 ? 'var(--success)' : 'var(--text-secondary)',
-                            borderRadius: '4px',
-                            fontSize: '0.85rem',
-                            fontWeight: '600',
-                          }}>
-                            {station.sessions?.length || 0}
-                          </span>
-                        </td>
-                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>{station._count?.qsoLogs || 0}</td>
-                        <td style={{ padding: '0.75rem', textAlign: 'center' }}>{station._count?.radioAssignments || 0}</td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <>
+                        <tr key={station.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td style={{ padding: '0.75rem', textAlign: 'center', width: '2rem' }}>
                             {station.sessions?.length > 0 && (
                               <button
-                                className="btn secondary"
-                                onClick={() => clearStationSessions(station.id)}
-                                title="Clear all sessions for this station"
-                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                                className="btn"
+                                onClick={() => setExpandedStationId(expandedStationId === station.id ? null : station.id)}
+                                title="Show session details"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}
                               >
-                                Clear Sessions
+                                {expandedStationId === station.id ? '▼' : '▶'}
                               </button>
                             )}
-                            {selectedStationId !== station.id && (
-                              <button
-                                className="btn danger"
-                                onClick={() => deleteStation(station.id)}
-                                title="Delete this station"
-                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
+                          </td>
+                          <td style={{ padding: '0.75rem', fontWeight: '600' }}>{station.callsign}</td>
+                          <td style={{ padding: '0.75rem' }}>{station.name}</td>
+                          <td style={{ padding: '0.75rem', textAlign: 'center' }}>
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '0.25rem 0.5rem',
+                              backgroundColor: station.sessions?.length > 0 ? 'var(--success-bg)' : 'var(--surface-secondary)',
+                              color: station.sessions?.length > 0 ? 'var(--success)' : 'var(--text-secondary)',
+                              borderRadius: '4px',
+                              fontSize: '0.85rem',
+                              fontWeight: '600',
+                            }}>
+                              {station.sessions?.length || 0}
+                            </span>
+                          </td>
+                          <td style={{ padding: '0.75rem', textAlign: 'center' }}>{station._count?.qsoLogs || 0}</td>
+                          <td style={{ padding: '0.75rem', textAlign: 'center' }}>{station._count?.radioAssignments || 0}</td>
+                          <td style={{ padding: '0.75rem' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              {station.sessions?.length > 0 && (
+                                <button
+                                  className="btn secondary"
+                                  onClick={() => clearStationSessions(station.id)}
+                                  title="Clear all sessions for this station"
+                                  style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                                >
+                                  Clear Sessions
+                                </button>
+                              )}
+                              {selectedStationId !== station.id && (
+                                <button
+                                  className="btn danger"
+                                  onClick={() => deleteStation(station.id)}
+                                  title="Delete this station"
+                                  style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {expandedStationId === station.id && station.sessions?.length > 0 && (
+                          <tr style={{ backgroundColor: 'var(--surface-secondary)', borderBottom: '1px solid var(--border)' }}>
+                            <td colSpan={8} style={{ padding: '0.75rem' }}>
+                              <div style={{ marginLeft: '2rem' }}>
+                                <h4 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+                                  Session Details ({station.sessions.length})
+                                </h4>
+                                <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                  {station.sessions.map((session: any) => (
+                                    <div
+                                      key={session.id}
+                                      style={{
+                                        padding: '0.5rem 0.75rem',
+                                        backgroundColor: 'var(--surface)',
+                                        borderRadius: '4px',
+                                        fontSize: '0.85rem',
+                                        border: '1px solid var(--border)',
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ flex: 1 }}>
+                                          <div>
+                                            <strong>Source:</strong>{' '}
+                                            <span
+                                              style={{
+                                                padding: '0.2rem 0.4rem',
+                                                backgroundColor:
+                                                  session.sourceType === 'n3fjp'
+                                                    ? '#ff9500'
+                                                    : session.sourceType === 'mobile'
+                                                      ? '#2196f3'
+                                                      : session.sourceType === 'api'
+                                                        ? '#9c27b0'
+                                                        : '#4caf50',
+                                                color: '#fff',
+                                                borderRadius: '3px',
+                                                fontWeight: '600',
+                                                fontSize: '0.8rem',
+                                              }}
+                                            >
+                                              {session.sourceType.toUpperCase()}
+                                            </span>
+                                            {session.sourceInfo && <span style={{ marginLeft: '0.5rem', opacity: 0.8 }}>({session.sourceInfo})</span>}
+                                          </div>
+                                          <div style={{ marginTop: '0.25rem', opacity: 0.8 }}>
+                                            <strong>Created:</strong> {new Date(session.createdAt).toLocaleString()}
+                                          </div>
+                                          <div style={{ marginTop: '0.25rem', opacity: 0.8 }}>
+                                            <strong>Last Activity:</strong> {new Date(session.lastActivity).toLocaleString()}
+                                          </div>
+                                          <div style={{ marginTop: '0.25rem', opacity: 0.8 }}>
+                                            <strong>Expires:</strong> {new Date(session.expiresAt).toLocaleString()}
+                                          </div>
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                          Token: {session.token.substring(0, 12)}...
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     ))}
                   </tbody>
                 </table>
@@ -4185,6 +4410,16 @@ function App() {
               <span>{contest.name}</span>
             </div>
           )}
+
+          {hasActiveCallsign && (
+            <div className="voice-room-toolbar-indicator">
+              <VoiceRoomPanel
+                stationId={selectedStationId || ''}
+                sessionToken={sessionToken}
+                compact={true}
+              />
+            </div>
+          )}
           
           <div className="theme-toggle">
             <button
@@ -4269,7 +4504,9 @@ function App() {
         {effectiveView === 'club' && renderClubView()}
         {effectiveView === 'contests' && renderContestsView()}
         {effectiveView === 'station' && renderStationView()}
-        {effectiveView === 'logging' && renderLoggingView()}
+        <div style={{ display: effectiveView === 'logging' ? 'block' : 'none' }} aria-hidden={effectiveView !== 'logging'}>
+          {renderLoggingView()}
+        </div>
         {effectiveView === 'rig' && renderRigView()}
         {effectiveView === 'admin' && renderAdminView()}
         {effectiveView === 'debug' && <DebugPanel />}

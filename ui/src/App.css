@@ -118,6 +118,90 @@
   flex-shrink: 0;
 }
 
+.voice-room-toolbar-indicator {
+  display: flex;
+  align-items: center;
+}
+
+.voice-room-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-secondary);
+}
+
+.voice-room-room-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  border-radius: 999px;
+}
+
+.voice-room-ptt {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.7rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.voice-room-ptt.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.voice-room-mute {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  padding: 0.2rem;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.voice-room-mute.muted {
+  color: #dc2626;
+}
+
+.voice-room-leave-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 0.2rem;
+  cursor: pointer;
+}
+
+.voice-room-join-toolbar-btn {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.voice-room-join-toolbar-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
 .brand {
   display: flex;
   gap: var(--space-sm);
@@ -1713,6 +1797,22 @@ main {
 
 .rig-ptt-row {
   display: flex;
+}
+
+/* Radio Audio Configuration */
+.radio-audio-config {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.radio-audio-config h4 {
+  margin: 0 0 var(--space-md) 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 /* ============================================================================

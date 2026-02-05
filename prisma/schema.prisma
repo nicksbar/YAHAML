@@ -412,6 +412,12 @@ model RadioConnection {
   pollInterval  Int      @default(1000) // Polling interval in ms
   isEnabled     Boolean  @default(true)
   
+  // Audio source configuration
+  audioSourceType  String?  // "janus" | "http-stream" | "loopback" | "none"
+  janusRoomId      String?  // Janus audiobridge room ID
+  janusStreamId    String?  // Janus stream/participant ID
+  httpStreamUrl    String?  // HTTP audio stream URL (fallback)
+  
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
@@ -632,6 +638,10 @@ model Session {
   
   // Client tracking for rig locking
   browserId   String?  // Browser session ID for rig locking
+  
+  // Session source identification
+  sourceType  String   @default("web")  // web | n3fjp | mobile | api | other
+  sourceInfo  String?  // Additional source details (e.g., browser, N3FJP version)
   
   // Relations
   station     Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)

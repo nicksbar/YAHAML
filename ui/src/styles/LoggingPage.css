@@ -128,6 +128,323 @@
   gap: var(--space-sm);
 }
 
+/* Radio Audio Controls */
+.radio-audio-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-sm);
+}
+
+.radio-audio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.radio-audio-header-buttons {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.radio-audio-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.radio-audio-ptt {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.3rem;
+  transition: all 0.2s ease;
+  font-weight: 600;
+}
+
+.radio-audio-ptt:hover {
+  background-color: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.radio-audio-ptt.active {
+  background-color: #e74c3c;
+  color: white;
+  border-color: #c0392b;
+  animation: pulse 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.7;
+  }
+}
+
+.radio-audio-mute {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.3rem;
+  transition: background-color 0.2s ease;
+}
+
+.radio-audio-mute:hover {
+  background-color: var(--surface-hover);
+}
+
+.radio-audio-mute.muted {
+  opacity: 0.6;
+  color: #e74c3c;
+}
+
+.radio-audio-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.radio-audio-slider {
+  flex: 1;
+  height: 0.35rem;
+  border-radius: 0.25rem;
+  background: var(--surface-hover);
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  cursor: pointer;
+}
+
+.radio-audio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.radio-audio-slider::-webkit-slider-thumb:hover {
+  background: var(--accent-bright);
+}
+
+.radio-audio-slider::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.radio-audio-slider::-moz-range-thumb:hover {
+  background: var(--accent-bright);
+}
+
+.radio-audio-slider:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.radio-audio-label-value {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  min-width: 2.5rem;
+  text-align: right;
+  font-family: 'SF Mono', 'Roboto Mono', monospace;
+}
+
+/* Keep Audio Alive Toggle */
+.radio-audio-keep-alive {
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border);
+}
+
+.radio-audio-keep-alive .audio-control-checkbox {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.radio-audio-keep-alive .audio-control-checkbox span {
+  user-select: none;
+}
+
+/* Advanced Audio Controls */
+.radio-audio-advanced {
+  margin-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-sm);
+}
+
+.radio-audio-advanced-toggle {
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.radio-audio-advanced-toggle:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+}
+
+.radio-audio-advanced-panel {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.audio-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.audio-control-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.audio-eq-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.audio-eq-band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.audio-eq-band label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  min-width: 3rem;
+}
+
+.audio-eq-band input[type="range"] {
+  flex: 1;
+}
+
+.audio-eq-band span {
+  font-size: 0.7rem;
+  font-family: 'SF Mono', 'Roboto Mono', monospace;
+  color: var(--text);
+  min-width: 3rem;
+  text-align: right;
+}
+
+.audio-control-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.75rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.audio-control-checkbox input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+.audio-control-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-left: 1.5rem;
+  margin-top: var(--space-xs);
+}
+
+.audio-control-slider label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  min-width: 4rem;
+}
+
+.audio-control-slider input[type="range"] {
+  flex: 1;
+}
+
+.audio-control-slider span {
+  font-size: 0.7rem;
+  font-family: 'SF Mono', 'Roboto Mono', monospace;
+  color: var(--text);
+  min-width: 3rem;
+  text-align: right;
+}
+
+.audio-slider {
+  height: 0.35rem;
+  border-radius: 0.25rem;
+  background: var(--surface-hover);
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  cursor: pointer;
+}
+
+.audio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.audio-slider::-webkit-slider-thumb:hover {
+  background: var(--accent-bright);
+}
+
+.audio-slider::-moz-range-thumb {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.audio-slider::-moz-range-thumb:hover {
+  background: var(--accent-bright);
+}
+
 /* Responsive: Single column on mobile/tablet */
 @media (max-width: 1024px) {
   .logging-layout {

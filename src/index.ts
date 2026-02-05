@@ -16,6 +16,8 @@ import {
 } from './export';
 import { wsManager } from './websocket';
 import { startStatsAggregationJob } from './stats';
+import { voiceRoomManager } from './voice-rooms';
+import { webrtcSignaling } from './webrtc-signaling';
 import {
   updateAggregates,
   getAggregates,
@@ -126,10 +128,64 @@ app.get('/auth/google', (_req, res) => {
 });
 
 // Session management endpoints
+// GET /api/sessions/me - Validate current session using Bearer token
+app.get('/api/sessions/me', async (req, res) => {
+  try {
+    // Get token from Authorization header
+    const authHeader = req.get('Authorization');
+    const token = authHeader?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ error: 'No session token' });
+    }
+
+    // Find session and check expiry
+    const session = await prisma.session.findUnique({
+      where: { token },
+      include: { station: true }
+    });
+    
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
+    
+    // Check if expired
+    if (new Date() > session.expiresAt) {
+      await prisma.session.delete({ where: { id: session.id } });
+      return res.status(401).json({ error: 'Session expired' });
+    }
+    
+    // Check for inactivity (20 mins)
+    const now = new Date();
+    const inactiveMs = now.getTime() - session.lastActivity.getTime();
+    const inactiveMin = inactiveMs / (1000 * 60);
+    
+    if (inactiveMin > 20) {
+      await prisma.session.delete({ where: { id: session.id } });
+      return res.status(401).json({ error: 'Session expired due to inactivity' });
+    }
+    
+    // Session is valid
+    res.json({
+      valid: true,
+      sessionId: session.id,
+      callsign: session.callsign,
+      stationId: session.stationId,
+      station: session.station,
+      expiresAt: session.expiresAt,
+      lastActivity: session.lastActivity
+    });
+    return;
+  } catch (error) {
+    console.error('Session me validation error:', error);
+    return res.status(500).json({ error: 'Failed to validate session' });
+  }
+});
+
 // POST /api/sessions - Create a new session (login)
 app.post('/api/sessions', async (req, res) => {
   try {
-    const { callsign, stationId, browserId } = req.body;
+    const { callsign, stationId, browserId, sourceType = 'web', sourceInfo } = req.body;
     
     if (!callsign || !stationId) {
       return res.status(400).json({ error: 'callsign and stationId required' });
@@ -143,6 +199,33 @@ app.post('/api/sessions', async (req, res) => {
     if (!station) {
       return res.status(404).json({ error: 'Station not found' });
     }
+
+    // Check for existing active session for this station
+    const existingSession = await prisma.session.findFirst({
+      where: {
+        stationId,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { lastActivity: 'desc' }
+    });
+
+    // If there's a recent active session (within last 5 minutes), return it
+    if (existingSession) {
+      const timeSinceActivity = Date.now() - existingSession.lastActivity.getTime();
+      if (timeSinceActivity < 5 * 60 * 1000) { // 5 minutes
+        // Update last activity and return existing session
+        await prisma.session.update({
+          where: { id: existingSession.id },
+          data: { lastActivity: new Date() }
+        });
+        return res.json({ 
+          token: existingSession.token, 
+          expiresAt: existingSession.expiresAt, 
+          sessionId: existingSession.id,
+          reused: true
+        });
+      }
+    }
     
     // Generate secure token (base64 encoded random bytes)
     const token = Buffer.from(`${Date.now()}-${Math.random()}-${callsign}`).toString('base64');
@@ -155,6 +238,8 @@ app.post('/api/sessions', async (req, res) => {
         callsign,
         stationId,
         browserId: browserId || undefined,
+        sourceType,
+        sourceInfo: sourceInfo || undefined,
         expiresAt,
       }
     });
@@ -541,14 +626,40 @@ app.post('/api/band-activity', authMiddleware as express.RequestHandler, async (
 });
 
 // QSO log endpoints
+// GET /api/qso-logs - List all QSOs (optionally limited)
+app.get('/api/qso-logs', async (req, res) => {
+  try {
+    const { limit } = req.query;
+    console.log(`[QSO-LOGS] Fetching QSOs, limit=${limit || 'none'}`);
+    const qsos = await prisma.logEntry.findMany({
+      orderBy: { qsoDate: 'desc' },
+      take: limit ? parseInt(limit as string) : 100,
+      include: {
+        station: { select: { callsign: true } }
+      }
+    });
+    console.log(`[QSO-LOGS] Found ${qsos.length} QSOs`);
+    return res.json(qsos);
+  } catch (error: any) {
+    console.error('[QSO-LOGS] Error:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/qso-logs/:stationId - List QSOs for specific station
 app.get('/api/qso-logs/:stationId', async (req, res) => {
   try {
+    const { limit } = req.query;
+    console.log(`[QSO-LOGS] Fetching QSOs for station ${req.params.stationId}, limit=${limit || 'none'}`);
     const logs = await prisma.logEntry.findMany({
       where: { stationId: req.params.stationId },
       orderBy: { qsoDate: 'desc' },
+      take: limit ? parseInt(limit as string) : 100,
     });
+    console.log(`[QSO-LOGS] Found ${logs.length} QSOs for station`);
     return res.json(logs);
-  } catch (error) {
+  } catch (error: any) {
+    console.error('[QSO-LOGS] Error:', error.message);
     return res.status(500).json({ error: 'Failed to fetch QSO logs' });
   }
 });
@@ -1946,6 +2057,8 @@ app.get('/api/admin/stations', authMiddleware as express.RequestHandler, require
             expiresAt: true,
             lastActivity: true,
             browserId: true,
+            sourceType: true,
+            sourceInfo: true,
           },
         });
 
@@ -2338,7 +2451,7 @@ app.post('/api/radios', async (req, res) => {
 // Update radio connection
 app.put('/api/radios/:id', async (req, res) => {
   try {
-    const { name, host, port, pollInterval, isEnabled, connectionType } = req.body;
+    const { name, host, port, pollInterval, isEnabled, connectionType, audioSourceType, janusRoomId, janusStreamId, httpStreamUrl } = req.body;
     const normalizedType = connectionType === 'mock' ? 'mock' : connectionType === 'hamlib' ? 'hamlib' : undefined;
     
     const updateData: any = {
@@ -2348,6 +2461,10 @@ app.put('/api/radios/:id', async (req, res) => {
       pollInterval: pollInterval !== undefined ? pollInterval : undefined,
       isEnabled: isEnabled !== undefined ? isEnabled : undefined,
       connectionType: normalizedType,
+      audioSourceType: audioSourceType !== undefined ? audioSourceType : undefined,
+      janusRoomId: janusRoomId !== undefined ? janusRoomId : undefined,
+      janusStreamId: janusStreamId !== undefined ? janusStreamId : undefined,
+      httpStreamUrl: httpStreamUrl !== undefined ? httpStreamUrl : undefined,
     };
 
     if (normalizedType === 'mock') {
@@ -3016,6 +3133,252 @@ app.get('/api/contest-stats', async (req, res) => {
   }
 });
 
+// ============================================================================
+// VOICE ROOMS ENDPOINTS
+// ============================================================================
+
+const logVoiceEvent = async (stationId: string, level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS', message: string, details?: Record<string, any>) => {
+  try {
+    const log = await prisma.contextLog.create({
+      data: {
+        stationId,
+        level,
+        category: 'VOICE',
+        message,
+        details: details ? JSON.stringify(details) : null,
+      },
+    });
+    wsManager.broadcast('logs', 'contextLog', log);
+  } catch (error) {
+    console.warn('Failed to write voice context log:', error instanceof Error ? error.message : error);
+  }
+};
+
+app.get('/api/voice-rooms', authMiddleware as express.RequestHandler, async (_req: AuthRequest, res) => {
+  try {
+    const rooms = voiceRoomManager.listRooms();
+    return res.json(rooms.map(room => ({
+      id: room.id,
+      name: room.name,
+      description: room.description,
+      radioId: room.radioId,
+      participantCount: room.participants.size,
+      maxParticipants: room.maxParticipants,
+      createdAt: room.createdAt,
+      isActive: room.isActive,
+    })));
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/voice-rooms/:roomId', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const room = voiceRoomManager.getRoom(req.params.roomId);
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+
+    return res.json({
+      id: room.id,
+      name: room.name,
+      description: room.description,
+      radioId: room.radioId,
+      participants: Array.from(room.participants.values()),
+      maxParticipants: room.maxParticipants,
+      createdAt: room.createdAt,
+      isActive: room.isActive,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/voice-rooms/:roomId/join', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    const displayName = req.session?.callsign || 'Operator';
+    const { audioSourceType = 'microphone' } = req.body;
+
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const participant = voiceRoomManager.addParticipant(
+      req.params.roomId,
+      stationId,
+      displayName,
+      audioSourceType
+    );
+
+    // Register with WebRTC signaling
+    webrtcSignaling.registerPeer(req.params.roomId, stationId);
+
+    // Notify all in room
+    wsManager.broadcast('voice', 'participantJoined', {
+      roomId: req.params.roomId,
+      participant,
+    });
+
+    await logVoiceEvent(stationId, 'SUCCESS', `Joined voice room ${req.params.roomId}`, {
+      roomId: req.params.roomId,
+      audioSourceType,
+    });
+
+    // Get peers in the room (excluding the joining participant)
+    const peers = voiceRoomManager.getRoomParticipants(req.params.roomId)
+      .filter(p => p.id !== stationId)
+      .map(p => ({
+        id: p.id,
+        displayName: p.displayName,
+        audioSourceType: p.audioSourceType,
+      }));
+
+    return res.json({
+      success: true,
+      participant,
+      peers,
+    });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/voice-rooms/:roomId/leave', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const removed = voiceRoomManager.removeParticipant(req.params.roomId, stationId);
+    webrtcSignaling.unregisterPeer(req.params.roomId, stationId);
+
+    if (removed) {
+      wsManager.broadcast('voice', 'participantLeft', {
+        roomId: req.params.roomId,
+        participantId: stationId,
+      });
+      await logVoiceEvent(stationId, 'INFO', `Left voice room ${req.params.roomId}`, {
+        roomId: req.params.roomId,
+      });
+    }
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// WebRTC signaling endpoint
+app.post('/api/voice-rooms/:roomId/signal', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const { type, to, data } = req.body;
+    if (!type) {
+      return res.status(400).json({ error: 'type is required' });
+    }
+
+    const message = {
+      type,
+      from: stationId,
+      to: to || undefined,
+      data,
+      timestamp: Date.now(),
+    };
+
+    if (to) {
+      // Direct peer message
+      wsManager.sendTo(to, 'voice', 'signal', {
+        roomId: req.params.roomId,
+        message,
+      });
+    } else {
+      // Broadcast to room
+      wsManager.broadcast('voice', 'signal', {
+        roomId: req.params.roomId,
+        message,
+      });
+    }
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/voice-rooms/:roomId/mute', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const { isMuted } = req.body;
+    if (isMuted === undefined) {
+      return res.status(400).json({ error: 'isMuted is required' });
+    }
+
+    const updated = voiceRoomManager.updateParticipantMute(req.params.roomId, stationId, Boolean(isMuted));
+    if (!updated) {
+      return res.status(400).json({ error: 'Participant not in room' });
+    }
+
+    wsManager.broadcast('voice', 'participantMuteChanged', {
+      roomId: req.params.roomId,
+      participantId: stationId,
+      isMuted: Boolean(isMuted),
+    });
+
+    await logVoiceEvent(stationId, 'INFO', `Voice mute ${Boolean(isMuted) ? 'enabled' : 'disabled'}`, {
+      roomId: req.params.roomId,
+      isMuted: Boolean(isMuted),
+    });
+
+    return res.json({ success: true, isMuted: Boolean(isMuted) });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/voice-rooms/:roomId/volume', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const { volume } = req.body;
+    if (volume === undefined) {
+      return res.status(400).json({ error: 'volume is required' });
+    }
+
+    const updated = voiceRoomManager.updateParticipantVolume(req.params.roomId, stationId, Number(volume));
+    if (!updated) {
+      return res.status(400).json({ error: 'Participant not in room' });
+    }
+
+    wsManager.broadcast('voice', 'participantVolumeChanged', {
+      roomId: req.params.roomId,
+      participantId: stationId,
+      volume: Number(volume),
+    });
+
+    await logVoiceEvent(stationId, 'INFO', 'Voice volume updated', {
+      roomId: req.params.roomId,
+      volume: Number(volume),
+    });
+
+    return res.json({ success: true, volume: Number(volume) });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // Export the app for testing
 export default app;
 
@@ -3042,13 +3405,26 @@ if (require.main === module) {
   // Start UDP log listener
   startUdpServer(Number(udpPort), udpHost, udpTargets);
 
-  // Start stats aggregation job (runs every 5 minutes)
+  // Stats aggregation job (runs every 5 minutes)
   startStatsAggregationJob(5);
 
-  // Start radio manager (connect to all enabled radios)
+  // Radio manager (connect to all enabled radios)
   radioManager.startAll().then(() => {
     console.log('✓ Radio manager initialized');
   }).catch((error) => {
     console.error('Radio manager initialization error:', error);
   });
+
+  // Initialize Shack voice room on startup
+  try {
+    voiceRoomManager.createRoom({
+      id: 'shack',
+      name: 'Shack',
+      description: 'Main voice room for all operators',
+      maxParticipants: 100,
+    });
+    console.log('✓ Shack voice room initialized');
+  } catch (error) {
+    console.warn('Shack room already exists or error:', error);
+  }
 }

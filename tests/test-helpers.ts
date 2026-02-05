@@ -173,6 +173,8 @@ export async function createTestSession(params: {
   callsign: string;
   browserId?: string;
   expiresInMinutes?: number;
+  sourceType?: string;
+  sourceInfo?: string;
 }): Promise<{ token: string; sessionId: string }> {
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + (params.expiresInMinutes ?? 20) * 60 * 1000);
@@ -183,6 +185,8 @@ export async function createTestSession(params: {
       callsign: params.callsign,
       stationId: params.stationId,
       browserId: params.browserId,
+      sourceType: params.sourceType || 'web',
+      sourceInfo: params.sourceInfo,
       expiresAt,
     },
   });
