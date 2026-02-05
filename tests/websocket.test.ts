@@ -131,9 +131,11 @@ describe('WebSocket Integration', () => {
     it('should receive welcome message on connection', async () => {
       ws = new WebSocket(WS_URL);
 
+      const messagePromise = waitForMessage(ws);
+
       await new Promise((resolve) => ws.on('open', resolve));
 
-      const message = await waitForMessage(ws);
+      const message = await messagePromise;
 
       expect(message.type).toBe('connected');
       expect(message.data.message).toContain('Connected');
@@ -142,8 +144,10 @@ describe('WebSocket Integration', () => {
     it('should handle ping-pong', async () => {
       ws = new WebSocket(WS_URL);
 
+      const welcomePromise = waitForMessage(ws);
+
       await new Promise((resolve) => ws.on('open', resolve));
-      await waitForMessage(ws); // Welcome message
+      await welcomePromise; // Welcome message
 
       // Send ping
       ws.send(JSON.stringify({ type: 'ping' }));
