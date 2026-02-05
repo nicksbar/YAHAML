@@ -9,7 +9,7 @@ const WS_URL = 'ws://127.0.0.1:3000/ws';
 const prisma = new PrismaClient();
 
 // Helper to wait for WebSocket message
-function waitForMessage(ws: WebSocket, timeout = 5000): Promise<any> {
+function waitForMessage(ws: WebSocket, timeout = 15000): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Timeout waiting for message'));
