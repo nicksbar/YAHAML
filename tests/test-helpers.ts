@@ -119,6 +119,7 @@ export async function cleanDatabase(options?: { preserveTemplates?: boolean }) {
     await prisma.aDIFImport.deleteMany();
   } catch (error) {
     // Log but don't fail on cleanup errors
+    // eslint-disable-next-line no-console
     console.warn('[Test Helper] Cleanup warning:', error instanceof Error ? error.message : error);
   }
 }

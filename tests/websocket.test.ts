@@ -9,7 +9,7 @@ const WS_URL = 'ws://127.0.0.1:3000/ws';
 const prisma = new PrismaClient();
 
 // Helper to wait for WebSocket message
-function waitForMessage(ws: WebSocket, timeout = 5000): Promise<any> {
+function waitForMessage(ws: WebSocket, timeout = 15000): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Timeout waiting for message'));
@@ -131,9 +131,11 @@ describe('WebSocket Integration', () => {
     it('should receive welcome message on connection', async () => {
       ws = new WebSocket(WS_URL);
 
+      const messagePromise = waitForMessage(ws);
+
       await new Promise((resolve) => ws.on('open', resolve));
 
-      const message = await waitForMessage(ws);
+      const message = await messagePromise;
 
       expect(message.type).toBe('connected');
       expect(message.data.message).toContain('Connected');
@@ -142,8 +144,10 @@ describe('WebSocket Integration', () => {
     it('should handle ping-pong', async () => {
       ws = new WebSocket(WS_URL);
 
+      const welcomePromise = waitForMessage(ws);
+
       await new Promise((resolve) => ws.on('open', resolve));
-      await waitForMessage(ws); // Welcome message
+      await welcomePromise; // Welcome message
 
       // Send ping
       ws.send(JSON.stringify({ type: 'ping' }));

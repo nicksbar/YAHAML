@@ -164,6 +164,7 @@ locationRouter.delete('/:id', async (req, res) => {
     });
     res.json({ success: true });
   } catch (error) {
+    // eslint-disable-next-line no-console
     console.error('Failed to delete location:', error);
     res.status(500).json({ error: 'Failed to delete location' });
   }
