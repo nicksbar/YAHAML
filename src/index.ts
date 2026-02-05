@@ -15,7 +15,7 @@ import {
   validateCabrilloQso,
 } from './export';
 import { wsManager } from './websocket';
-import { startStatsAggregationJob } from './stats';
+import { startStatsAggregationJob, aggregateContestStats } from './stats';
 import { voiceRoomManager } from './voice-rooms';
 import { webrtcSignaling } from './webrtc-signaling';
 import {
@@ -2196,6 +2196,17 @@ app.post(
             },
           });
           clubMap.set(clubData.callsign, club.id);
+          
+          // Link member stations to this club
+          for (const operatorCall of clubData.operatorCallsigns) {
+            const stationId = stationMap.get(operatorCall);
+            if (stationId) {
+              await prisma.station.update({
+                where: { id: stationId },
+                data: { clubId: club.id },
+              });
+            }
+          }
         }
       }
 
@@ -2217,11 +2228,30 @@ app.post(
       }
 
       // Create QSOs
-      if (scenario.data.qsos) {
+      let qsoCountByContest: Record<string, { count: number; points: number }> = {};
+      if (scenario.data.qsos && scenario.data.contests && scenario.data.contests.length > 0) {
+        // Use first contest for all QSOs if no specific contest mapping
+        const defaultContestId = contestMap.get(scenario.data.contests[0].name);
         const now = new Date();
+        const pointsPerQso = scenario.data.contests[0].pointsPerQso || 1;
+        
+        // Get station-to-club mapping for clubId assignment
+        const stationClubMap = new Map<string, string>();
+        for (const [clubCallsign, clubId] of clubMap.entries()) {
+          const clubData = scenario.data.clubs?.find(c => c.callsign === clubCallsign);
+          if (clubData) {
+            for (const operatorCall of clubData.operatorCallsigns) {
+              stationClubMap.set(operatorCall, clubId);
+            }
+          }
+        }
+        
         for (const qsoData of scenario.data.qsos) {
           const stationId = stationMap.get(qsoData.stationCallsign);
           if (!stationId) continue;
+          
+          // Get clubId for this station
+          const clubId = stationClubMap.get(qsoData.stationCallsign);
 
           // Calculate QSO date
           const qsoDate = new Date(now);
@@ -2235,10 +2265,13 @@ app.post(
           const qsoTime = `${String(randomHour).padStart(2, '0')}:${String(randomMinute).padStart(2, '0')}`;
 
           const dedupeKey = `${stationId}-${qsoData.remoteCallsign}-${qsoData.band}-${qsoData.mode}-${qsoDate.toISOString().split('T')[0]}-${qsoTime}`;
+          const points = pointsPerQso;
 
           const logEntry = await prisma.logEntry.create({
             data: {
               stationId,
+              contestId: defaultContestId || null,
+              clubId: clubId || null,
               callsign: qsoData.remoteCallsign,
               band: qsoData.band,
               mode: qsoData.mode,
@@ -2248,7 +2281,7 @@ app.post(
               rstRcvd: qsoData.rstRcvd || '579',
               grid: qsoData.grid || null,
               state: qsoData.section || null,
-              points: 1,
+              points,
               dedupeKey,
               source: 'scenario',
               merge_status: 'primary',
@@ -2259,6 +2292,7 @@ app.post(
           await prisma.qSOContact.create({
             data: {
               stationId,
+              contestId: defaultContestId || null,
               callsign: qsoData.remoteCallsign,
               band: qsoData.band,
               mode: qsoData.mode,
@@ -2271,6 +2305,33 @@ app.post(
               logEntryId: logEntry.id,
             },
           });
+
+          // Track QSO count and points for contest totals
+          if (defaultContestId) {
+            if (!qsoCountByContest[defaultContestId]) {
+              qsoCountByContest[defaultContestId] = { count: 0, points: 0 };
+            }
+            qsoCountByContest[defaultContestId].count += 1;
+            qsoCountByContest[defaultContestId].points += points;
+          }
+        }
+
+        // Update contest totals
+        for (const [contestId, stats] of Object.entries(qsoCountByContest)) {
+          await prisma.contest.update({
+            where: { id: contestId },
+            data: {
+              totalQsos: stats.count,
+              totalPoints: stats.points,
+            },
+          });
+          
+          // Trigger stats aggregation for this contest
+          try {
+            await aggregateContestStats(contestId);
+          } catch (error) {
+            console.error('Failed to aggregate contest stats after scenario load:', error);
+          }
         }
       }
 
