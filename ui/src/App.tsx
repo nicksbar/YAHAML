@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { ThemeProvider } from './context/ThemeContext'
 import { BandOccupancy } from './components/BandOccupancy'
@@ -29,6 +29,7 @@ type Station = {
   class?: string | null
   section?: string | null
   grid?: string | null
+  updatedAt?: string
   currentBand?: string | null
   currentMode?: string | null
   bandActivities: BandActivity[]
@@ -117,6 +118,8 @@ type RadioConnection = {
   audioSourceType?: string | null
   janusRoomId?: string | null
   janusStreamId?: string | null
+  janusHost?: string | null
+  janusPort?: number | null
   httpStreamUrl?: string | null
   assignments?: RadioAssignment[]
 }
@@ -249,8 +252,19 @@ function App() {
     info?: string
     error?: string
   }>>({})
+  const [janusTestResults, setJanusTestResults] = useState<Record<string, {
+    success: boolean
+    message: string
+  }>>({})
   const [radioLiveState, setRadioLiveState] = useState<Record<string, any>>({})
-  const [radioControlInputs, setRadioControlInputs] = useState<Record<string, { frequency: string; power: string; mode: string; bandwidth: string; raw: string }>>({})
+  const [radioPendingInputs, setRadioPendingInputs] = useState<Record<string, { frequency: string; power: string; mode: string; bandwidth: string; raw: string }>>({})
+  const [radioCapabilities, setRadioCapabilities] = useState<Record<string, {
+    modes?: string[] | null
+    levels?: string[] | null
+    functions?: string[] | null
+    parameters?: string[] | null
+  }>>({})
+  const [radioAudioInputs, setRadioAudioInputs] = useState<Record<string, { janusRoomId: string; janusStreamId: string; janusHost: string; janusPort: string; httpStreamUrl: string }>>({})
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -326,6 +340,63 @@ function App() {
     return (hz / 1_000_000).toFixed(3)
   }
 
+  const normalizeRigModeForControl = (mode?: string | null) => {
+    if (!mode) return 'USB'
+    const upper = mode.toUpperCase()
+    if (upper === 'PKTUSB') return 'USB-D'
+    if (upper === 'PKTLSB') return 'LSB-D'
+    if (upper === 'DIGU') return 'USB-D'
+    if (upper === 'DIGL') return 'LSB-D'
+    if (upper === 'USB-D' || upper === 'LSB-D') return upper
+    if (upper === 'DIGI' || upper === 'DIGITAL' || upper === 'DATA') return 'USB-D'
+    return upper
+  }
+
+  const toRigMode = (mode: string) => {
+    const upper = mode.toUpperCase()
+    if (upper === 'USB-D' || upper === 'DIGU') return 'PKTUSB'
+    if (upper === 'LSB-D' || upper === 'DIGL') return 'PKTLSB'
+    return upper
+  }
+
+  const sanitizeRadioState = (state: any) => {
+    if (!state || typeof state !== 'object') return null
+    
+    // Validate power is in 0-100 range
+    let power: number | null = null
+    if (typeof state.power === 'number') {
+      power = Math.max(0, Math.min(100, Math.round(state.power)))
+    }
+    
+    return {
+      frequency: typeof state.frequency === 'string' ? state.frequency : null,
+      mode: typeof state.mode === 'string' ? state.mode : null,
+      bandwidth: typeof state.bandwidth === 'number' ? state.bandwidth : null,
+      power,
+      ptt: typeof state.ptt === 'boolean' ? state.ptt : null,
+      vfo: typeof state.vfo === 'string' ? state.vfo : null,
+    }
+  }
+
+  const getModeOptions = (radio: RadioConnection) => {
+    const baseModes = ['USB', 'LSB', 'CW', 'FM', 'AM', 'USB-D', 'LSB-D']
+    const supported = radioCapabilities[radio.id]?.modes
+    if (!supported || supported.length === 0) return baseModes
+    const supportedSet = new Set(supported.map((mode) => mode.toUpperCase()))
+    const filtered = baseModes.filter((mode) => {
+      const token = toRigMode(mode).toUpperCase()
+      const label = mode.toUpperCase()
+      return supportedSet.has(token) || supportedSet.has(label)
+    })
+    return filtered.length ? filtered : baseModes
+  }
+
+  const hasPowerControl = (radio: RadioConnection) => {
+    const levels = radioCapabilities[radio.id]?.levels
+    if (!levels || levels.length === 0) return true
+    return levels.some((level) => level.toUpperCase() === 'RFPOWER')
+  }
+
   const toFrequencyHz = (input: string) => {
     const normalized = input.trim()
     if (!normalized) return null
@@ -336,30 +407,104 @@ function App() {
 
   const getRadioState = (radio: RadioConnection) => {
     const live = radioLiveState[radio.id]
+    // Sanitize to prevent displaying corrupted data (e.g., capabilities leaking in)
+    const getLiveValue = (key: string) => {
+      const val = live?.[key]
+      // Reject if it looks like corrupted data (e.g., array-like or very long string)
+      if (typeof val === 'string' && (val.includes('\n') || val.length > 100)) return undefined
+      if (Array.isArray(val)) return undefined
+      return val
+    }
     return {
-      frequency: live?.frequency || radio.frequency || null,
-      mode: live?.mode || radio.mode || null,
-      bandwidth: live?.bandwidth ?? radio.bandwidth ?? null,
-      power: live?.power ?? radio.power ?? null,
-      ptt: live?.ptt ?? null,
-      vfo: live?.vfo ?? null,
+      frequency: getLiveValue('frequency') || radio.frequency || null,
+      mode: getLiveValue('mode') || radio.mode || null,
+      bandwidth: getLiveValue('bandwidth') ?? radio.bandwidth ?? null,
+      power: getLiveValue('power') ?? radio.power ?? null,
+      ptt: getLiveValue('ptt') ?? null,
+      vfo: getLiveValue('vfo') ?? null,
+      isConnected: getLiveValue('isConnected') ?? radio.isConnected ?? false,
     }
   }
 
   const getControlInputs = (radio: RadioConnection) => {
-    if (radioControlInputs[radio.id]) return radioControlInputs[radio.id]
+    if (radioPendingInputs[radio.id]) return radioPendingInputs[radio.id]
     const state = getRadioState(radio)
     return {
       frequency: formatFrequencyMHz(state.frequency),
       power: state.power !== null && state.power !== undefined ? String(state.power) : '50',
-      mode: state.mode || 'USB',
+      mode: normalizeRigModeForControl(state.mode),
       bandwidth: state.bandwidth !== null && state.bandwidth !== undefined ? String(state.bandwidth) : '3000',
       raw: '',
     }
   }
 
+  const powerUpdateTimers = useRef<Record<string, number | undefined>>({})
+  const wsRef = useRef<WebSocket | null>(null)
+  const rigInitialStateFetched = useRef(false)
+
+  const sendRadioCommand = (radioId: string, command: string, params: Record<string, any>) => {
+    // Send control command via WebSocket
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      addError('WebSocket not connected - cannot send command');
+      return;
+    }
+
+    wsRef.current.send(
+      JSON.stringify({
+        type: 'radioControl',
+        data: { radioId, command, params },
+      })
+    );
+  };
+
+  const schedulePowerUpdate = (radioId: string, powerValue: number) => {
+    const existing = powerUpdateTimers.current[radioId]
+    if (existing) {
+      window.clearTimeout(existing)
+    }
+    powerUpdateTimers.current[radioId] = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/radios/${radioId}/power`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ power: Number(powerValue) || 0 }),
+        })
+        const data = await response.json()
+        if (!response.ok) {
+          addError(data.error || 'Failed to set power')
+        }
+        // WebSocket will broadcast the updated state
+      } catch (error) {
+        addError(error instanceof Error ? error.message : 'Failed to set power')
+      } finally {
+        powerUpdateTimers.current[radioId] = undefined
+      }
+    }, 200)
+  }
+
+  const getAudioInputs = (radio: RadioConnection) => {
+    if (radioAudioInputs[radio.id]) return radioAudioInputs[radio.id]
+    return {
+      janusRoomId: radio.janusRoomId || '',
+      janusStreamId: radio.janusStreamId || '',
+      janusHost: radio.janusHost || radio.host || '',
+      janusPort: radio.janusPort ? String(radio.janusPort) : '8088',
+      httpStreamUrl: radio.httpStreamUrl || '',
+    }
+  }
+
   const setControlInput = (radioId: string, patch: Partial<{ frequency: string; power: string; mode: string; bandwidth: string; raw: string }>) => {
-    setRadioControlInputs(prev => ({
+    setRadioPendingInputs(prev => ({
+      ...prev,
+      [radioId]: {
+        ...prev[radioId],
+        ...patch,
+      },
+    }))
+  }
+
+  const setAudioInput = (radioId: string, patch: Partial<{ janusRoomId: string; janusStreamId: string; janusHost: string; janusPort: string; httpStreamUrl: string }>) => {
+    setRadioAudioInputs(prev => ({
       ...prev,
       [radioId]: {
         ...prev[radioId],
@@ -376,7 +521,10 @@ function App() {
       if (!response.ok) return
       const data = await response.json()
       if (data?.state) {
-        setRadioLiveState(prev => ({ ...prev, [radioId]: data.state }))
+        const clean = sanitizeRadioState(data.state)
+        if (clean) {
+          setRadioLiveState(prev => ({ ...prev, [radioId]: clean }))
+        }
       }
     } catch {
       // silent
@@ -427,7 +575,8 @@ function App() {
     localStorage.setItem(storageKey, callsign)
     setCallsignInput(callsign)
 
-    const station = stations.find((s) => s.callsign === callsign)
+    const normalized = callsign.toUpperCase()
+    const station = stations.find((s) => s.callsign.toUpperCase() === normalized)
     if (station) {
       setSelectedStationId(station.id)
       await establishSession(station)
@@ -631,13 +780,29 @@ function App() {
       const response = await fetch('/api/stations')
       if (!response.ok) throw new Error('Failed to load stations')
       const data = (await response.json()) as Station[]
-      setStations(data)
+      const deduped = new Map<string, Station>()
+      for (const station of data) {
+        const key = station.callsign.toUpperCase()
+        const existing = deduped.get(key)
+        if (!existing) {
+          deduped.set(key, station)
+          continue
+        }
+        const existingUpdated = existing.updatedAt ? Date.parse(existing.updatedAt) : 0
+        const nextUpdated = station.updatedAt ? Date.parse(station.updatedAt) : 0
+        if (nextUpdated >= existingUpdated) {
+          deduped.set(key, station)
+        }
+      }
+      const stationsList = Array.from(deduped.values())
+      setStations(stationsList)
       const storedCallsign = localStorage.getItem(storageKey)
       const storedToken = localStorage.getItem(sessionTokenKey)
       
       // Restore session if we have both callsign and token (and haven't already selected a station)
       if (!selectedStationId && storedCallsign && storedToken && !sessionToken) {
-        const matched = data.find((station) => station.callsign === storedCallsign)
+        const normalizedStored = storedCallsign.toUpperCase()
+        const matched = stationsList.find((station) => station.callsign.toUpperCase() === normalizedStored)
         if (matched) {
           console.log('[SESSION] Restoring session for', storedCallsign)
           // Validate the token is still valid
@@ -786,7 +951,22 @@ function App() {
       })
       if (response.ok) {
         const data = await response.json()
-        setAllStations(Array.isArray(data) ? data : [])
+        const stationsArray = Array.isArray(data) ? data : []
+        const deduped = new Map<string, any>()
+        for (const station of stationsArray) {
+          const key = String(station.callsign || '').toUpperCase()
+          const existing = deduped.get(key)
+          if (!existing) {
+            deduped.set(key, station)
+            continue
+          }
+          const existingUpdated = existing.updatedAt ? Date.parse(existing.updatedAt) : 0
+          const nextUpdated = station.updatedAt ? Date.parse(station.updatedAt) : 0
+          if (nextUpdated >= existingUpdated) {
+            deduped.set(key, station)
+          }
+        }
+        setAllStations(Array.from(deduped.values()))
       }
     } catch (error) {
       console.error('Failed to fetch stations:', error)
@@ -934,10 +1114,42 @@ function App() {
       const response = await fetch('/api/radios')
       if (response.ok) {
         const data = await response.json()
+        // Just update the radio config, don't touch live state
+        // radioLiveState is managed separately by WebSocket and API calls
         setRadios(data)
       }
     } catch {
       // silent
+    }
+  }
+
+  const fetchRadioCapabilities = async (radioId: string) => {
+    try {
+      const response = await fetch(`/api/radios/${radioId}/capabilities`, {
+        headers: { ...getAuthHeaders() },
+      })
+      if (!response.ok) {
+        console.warn(`[Rig] Failed to fetch capabilities for ${radioId}: ${response.status}`)
+        return
+      }
+      const data = await response.json()
+      if (data?.capabilities) {
+        const caps = data.capabilities
+        // Validate that capabilities are arrays
+        if (Array.isArray(caps.modes) || caps.modes === null || !caps.modes) {
+          setRadioCapabilities(prev => ({
+            ...prev,
+            [radioId]: {
+              modes: Array.isArray(caps.modes) ? caps.modes : null,
+              levels: Array.isArray(caps.levels) ? caps.levels : null,
+              functions: Array.isArray(caps.functions) ? caps.functions : null,
+              parameters: Array.isArray(caps.parameters) ? caps.parameters : null,
+            },
+          }))
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Rig] Capabilities fetch error for ${radioId}:`, err?.message)
     }
   }
 
@@ -1257,57 +1469,165 @@ function App() {
   }
 
   useEffect(() => {
-    // Connect to WebSocket for real-time updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    // Connect to WebSocket for real-time updates with reconnection
+    let reconnectAttempts = 0
+    let reconnectTimer: number | undefined
+    const maxReconnectAttempts = 10
+    const baseDelay = 1000 // 1 second
     
-    ws.onmessage = (event) => {
+    const connect = () => {
       try {
-        const message = JSON.parse(event.data)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          console.log('WebSocket connected')
+          reconnectAttempts = 0
+          addSuccess('Connected to server')
+          // Re-subscribe on reconnect
+          ws?.send(JSON.stringify({ type: 'subscribe', channel: 'stations' }))
+          ws?.send(JSON.stringify({ type: 'subscribe', channel: 'radio' }))
+        }
         
-        // Handle band/mode change updates from relay
-        if (message.type === 'bandModeChange') {
-          console.log('Band/mode change:', message.data)
-          // Update the station in our state
-          setStations(prev => prev.map(station => 
-            station.id === message.data.stationId
-              ? { ...station, currentBand: message.data.band, currentMode: message.data.mode }
-              : station
-          ))
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data)
+            
+            // Handle band/mode change updates from relay
+            if (message.type === 'bandModeChange') {
+              console.log('Band/mode change:', message.data)
+              // Update the station in our state
+              setStations(prev => prev.map(station => 
+                station.id === message.data.stationId
+                  ? { ...station, currentBand: message.data.band, currentMode: message.data.mode }
+                  : station
+              ))
+            }
+
+            if (message.type === 'radioStateUpdate' && message.channel === 'radio') {
+              const { radioId, state } = message.data || {}
+              if (radioId && state) {
+                const cleanState = sanitizeRadioState(state)
+                if (cleanState) {
+                  // Only update radioLiveState - this is the single source of truth for all live data
+                  // Include isConnected in the live state
+                  setRadioLiveState(prev => ({ 
+                    ...prev, 
+                    [radioId]: {
+                      ...cleanState,
+                      isConnected: typeof state.isConnected === 'boolean' ? state.isConnected : prev[radioId]?.isConnected
+                    }
+                  }))
+                }
+              }
+            }
+          } catch (error) {
+            console.error('WebSocket message parse error:', error)
+          }
+        }
+        
+        ws.onerror = (error) => {
+          console.error('WebSocket error:', error)
+        }
+        
+        ws.onclose = () => {
+          console.log('WebSocket disconnected, attempting reconnect...')
+          addError('Disconnected from server, reconnecting...')
+          wsRef.current = null
+          
+          // Exponential backoff reconnection
+          if (reconnectAttempts < maxReconnectAttempts) {
+            const delay = baseDelay * Math.pow(2, reconnectAttempts)
+            console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`)
+            reconnectTimer = window.setTimeout(connect, delay)
+            reconnectAttempts++
+          } else {
+            addError('Failed to reconnect to server. Please refresh the page.')
+            console.error('Max reconnection attempts reached')
+          }
         }
       } catch (error) {
-        console.error('WebSocket message parse error:', error)
+        console.error('Failed to create WebSocket:', error)
+        if (reconnectAttempts < maxReconnectAttempts) {
+          const delay = baseDelay * Math.pow(2, reconnectAttempts)
+          reconnectTimer = window.setTimeout(connect, delay)
+          reconnectAttempts++
+        }
       }
     }
-    
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
-    
+
+    connect()
+
     return () => {
-      ws.close()
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
     }
   }, [])
 
   useEffect(() => {
-    fetchStations()
-    fetchServices()
-    fetchContest()
-    fetchAdminList()
-    fetchScenarios()
-    fetchClubs()
-    fetchSpecialCallsigns()
-    fetchContestTemplates()
-    fetchRadios()
-    fetchLocations()
-    fetchAllStations()
-    // fetchRadioAssignments()
-  }, [])
+    // Fetch only what the current page needs
+    if (currentView === 'dashboard') {
+      fetchStations()
+      fetchServices()
+      fetchContest()
+    } else if (currentView === 'logging') {
+      fetchStations()
+      fetchContest()
+    } else if (currentView === 'rig') {
+      fetchRadios()
+    } else if (currentView === 'admin') {
+      fetchAdminList()
+      fetchScenarios()
+      fetchAvailableContests()
+    } else if (currentView === 'club') {
+      fetchClubs()
+      fetchContest()
+    }
+  }, [currentView])
 
   useEffect(() => {
     // Update admin list input when admin callsigns change
     setAdminListInput(adminCallsigns.join(', '))
   }, [adminCallsigns])
+
+  useEffect(() => {
+    if (!sessionToken) return
+    let cancelled = false
+
+    const validateSession = async () => {
+      try {
+        const response = await fetch('/api/sessions/me', {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        })
+
+        if (!response.ok) {
+          if (!cancelled && (response.status === 401 || response.status === 403)) {
+            clearSession()
+          }
+          return
+        }
+
+        const data = await response.json()
+        if (!cancelled && data?.stationId && !selectedStationId) {
+          setSelectedStationId(data.stationId)
+        }
+      } catch {
+        // ignore transient network failures
+      }
+    }
+
+    validateSession()
+    const interval = setInterval(validateSession, 5 * 60 * 1000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [sessionToken, selectedStationId])
 
   useEffect(() => {
     // Recheck admin status when callsign changes
@@ -1328,7 +1648,8 @@ function App() {
   useEffect(() => {
     const storedCall = localStorage.getItem(storageKey)
     if (!storedCall) return
-    const station = stations.find((s) => s.callsign === storedCall)
+    const normalized = storedCall.toUpperCase()
+    const station = stations.find((s) => s.callsign.toUpperCase() === normalized)
     if (station) {
       if (selectedStationId !== station.id) {
         setSelectedStationId(station.id)
@@ -1340,20 +1661,51 @@ function App() {
   }, [stations, selectedStationId, sessionToken])
 
   useEffect(() => {
-    if (!autoRefresh) return
-    const interval = setInterval(() => {
-      fetchStations()
-      // Don't fetch station details on auto-refresh - it resets the form
-    }, 5000)
-    return () => clearInterval(interval)
-  }, [autoRefresh])
-
-  useEffect(() => {
     if (currentView === 'admin') {
       fetchAvailableContests()
       fetchScenarios()
     }
   }, [currentView])
+
+  useEffect(() => {
+    if (currentView !== 'rig') {
+      rigInitialStateFetched.current = false
+      return
+    }
+    if (!sessionToken) return
+    
+    // Only fetch live state once when entering rig tab
+    if (rigInitialStateFetched.current) return
+    rigInitialStateFetched.current = true
+    
+    // Fetch live state for all connected radios on initial rig view
+    // This reads the current radios array without it being a dependency
+    radios.forEach((radio) => {
+      if (radio.isConnected && !radioLiveState[radio.id]) {
+        refreshRadioState(radio.id)
+      }
+    })
+  }, [currentView, sessionToken])
+
+  useEffect(() => {
+    if (currentView !== 'rig') return
+    if (!sessionToken) return
+    
+    // Fetch capabilities only once per radio, after a small delay to avoid races
+    const timers: number[] = []
+    radios
+      .filter((radio) => (radioLiveState[radio.id]?.isConnected ?? radio.isConnected) && !radioCapabilities[radio.id])
+      .forEach((radio) => {
+        const timer = setTimeout(() => {
+          fetchRadioCapabilities(radio.id)
+        }, 100)
+        timers.push(timer)
+      })
+    
+    return () => {
+      timers.forEach(t => clearTimeout(t))
+    }
+  }, [currentView, radios, sessionToken])
 
   useEffect(() => {
     if (currentView === 'club') {
@@ -2687,7 +3039,6 @@ function App() {
                     setRadioConnectionType('hamlib')
                     setRadioPollInterval('1000')
                     setRadioTestResult(null)
-                    await fetchRadios()
                   }
                 } catch (error) {
                   console.error('Failed to create radio:', error)
@@ -2714,8 +3065,8 @@ function App() {
                   <div key={radio.id} className="radio-card">
                     <div className="radio-header">
                       <h3>{radio.name}</h3>
-                      <span className={`status-badge ${radio.isConnected ? 'connected' : 'disconnected'}`}>
-                        {radio.isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+                      <span className={`status-badge ${state.isConnected ? 'connected' : 'disconnected'}`}>
+                        {state.isConnected ? '🟢 Connected' : '🔴 Disconnected'}
                       </span>
                     </div>
                     <div className="radio-details">
@@ -2745,19 +3096,19 @@ function App() {
                           <strong>Host:</strong> {radio.host}:{radio.port}
                         </div>
                       )}
-                      {radio.frequency && (
+                      {state.frequency && (
                         <div className="radio-info">
-                          <strong>Frequency:</strong> {(parseInt(radio.frequency) / 1000000).toFixed(3)} MHz
+                          <strong>Frequency:</strong> {(parseInt(state.frequency) / 1000000).toFixed(3)} MHz
                         </div>
                       )}
-                      {radio.mode && (
+                      {state.mode && (
                         <div className="radio-info">
-                          <strong>Mode:</strong> {radio.mode}
+                          <strong>Mode:</strong> {state.mode}
                         </div>
                       )}
-                      {radio.power !== null && radio.power !== undefined && (
+                      {state.power !== null && state.power !== undefined && (
                         <div className="radio-info">
-                          <strong>Power:</strong> {radio.power}W
+                          <strong>Power:</strong> {state.power}W
                         </div>
                       )}
                       {assignment && (
@@ -2771,7 +3122,7 @@ function App() {
                         </div>
                       )}
                     </div>
-                    {radio.isConnected && (
+                    {state.isConnected && (
                       <div className="radio-control-panel">
                         <div className="rig-display">
                           <div className="rig-display-label">Frequency</div>
@@ -2803,15 +3154,14 @@ function App() {
                               />
                               <button
                                 className="btn secondary"
-                                onClick={async () => {
+                                onClick={() => {
                                   const hz = toFrequencyHz(inputs.frequency)
-                                  if (!hz) return
-                                  await fetch(`/api/radios/${radio.id}/frequency`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                    body: JSON.stringify({ frequencyHz: hz }),
-                                  })
-                                  await refreshRadioState(radio.id)
+                                  if (!hz) {
+                                    addError('Invalid frequency format')
+                                    return
+                                  }
+                                  sendRadioCommand(radio.id, 'setFrequency', { frequencyHz: hz })
+                                  addSuccess('Frequency command sent')
                                 }}
                               >
                                 Set
@@ -2824,14 +3174,24 @@ function App() {
                                   className="btn secondary"
                                   onClick={async () => {
                                     const current = toFrequencyHz(formatFrequencyMHz(state.frequency))
-                                    if (!current) return
+                                    if (!current) {
+                                      addError('Invalid current frequency')
+                                      return
+                                    }
                                     const next = current + step * 1_000
-                                    await fetch(`/api/radios/${radio.id}/frequency`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                      body: JSON.stringify({ frequencyHz: next }),
-                                    })
-                                    await refreshRadioState(radio.id)
+                                    try {
+                                      const response = await fetch(`/api/radios/${radio.id}/frequency`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({ frequencyHz: next }),
+                                      })
+                                      const data = await response.json()
+                                      if (!response.ok) {
+                                        addError(data.error || 'Failed to set frequency')
+                                      }
+                                    } catch (error) {
+                                      addError(error instanceof Error ? error.message : 'Failed to set frequency')
+                                    }
                                   }}
                                 >
                                   +{step}k
@@ -2843,14 +3203,24 @@ function App() {
                                   className="btn secondary"
                                   onClick={async () => {
                                     const current = toFrequencyHz(formatFrequencyMHz(state.frequency))
-                                    if (!current) return
+                                    if (!current) {
+                                      addError('Invalid current frequency')
+                                      return
+                                    }
                                     const next = current - step * 1_000
-                                    await fetch(`/api/radios/${radio.id}/frequency`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                      body: JSON.stringify({ frequencyHz: next }),
-                                    })
-                                    await refreshRadioState(radio.id)
+                                    try {
+                                      const response = await fetch(`/api/radios/${radio.id}/frequency`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({ frequencyHz: next }),
+                                      })
+                                      const data = await response.json()
+                                      if (!response.ok) {
+                                        addError(data.error || 'Failed to set frequency')
+                                      }
+                                    } catch (error) {
+                                      addError(error instanceof Error ? error.message : 'Failed to set frequency')
+                                    }
                                   }}
                                 >
                                   -{step}k
@@ -2862,18 +3232,14 @@ function App() {
                           <div className="rig-control">
                             <label>Mode</label>
                             <div className="quick-select">
-                              {['USB', 'LSB', 'CW', 'FM', 'AM', 'DIGI'].map((mode) => (
+                              {getModeOptions(radio).map((mode) => (
                                 <button
                                   key={mode}
                                   className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
-                                  onClick={async () => {
+                                  onClick={() => {
                                     setControlInput(radio.id, { mode })
-                                    await fetch(`/api/radios/${radio.id}/mode`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                      body: JSON.stringify({ mode, bandwidth: Number(inputs.bandwidth) || 3000 }),
-                                    })
-                                    await refreshRadioState(radio.id)
+                                    sendRadioCommand(radio.id, 'setMode', { mode: toRigMode(mode), bandwidth: Number(inputs.bandwidth) || 3000 })
+                                    addSuccess('Mode command sent')
                                   }}
                                 >
                                   {mode}
@@ -2892,13 +3258,9 @@ function App() {
                               />
                               <button
                                 className="btn secondary"
-                                onClick={async () => {
-                                  await fetch(`/api/radios/${radio.id}/mode`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                    body: JSON.stringify({ mode: inputs.mode, bandwidth: Number(inputs.bandwidth) || 3000 }),
-                                  })
-                                  await refreshRadioState(radio.id)
+                                onClick={() => {
+                                  sendRadioCommand(radio.id, 'setMode', { mode: toRigMode(inputs.mode), bandwidth: Number(inputs.bandwidth) || 3000 })
+                                  addSuccess('Bandwidth command sent')
                                 }}
                               >
                                 Apply
@@ -2913,24 +3275,30 @@ function App() {
                                 type="range"
                                 min={0}
                                 max={100}
-                                value={inputs.power}
-                                onChange={(e) => setControlInput(radio.id, { power: e.target.value })}
-                              />
-                              <span>{inputs.power}%</span>
-                              <button
-                                className="btn secondary"
-                                onClick={async () => {
-                                  await fetch(`/api/radios/${radio.id}/power`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                    body: JSON.stringify({ power: Number(inputs.power) || 0 }),
-                                  })
-                                  await refreshRadioState(radio.id)
+                                value={inputs.power ?? '0'}
+                                disabled={!hasPowerControl(radio)}
+                                onChange={(e) => {
+                                  setControlInput(radio.id, { power: e.target.value })
+                                  if (hasPowerControl(radio)) {
+                                    schedulePowerUpdate(radio.id, Number(e.target.value))
+                                  }
                                 }}
-                              >
-                                Set
-                              </button>
+                                onMouseUp={(e) => {
+                                  if (hasPowerControl(radio)) {
+                                    schedulePowerUpdate(radio.id, Number((e.target as HTMLInputElement).value))
+                                  }
+                                }}
+                                onTouchEnd={(e) => {
+                                  if (hasPowerControl(radio)) {
+                                    schedulePowerUpdate(radio.id, Number((e.target as HTMLInputElement).value))
+                                  }
+                                }}
+                              />
+                              <span>{inputs.power ?? '0'}%</span>
                             </div>
+                            {!hasPowerControl(radio) && (
+                              <div className="field-hint">Power control not supported by this rig.</div>
+                            )}
                           </div>
 
                           <div className="rig-control">
@@ -2938,13 +3306,9 @@ function App() {
                             <div className="rig-ptt-row">
                               <button
                                 className={`btn ${state.ptt ? 'danger' : 'secondary'}`}
-                                onClick={async () => {
-                                  await fetch(`/api/radios/${radio.id}/ptt`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                    body: JSON.stringify({ enabled: !state.ptt }),
-                                  })
-                                  await refreshRadioState(radio.id)
+                                onClick={() => {
+                                  sendRadioCommand(radio.id, 'setPtt', { enabled: !state.ptt })
+                                  addSuccess(state.ptt ? 'PTT OFF command sent' : 'PTT ON command sent')
                                 }}
                               >
                                 {state.ptt ? 'TX (PTT ON)' : 'RX (PTT OFF)'}
@@ -2959,13 +3323,9 @@ function App() {
                                 <button
                                   key={vfo}
                                   className={`quick-btn ${state.vfo === vfo ? 'active' : ''}`}
-                                  onClick={async () => {
-                                    await fetch(`/api/radios/${radio.id}/vfo`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                      body: JSON.stringify({ vfo }),
-                                    })
-                                    await refreshRadioState(radio.id)
+                                  onClick={() => {
+                                    sendRadioCommand(radio.id, 'setVfo', { vfo })
+                                    addSuccess(`VFO set to ${vfo}`)
                                   }}
                                 >
                                   {vfo}
@@ -2984,15 +3344,14 @@ function App() {
                               />
                               <button
                                 className="btn secondary"
-                                onClick={async () => {
-                                  if (!inputs.raw.trim()) return
-                                  await fetch(`/api/radios/${radio.id}/raw`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                    body: JSON.stringify({ command: inputs.raw.trim() }),
-                                  })
+                                onClick={() => {
+                                  if (!inputs.raw.trim()) {
+                                    addError('Enter a command')
+                                    return
+                                  }
+                                  sendRadioCommand(radio.id, 'sendRaw', { command: inputs.raw.trim() })
+                                  addSuccess('Raw command sent')
                                   setControlInput(radio.id, { raw: '' })
-                                  await refreshRadioState(radio.id)
                                 }}
                               >
                                 Send
@@ -3018,7 +3377,6 @@ function App() {
                                   headers: { 'Content-Type': 'application/json' },
                                   body: JSON.stringify({ audioSourceType: e.target.value === 'none' ? null : e.target.value }),
                                 })
-                                await fetchRadios()
                               } catch (error) {
                                 console.error('Failed to update audio source:', error)
                               }
@@ -3033,42 +3391,108 @@ function App() {
                         {radio.audioSourceType === 'janus' && (
                           <>
                             <div className="field">
+                              <label>Janus Host</label>
+                              <input
+                                value={getAudioInputs(radio).janusHost}
+                                onChange={(e) => setAudioInput(radio.id, { janusHost: e.target.value })}
+                                placeholder="192.168.1.123"
+                              />
+                            </div>
+                            <div className="field">
+                              <label>Janus Port</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={65535}
+                                value={getAudioInputs(radio).janusPort}
+                                onChange={(e) => setAudioInput(radio.id, { janusPort: e.target.value })}
+                                placeholder="8088"
+                              />
+                            </div>
+                            <div className="field">
                               <label>Janus Room ID</label>
                               <input
-                                value={radio.janusRoomId || ''}
-                                onChange={async (e) => {
-                                  try {
-                                    await fetch(`/api/radios/${radio.id}`, {
-                                      method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ janusRoomId: e.target.value }),
-                                    })
-                                    await fetchRadios()
-                                  } catch (error) {
-                                    console.error('Failed to update Janus room:', error)
-                                  }
-                                }}
+                                value={getAudioInputs(radio).janusRoomId}
+                                onChange={(e) => setAudioInput(radio.id, { janusRoomId: e.target.value })}
                                 placeholder="1234"
                               />
                             </div>
                             <div className="field">
                               <label>Janus Stream ID</label>
                               <input
-                                value={radio.janusStreamId || ''}
-                                onChange={async (e) => {
-                                  try {
-                                    await fetch(`/api/radios/${radio.id}`, {
-                                      method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ janusStreamId: e.target.value }),
-                                    })
-                                    await fetchRadios()
-                                  } catch (error) {
-                                    console.error('Failed to update stream ID:', error)
-                                  }
-                                }}
+                                value={getAudioInputs(radio).janusStreamId}
+                                onChange={(e) => setAudioInput(radio.id, { janusStreamId: e.target.value })}
                                 placeholder="radio1"
                               />
+                            </div>
+                            <div className="field" style={{ gridColumn: '1 / -1' }}>
+                              <div className="action-buttons" style={{ marginTop: '0' }}>
+                                <button
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    try {
+                                      const inputs = getAudioInputs(radio)
+                                      const janusPort = Number(inputs.janusPort || '0')
+                                      await fetch(`/api/radios/${radio.id}`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          janusHost: inputs.janusHost || null,
+                                          janusPort: Number.isFinite(janusPort) && janusPort > 0 ? janusPort : null,
+                                          janusRoomId: inputs.janusRoomId || null,
+                                          janusStreamId: inputs.janusStreamId || null,
+                                        }),
+                                      })
+                                      addSuccess('Janus settings saved')
+                                    } catch (error) {
+                                      console.error('Failed to update Janus settings:', error)
+                                      addError('Failed to save Janus settings')
+                                    }
+                                  }}
+                                >
+                                  💾 Save Janus Settings
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={async () => {
+                                    const inputs = getAudioInputs(radio)
+                                    const host = inputs.janusHost || radio.host
+                                    const port = inputs.janusPort || '8088'
+                                    if (!host) {
+                                      setJanusTestResults(prev => ({
+                                        ...prev,
+                                        [radio.id]: { success: false, message: 'Missing Janus host for test' },
+                                      }))
+                                      return
+                                    }
+                                    try {
+                                      const controller = new AbortController()
+                                      const timeout = setTimeout(() => controller.abort(), 5000)
+                                      const response = await fetch(`http://${host}:${port}/janus/info`, { signal: controller.signal })
+                                      clearTimeout(timeout)
+                                      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+                                      const data = await response.json()
+                                      setJanusTestResults(prev => ({
+                                        ...prev,
+                                        [radio.id]: { success: true, message: `Janus ${data.version_string || 'OK'}` },
+                                      }))
+                                    } catch (error) {
+                                      const message = error instanceof Error ? error.message : 'Janus test failed'
+                                      setJanusTestResults(prev => ({
+                                        ...prev,
+                                        [radio.id]: { success: false, message },
+                                      }))
+                                    }
+                                  }}
+                                >
+                                  🔍 Test Janus
+                                </button>
+                              </div>
+                              {janusTestResults[radio.id] && (
+                                <div className={`test-result ${janusTestResults[radio.id].success ? 'success' : 'error'}`}>
+                                  {janusTestResults[radio.id].success ? '✅' : '❌'} {janusTestResults[radio.id].message}
+                                </div>
+                              )}
                             </div>
                           </>
                         )}
@@ -3076,21 +3500,31 @@ function App() {
                           <div className="field" style={{ gridColumn: '1 / -1' }}>
                             <label>HTTP Stream URL</label>
                             <input
-                              value={radio.httpStreamUrl || ''}
-                              onChange={async (e) => {
-                                try {
-                                  await fetch(`/api/radios/${radio.id}`, {
-                                    method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ httpStreamUrl: e.target.value }),
-                                  })
-                                  await fetchRadios()
-                                } catch (error) {
-                                  console.error('Failed to update HTTP stream URL:', error)
-                                }
-                              }}
+                              value={getAudioInputs(radio).httpStreamUrl}
+                              onChange={(e) => setAudioInput(radio.id, { httpStreamUrl: e.target.value })}
                               placeholder="http://192.168.1.100:8080/audio.mp3"
                             />
+                            <div className="action-buttons" style={{ marginTop: '0' }}>
+                              <button
+                                className="btn secondary"
+                                onClick={async () => {
+                                  try {
+                                    const inputs = getAudioInputs(radio)
+                                    await fetch(`/api/radios/${radio.id}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ httpStreamUrl: inputs.httpStreamUrl || null }),
+                                    })
+                                    addSuccess('HTTP stream saved')
+                                  } catch (error) {
+                                    console.error('Failed to update HTTP stream URL:', error)
+                                    addError('Failed to save HTTP stream URL')
+                                  }
+                                }}
+                              >
+                                💾 Save HTTP Stream
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -3108,7 +3542,7 @@ function App() {
                                 body: JSON.stringify({ isEnabled: true }),
                               })
                               if (response.ok) {
-                                await fetchRadios()
+                                setRadios(prev => prev.map(r => r.id === radio.id ? { ...r, isEnabled: true } : r))
                               }
                             } catch (error) {
                               console.error('Failed to enable radio:', error)
@@ -3128,7 +3562,7 @@ function App() {
                                 body: JSON.stringify({ isEnabled: false }),
                               })
                               if (response.ok) {
-                                await fetchRadios()
+                                setRadios(prev => prev.map(r => r.id === radio.id ? { ...r, isEnabled: false } : r))
                               }
                             } catch (error) {
                               console.error('Failed to disable radio:', error)
@@ -4239,13 +4673,13 @@ function App() {
                 </div>
               </div>
             )}
-            {Object.entries(scenariosByCategory).map(([category, items]) => (
+            {Object.entries(scenariosByCategory).map(([category, items]: [string, any]) => (
               <div key={category} style={{ marginBottom: '1.5rem' }}>
                 <h3 style={{ fontSize: '0.95rem', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   {categoryLabels[category] || category}
                 </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-sm)' }}>
-                  {items.map((scenario: any) => (
+                  {(items as any[]).map((scenario: any) => (
                     <div
                       key={scenario.id}
                       style={{

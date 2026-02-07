@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import type { Server as HTTPServer } from 'http';
 import prisma from './db';
+import { RadioManager } from './hamlib';
 
 // WebSocket message types
 export interface WSMessage {
@@ -50,6 +51,11 @@ interface ClientSubscription {
 class WebSocketManager {
   private wss: WebSocketServer | null = null;
   private clients: Map<WebSocket, ClientSubscription> = new Map();
+  private radioManager: RadioManager | null = null;
+
+  setRadioManager(radioManager: RadioManager) {
+    this.radioManager = radioManager;
+  }
 
   initialize(server: HTTPServer) {
     this.wss = new WebSocketServer({ server, path: '/ws' });
@@ -154,6 +160,16 @@ class WebSocketManager {
         }
         break;
 
+      case 'radioControl':
+        this.handleRadioControl(ws, message).catch((error) => {
+          console.error('Radio control error:', error);
+          this.send(ws, {
+            type: 'error',
+            data: { message: error instanceof Error ? error.message : 'Control command failed' },
+          });
+        });
+        break;
+
       case 'ping':
         this.send(ws, { type: 'pong' });
         break;
@@ -163,6 +179,102 @@ class WebSocketManager {
           type: 'error',
           data: { message: `Unknown message type: ${message.type}` },
         });
+    }
+  }
+
+  private async handleRadioControl(ws: WebSocket, message: WSMessage): Promise<void> {
+    if (!this.radioManager) {
+      throw new Error('Radio manager not initialized');
+    }
+
+    const { radioId, command, params } = message.data || {};
+    if (!radioId || !command) {
+      throw new Error('radioId and command are required');
+    }
+
+    const client = this.radioManager.getClient(radioId);
+    if (!client) {
+      throw new Error('Radio not connected. Start it first.');
+    }
+
+    let success = false;
+    let commandName = '';
+
+    // Execute the control command
+    switch (command) {
+      case 'setFrequency':
+        commandName = 'frequency';
+        success = await client.setFrequency(String(params?.frequencyHz));
+        break;
+      case 'setMode':
+        commandName = 'mode';
+        success = await client.setMode(String(params?.mode), Number(params?.bandwidth || 3000));
+        break;
+      case 'setPower':
+        commandName = 'power';
+        success = await client.setPower(Number(params?.power));
+        break;
+      case 'setPtt':
+        commandName = 'ptt';
+        success = await client.setPtt(Boolean(params?.enabled));
+        break;
+      case 'setVfo':
+        commandName = 'vfo';
+        success = await client.setVfo(String(params?.vfo));
+        break;
+      case 'sendRaw':
+        commandName = 'raw command';
+        const response = await client.sendRaw(String(params?.command));
+        success = response.success;
+        break;
+      default:
+        throw new Error(`Unknown radio command: ${command}`);
+    }
+
+    if (!success) {
+      throw new Error(`Failed to set ${commandName} on radio`);
+    }
+
+    // Fetch and broadcast updated state
+    try {
+      const state = await client.getState();
+      const updated = await prisma.radioConnection.update({
+        where: { id: radioId },
+        data: {
+          frequency: state.frequency,
+          mode: state.mode,
+          bandwidth: state.bandwidth,
+          power: state.power,
+          lastSeen: new Date(),
+        },
+      });
+
+      // Broadcast state to all clients subscribed to radio channel
+      this.broadcast('radio', 'radioStateUpdate', {
+        radioId,
+        state: updated,
+      });
+
+      // Send confirmation back to sender
+      this.send(ws, {
+        type: 'radioControlResponse',
+        data: {
+          success: true,
+          command,
+          message: `${commandName} command succeeded`,
+        },
+      });
+    } catch (broadcastError) {
+      console.error(`Failed to broadcast state after ${commandName} change:`, broadcastError);
+      // Still confirm success even if broadcast fails
+      this.send(ws, {
+        type: 'radioControlResponse',
+        data: {
+          success: true,
+          command,
+          message: `${commandName} command succeeded (broadcast pending)`,
+        },
+      });
     }
   }
 
@@ -192,7 +304,10 @@ class WebSocketManager {
 
     await prisma.session.update({
       where: { id: session.id },
-      data: { lastActivity: now },
+      data: {
+        lastActivity: now,
+        expiresAt: new Date(now.getTime() + 20 * 60 * 1000),
+      },
     });
 
     client.userId = session.stationId;

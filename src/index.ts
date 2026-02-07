@@ -69,6 +69,10 @@ function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
+function normalizeCallsign(value: string): string {
+  return value.trim().toUpperCase();
+}
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -128,6 +132,14 @@ app.get('/auth/google', (_req, res) => {
 });
 
 // Session management endpoints
+const SESSION_INACTIVITY_MINUTES = 20;
+const SESSION_DURATION_MS = SESSION_INACTIVITY_MINUTES * 60 * 1000;
+
+const extendSession = (now: Date) => ({
+  lastActivity: now,
+  expiresAt: new Date(now.getTime() + SESSION_DURATION_MS),
+});
+
 // GET /api/sessions/me - Validate current session using Bearer token
 app.get('/api/sessions/me', async (req, res) => {
   try {
@@ -160,10 +172,15 @@ app.get('/api/sessions/me', async (req, res) => {
     const inactiveMs = now.getTime() - session.lastActivity.getTime();
     const inactiveMin = inactiveMs / (1000 * 60);
     
-    if (inactiveMin > 20) {
+    if (inactiveMin > SESSION_INACTIVITY_MINUTES) {
       await prisma.session.delete({ where: { id: session.id } });
       return res.status(401).json({ error: 'Session expired due to inactivity' });
     }
+
+    const updatedSession = await prisma.session.update({
+      where: { id: session.id },
+      data: extendSession(now),
+    });
     
     // Session is valid
     res.json({
@@ -172,8 +189,8 @@ app.get('/api/sessions/me', async (req, res) => {
       callsign: session.callsign,
       stationId: session.stationId,
       station: session.station,
-      expiresAt: session.expiresAt,
-      lastActivity: session.lastActivity
+      expiresAt: updatedSession.expiresAt,
+      lastActivity: updatedSession.lastActivity
     });
     return;
   } catch (error) {
@@ -201,41 +218,40 @@ app.post('/api/sessions', async (req, res) => {
     }
 
     // Check for existing active session for this station
+    const now = new Date();
     const existingSession = await prisma.session.findFirst({
       where: {
         stationId,
-        expiresAt: { gt: new Date() },
+        expiresAt: { gt: now },
+        ...(browserId ? { browserId } : {}),
       },
       orderBy: { lastActivity: 'desc' }
     });
 
-    // If there's a recent active session (within last 5 minutes), return it
+    // If there's an active session for this browser/station, reuse it
     if (existingSession) {
-      const timeSinceActivity = Date.now() - existingSession.lastActivity.getTime();
-      if (timeSinceActivity < 5 * 60 * 1000) { // 5 minutes
-        // Update last activity and return existing session
-        await prisma.session.update({
-          where: { id: existingSession.id },
-          data: { lastActivity: new Date() }
-        });
-        return res.json({ 
-          token: existingSession.token, 
-          expiresAt: existingSession.expiresAt, 
-          sessionId: existingSession.id,
-          reused: true
-        });
-      }
+      const updatedSession = await prisma.session.update({
+        where: { id: existingSession.id },
+        data: extendSession(now),
+      });
+      return res.json({ 
+        token: updatedSession.token, 
+        expiresAt: updatedSession.expiresAt, 
+        sessionId: updatedSession.id,
+        reused: true
+      });
     }
     
     // Generate secure token (base64 encoded random bytes)
-    const token = Buffer.from(`${Date.now()}-${Math.random()}-${callsign}`).toString('base64');
+    const canonicalCallsign = station.callsign || normalizeCallsign(callsign || '');
+    const token = Buffer.from(`${Date.now()}-${Math.random()}-${canonicalCallsign}`).toString('base64');
     
     // Create session with 20 min expiry
-    const expiresAt = new Date(Date.now() + 20 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
     const session = await prisma.session.create({
       data: {
         token,
-        callsign,
+        callsign: canonicalCallsign,
         stationId,
         browserId: browserId || undefined,
         sourceType,
@@ -279,7 +295,7 @@ app.get('/api/sessions/:token', async (req, res) => {
     const inactiveMs = now.getTime() - session.lastActivity.getTime();
     const inactiveMin = inactiveMs / (1000 * 60);
     
-    if (inactiveMin > 20) {
+    if (inactiveMin > SESSION_INACTIVITY_MINUTES) {
       // Delete inactive session
       await prisma.session.delete({ where: { id: session.id } });
       return res.status(401).json({ error: 'Session expired due to inactivity' });
@@ -288,7 +304,7 @@ app.get('/api/sessions/:token', async (req, res) => {
     // Refresh last activity
     const updatedSession = await prisma.session.update({
       where: { id: session.id },
-      data: { lastActivity: now }
+      data: extendSession(now)
     });
     
     res.json({
@@ -372,7 +388,7 @@ const authMiddleware = async (
     const inactiveMs = now.getTime() - session.lastActivity.getTime();
     const inactiveMin = inactiveMs / (1000 * 60);
     
-    if (inactiveMin > 20) {
+    if (inactiveMin > SESSION_INACTIVITY_MINUTES) {
       await prisma.session.delete({ where: { id: session.id } });
       res.status(401).json({ error: 'Session expired due to inactivity' });
       return;
@@ -381,7 +397,7 @@ const authMiddleware = async (
     // Update last activity
     await prisma.session.update({
       where: { id: session.id },
-      data: { lastActivity: now }
+      data: extendSession(now)
     });
     
     // Attach to request
@@ -429,17 +445,17 @@ const requireAdmin = (
 // Stations endpoints
 app.get('/api/stations', async (req, res) => {
   try {
-    const callsignQuery = typeof req.query.callsign === 'string' ? req.query.callsign.trim() : '';
+    const callsignQuery = typeof req.query.callsign === 'string' ? normalizeCallsign(req.query.callsign) : '';
     const whereClause = callsignQuery
       ? {
           callsign: {
             equals: callsignQuery,
-            mode: 'insensitive' as any,
           },
         }
       : undefined;
     const stations = await prisma.station.findMany({
       where: whereClause,
+      orderBy: callsignQuery ? { updatedAt: 'desc' } : { callsign: 'asc' },
       include: {
         location: true,
         bandActivities: true,
@@ -460,18 +476,32 @@ app.get('/api/stations/:id', async (req, res) => {
     // Support both ID and callsign lookups
     const isId = /^[a-z0-9]+$/.test(req.params.id) && req.params.id.length > 10;
     console.log(`Fetching station: id="${req.params.id}", isId=${isId}`);
-    const station = await prisma.station.findUnique({
-      where: isId 
-        ? { id: req.params.id }
-        : { callsign: req.params.id.toUpperCase() },
-      include: {
-        location: true,
-        bandActivities: true,
-        qsoLogs: { orderBy: { qsoDate: 'desc' }, take: 10 },
-        contextLogs: { orderBy: { createdAt: 'desc' }, take: 10 },
-        networkStatus: true,
-      },
-    });
+    const station = isId
+      ? await prisma.station.findUnique({
+          where: { id: req.params.id },
+          include: {
+            location: true,
+            bandActivities: true,
+            qsoLogs: { orderBy: { qsoDate: 'desc' }, take: 10 },
+            contextLogs: { orderBy: { createdAt: 'desc' }, take: 10 },
+            networkStatus: true,
+          },
+        })
+      : await prisma.station.findFirst({
+          where: {
+            callsign: {
+              equals: normalizeCallsign(req.params.id),
+            },
+          },
+          orderBy: { updatedAt: 'desc' },
+          include: {
+            location: true,
+            bandActivities: true,
+            qsoLogs: { orderBy: { qsoDate: 'desc' }, take: 10 },
+            contextLogs: { orderBy: { createdAt: 'desc' }, take: 10 },
+            networkStatus: true,
+          },
+        });
     console.log(`Station result:`, station);
     if (!station) {
       return res.status(404).json({ error: 'Station not found' });
@@ -486,17 +516,32 @@ app.get('/api/stations/:id', async (req, res) => {
 app.post('/api/stations', async (req, res) => {
   try {
     const { callsign, name, class: stationClass, locationId } = req.body;
-    const validation = await validateCallsign(callsign);
+    const normalizedCallsign = normalizeCallsign(callsign || '');
+    const validation = await validateCallsign(normalizedCallsign);
     if (!validation.valid) {
       return res.status(400).json({
         error: 'Invalid callsign',
         details: 'Callsign format is not valid',
       });
     }
+
+    const existingStation = await prisma.station.findFirst({
+      where: {
+        callsign: {
+          equals: normalizedCallsign,
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (existingStation) {
+      return res.status(200).json(existingStation);
+    }
+
     const station = await prisma.station.create({
       data: {
-        callsign,
-        name,
+        callsign: normalizedCallsign,
+        name: name || normalizedCallsign,
         class: stationClass,
         locationId,
       },
@@ -526,7 +571,8 @@ app.post('/api/stations', async (req, res) => {
 
 app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const validation = await validateCallsign(req.params.callsign);
+    const normalizedCallsign = normalizeCallsign(req.params.callsign);
+    const validation = await validateCallsign(normalizedCallsign);
     if (!validation.valid) {
       return res.status(400).json({
         error: 'Invalid callsign',
@@ -534,8 +580,13 @@ app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, a
       });
     }
 
-    const existingStation = await prisma.station.findUnique({
-      where: { callsign: req.params.callsign },
+    const existingStation = await prisma.station.findFirst({
+      where: {
+        callsign: {
+          equals: normalizedCallsign,
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
     });
 
     if (!existingStation) {
@@ -565,7 +616,7 @@ app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, a
       contestId
     } = req.body;
     const station = await prisma.station.update({
-      where: { callsign: req.params.callsign },
+      where: { id: existingStation.id },
       data: {
         name,
         class: stationClass,
@@ -2445,7 +2496,15 @@ app.get('/api/radios', async (_req, res) => {
         },
       },
     });
-    return res.json(radios);
+    
+    // Strip live state fields - these should ONLY come from WebSocket
+    // Live state must not be returned from API to avoid stale data overwriting radioLiveState
+    const safeRadios = radios.map((radio: any) => {
+      const { frequency, mode, bandwidth, power, ptt, vfo, ...rest } = radio;
+      return rest;
+    });
+    
+    return res.json(safeRadios);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -2469,7 +2528,10 @@ app.get('/api/radios/:id', async (req, res) => {
       return res.status(404).json({ error: 'Radio not found' });
     }
     
-    return res.json(radio);
+    // Strip live state fields - these should ONLY come from WebSocket
+    const { frequency, mode, bandwidth, power, ptt, vfo, ...safeRadio } = radio as any;
+    
+    return res.json(safeRadio);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -2512,7 +2574,7 @@ app.post('/api/radios', async (req, res) => {
 // Update radio connection
 app.put('/api/radios/:id', async (req, res) => {
   try {
-    const { name, host, port, pollInterval, isEnabled, connectionType, audioSourceType, janusRoomId, janusStreamId, httpStreamUrl } = req.body;
+    const { name, host, port, pollInterval, isEnabled, connectionType, audioSourceType, janusRoomId, janusStreamId, janusHost, janusPort, httpStreamUrl } = req.body;
     const normalizedType = connectionType === 'mock' ? 'mock' : connectionType === 'hamlib' ? 'hamlib' : undefined;
     
     const updateData: any = {
@@ -2525,6 +2587,8 @@ app.put('/api/radios/:id', async (req, res) => {
       audioSourceType: audioSourceType !== undefined ? audioSourceType : undefined,
       janusRoomId: janusRoomId !== undefined ? janusRoomId : undefined,
       janusStreamId: janusStreamId !== undefined ? janusStreamId : undefined,
+      janusHost: janusHost !== undefined ? janusHost : undefined,
+      janusPort: janusPort !== undefined ? janusPort : undefined,
       httpStreamUrl: httpStreamUrl !== undefined ? httpStreamUrl : undefined,
     };
 
@@ -2684,34 +2748,72 @@ app.post('/api/radios/:id/test', async (req, res) => {
 });
 
 // ============================================================================
-// RADIO CONTROL ENDPOINTS (AUTH + ASSIGNMENT REQUIRED)
+// RADIO CONTROL ENDPOINTS (AUTH REQUIRED)
 // ============================================================================
 
-async function assertRadioControlAccess(req: AuthRequest, res: express.Response, radioId: string) {
+async function assertRadioControlAccess(req: AuthRequest, res: express.Response, radioId: string): Promise<boolean> {
   const assignment = await prisma.radioAssignment.findFirst({
     where: {
       radioId,
       isActive: true,
     },
+    include: {
+      station: true,
+    },
   });
 
   if (!assignment) {
-    res.status(403).json({ error: 'Radio is not assigned to a station' });
-    return null;
+    return true;
   }
 
   if (req.session?.stationId !== assignment.stationId) {
-    res.status(403).json({ error: 'Unauthorized radio control' });
-    return null;
+    const sessionCallsign = req.session?.callsign ? normalizeCallsign(req.session.callsign) : null;
+    const assignmentCallsign = assignment.station?.callsign
+      ? normalizeCallsign(assignment.station.callsign)
+      : null;
+    if (!sessionCallsign || !assignmentCallsign || sessionCallsign !== assignmentCallsign) {
+      res.status(403).json({ error: 'Unauthorized radio control' });
+      return false;
+    }
   }
 
-  return assignment;
+  return true;
 }
+
+app.get('/api/radios/:id/capabilities', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const allowed = await assertRadioControlAccess(req, res, req.params.id);
+    if (!allowed) return;
+
+    const client = radioManager.getClient(req.params.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+    }
+
+    // Serialize queries to avoid response mixing in rigctld
+    const modes = await client.getSupportedModes();
+    const levels = await client.getSupportedLevels();
+    const functions = await client.getSupportedFunctions();
+    const parameters = await client.getSupportedParameters();
+
+    return res.json({
+      success: true,
+      capabilities: {
+        modes,
+        levels,
+        functions,
+        parameters,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
 app.get('/api/radios/:id/state', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
+    const allowed = await assertRadioControlAccess(req, res, req.params.id);
+    if (!allowed) return;
 
     const client = radioManager.getClient(req.params.id);
     if (!client) {
@@ -2725,161 +2827,8 @@ app.get('/api/radios/:id/state', authMiddleware as express.RequestHandler, async
   }
 });
 
-app.post('/api/radios/:id/frequency', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
-  try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
-
-    const { frequencyHz } = req.body;
-    if (!frequencyHz) {
-      return res.status(400).json({ error: 'frequencyHz is required' });
-    }
-
-    const client = radioManager.getClient(req.params.id);
-    if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
-    }
-
-    const success = await client.setFrequency(String(frequencyHz));
-    return res.json({ success });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/radios/:id/mode', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
-  try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
-
-    const { mode, bandwidth } = req.body;
-    if (!mode || bandwidth === undefined) {
-      return res.status(400).json({ error: 'mode and bandwidth are required' });
-    }
-
-    const client = radioManager.getClient(req.params.id);
-    if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
-    }
-
-    const success = await client.setMode(String(mode), Number(bandwidth));
-    return res.json({ success });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/radios/:id/power', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
-  try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
-
-    const { power } = req.body;
-    if (power === undefined) {
-      return res.status(400).json({ error: 'power is required' });
-    }
-
-    const client = radioManager.getClient(req.params.id);
-    if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
-    }
-
-    const success = await client.setPower(Number(power));
-    return res.json({ success });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
-  try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
-
-    const { enabled } = req.body;
-    if (enabled === undefined) {
-      return res.status(400).json({ error: 'enabled is required' });
-    }
-
-    const client = radioManager.getClient(req.params.id);
-    if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
-    }
-
-    const success = await client.setPtt(Boolean(enabled));
-    
-    // Fetch and broadcast updated state
-    if (success) {
-      try {
-        const state = await client.getState();
-        const updated = await prisma.radioConnection.update({
-          where: { id: req.params.id },
-          data: {
-            frequency: state.frequency,
-            mode: state.mode,
-            bandwidth: state.bandwidth,
-            power: state.power,
-            lastSeen: new Date(),
-          },
-        });
-        wsManager.broadcast('radio', 'radioStateUpdate', {
-          radioId: req.params.id,
-          state: updated,
-        });
-      } catch (error) {
-        console.error('Error broadcasting radio state after PTT:', error);
-      }
-    }
-    
-    return res.json({ success });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/radios/:id/vfo', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
-  try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
-
-    const { vfo } = req.body;
-    if (!vfo) {
-      return res.status(400).json({ error: 'vfo is required' });
-    }
-
-    const client = radioManager.getClient(req.params.id);
-    if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
-    }
-
-    const success = await client.setVfo(String(vfo));
-    return res.json({ success });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/radios/:id/raw', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
-  try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
-    if (!assignment) return;
-
-    const { command } = req.body;
-    if (!command) {
-      return res.status(400).json({ error: 'command is required' });
-    }
-
-    const client = radioManager.getClient(req.params.id);
-    if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
-    }
-
-    const response = await client.sendRaw(String(command));
-    return res.json(response);
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
-});
+// All radio control commands now come via WebSocket only
+// See wsManager.onMessage for control command handling
 
 // ============================================================================
 // RADIO ASSIGNMENT ENDPOINTS
@@ -3450,6 +3399,7 @@ if (require.main === module) {
 
   // Initialize WebSocket server
   wsManager.initialize(server);
+  wsManager.setRadioManager(radioManager);
 
   server.listen(Number(port), host, () => {
     const displayHost = host === '0.0.0.0' ? 'localhost' : host;

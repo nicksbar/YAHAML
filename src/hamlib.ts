@@ -12,6 +12,10 @@ interface RadioClient {
   connect(): Promise<boolean>;
   disconnect(): void;
   isConnected(): boolean;
+  getSupportedModes(): Promise<string[] | null>;
+  getSupportedLevels(): Promise<string[] | null>;
+  getSupportedFunctions(): Promise<string[] | null>;
+  getSupportedParameters(): Promise<string[] | null>;
   getFrequency(): Promise<string | null>;
   setFrequency(frequency: string): Promise<boolean>;
   getMode(): Promise<{ mode: string; bandwidth: number } | null>;
@@ -37,17 +41,75 @@ interface RadioClient {
 /**
  * Hamlib rigctld client for radio control
  * Communicates with rigctld servers using the Hamlib protocol
+ * 
+ * Uses a command serialization queue pattern to prevent response interleaving.
+ * Only one command is sent at a time; the next command waits until the previous
+ * one receives its RPRT status code.
  */
 export class HamlibClient {
   private host: string;
   private port: number;
   private socket: net.Socket | null = null;
   private responseBuffer: string = '';
-  private pendingCallbacks: Array<(response: HamlibResponse) => void> = [];
+  
+  // Command queue for serialization (CQRLOG-inspired pattern)
+  private commandQueue: Array<{
+    command: string;
+    expectedLines: number;
+    allowNoReply: boolean;
+    resolve: (response: HamlibResponse) => void;
+    lines: string[];
+    timeout: NodeJS.Timeout;
+    sent: boolean;
+  }> = [];
+  
+  private commandInFlight: boolean = false;
 
   constructor(host: string, port: number = 4532) {
     this.host = host;
     this.port = port;
+  }
+
+  private parseTokenList(data?: string): string[] | null {
+    if (!data) return null;
+    const tokens = data
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+    return tokens.length ? tokens : null;
+  }
+
+  private async getSupportedTokens(command: string): Promise<string[] | null> {
+    const response = await this.sendCommand(`${command} ?`, 1);
+    if (!response.success || !response.data) return null;
+    return this.parseTokenList(response.data);
+  }
+
+  private normalizeModeToken(mode: string): string {
+    const normalized = mode.trim().toUpperCase();
+    const tokenMap: Record<string, string> = {
+      'USB-D': 'PKTUSB',
+      'LSB-D': 'PKTLSB',
+      DIGU: 'PKTUSB',
+      DIGL: 'PKTLSB',
+    };
+    return tokenMap[normalized] || normalized;
+  }
+
+  async getSupportedModes(): Promise<string[] | null> {
+    return this.getSupportedTokens('M');
+  }
+
+  async getSupportedLevels(): Promise<string[] | null> {
+    return this.getSupportedTokens('L');
+  }
+
+  async getSupportedFunctions(): Promise<string[] | null> {
+    return this.getSupportedTokens('U');
+  }
+
+  async getSupportedParameters(): Promise<string[] | null> {
+    return this.getSupportedTokens('P');
   }
 
   /**
@@ -96,7 +158,9 @@ export class HamlibClient {
       this.socket = null;
     }
     this.responseBuffer = '';
-    this.pendingCallbacks = [];
+    this.commandInFlight = false;
+    this.commandQueue.forEach((queued) => clearTimeout(queued.timeout));
+    this.commandQueue = [];
   }
 
   /**
@@ -107,26 +171,85 @@ export class HamlibClient {
   }
 
   /**
-   * Send command to rigctld
+   * Send command to rigctld with serialization queue
+   * 
+   * Implements CQRLOG-style command queue pattern:
+   * - Only one command is in flight at a time
+   * - Next command waits for previous RPRT response
+   * - Prevents response interleaving in socket buffer
    */
-  private async sendCommand(command: string): Promise<HamlibResponse> {
+  private async sendCommand(
+    command: string,
+    expectedLines: number = 0,
+    allowNoReply: boolean = false
+  ): Promise<HamlibResponse> {
     if (!this.isConnected()) {
       return { success: false, error: 'Not connected' };
     }
 
     return new Promise((resolve) => {
-      this.pendingCallbacks.push(resolve);
-      this.socket!.write(command + '\n');
+      console.debug(
+        `[Hamlib ${this.host}:${this.port}] Queueing command: "${command}" (expectedLines=${expectedLines}, queue_size=${this.commandQueue.length})`
+      );
       
-      // Timeout after 2 seconds
-      setTimeout(() => {
-        const index = this.pendingCallbacks.indexOf(resolve);
-        if (index !== -1) {
-          this.pendingCallbacks.splice(index, 1);
-          resolve({ success: false, error: 'Command timeout' });
-        }
-      }, 2000);
+      const queued = {
+        command,
+        expectedLines,
+        allowNoReply,
+        resolve,
+        lines: [] as string[],
+        sent: false,
+        timeout: setTimeout(() => {
+          const index = this.commandQueue.indexOf(queued);
+          if (index !== -1) {
+            this.commandQueue.splice(index, 1);
+          }
+          
+          // If this was the in-flight command, allow next to proceed
+          if (queued.sent) {
+            this.commandInFlight = false;
+            this.sendNextCommand();
+          }
+          
+          if (queued.lines.length > 0) {
+            resolve({ success: true, data: queued.lines.join('\n') });
+          } else if (
+            queued.expectedLines === 0 &&
+            (queued.sent || allowNoReply)
+          ) {
+            resolve({ success: true });
+          } else {
+            resolve({ success: false, error: 'Command timeout' });
+          }
+        }, 2000),
+      };
+
+      this.commandQueue.push(queued);
+      this.sendNextCommand();
     });
+  }
+
+  /**
+   * Process next command in queue (CQRLOG pattern)
+   * Only sends if no command is currently in flight
+   */
+  private sendNextCommand(): void {
+    // Already have a command in flight, wait for RPRT
+    if (this.commandInFlight) return;
+    
+    // No commands in queue
+    if (this.commandQueue.length === 0) return;
+
+    const queued = this.commandQueue[0];
+    if (queued.sent) return; // Already sent
+
+    console.debug(
+      `[Hamlib ${this.host}:${this.port}] Sending queued command: "${queued.command}"`
+    );
+    
+    queued.sent = true;
+    this.commandInFlight = true;
+    this.socket!.write(queued.command + '\n');
   }
 
   /**
@@ -150,22 +273,48 @@ export class HamlibClient {
 
   /**
    * Process a complete response line
+   * 
+   * Responses come as data lines followed by RPRT status code.
+   * Only resolves when RPRT is received (ensures proper response boundaries).
    */
   private processResponseLine(line: string): void {
-    const callback = this.pendingCallbacks.shift();
-    if (!callback) return;
+    // Only process if command is in flight and queue has entries
+    if (!this.commandInFlight || this.commandQueue.length === 0) {
+      console.warn(
+        `[Hamlib ${this.host}:${this.port}] Unexpected response with no command in flight: "${line}"`
+      );
+      return;
+    }
+
+    const queued = this.commandQueue[0];
 
     // RPRT indicates command result (0 = success, negative = error)
     if (line.startsWith('RPRT')) {
       const code = parseInt(line.split(' ')[1] || '0');
-      if (code === 0) {
-        callback({ success: true });
+      clearTimeout(queued.timeout);
+      
+      // Resolve the command promise
+      const success = code === 0;
+      if (success) {
+        const data = queued.lines.length ? queued.lines.join('\n') : undefined;
+        queued.resolve({ success: true, data });
       } else {
-        callback({ success: false, error: `Hamlib error code: ${code}` });
+        queued.resolve({ success: false, error: `Hamlib error code: ${code}` });
       }
+
+      // Remove completed command from queue
+      this.commandQueue.shift();
+      
+      // Allow next command to proceed
+      this.commandInFlight = false;
+      this.sendNextCommand();
+      
+      console.debug(
+        `[Hamlib ${this.host}:${this.port}] Command completed (code=${code}, queue_remaining=${this.commandQueue.length})`
+      );
     } else {
-      // Data response
-      callback({ success: true, data: line });
+      // Data line - add to current command's response
+      queued.lines.push(line);
     }
   }
 
@@ -173,7 +322,7 @@ export class HamlibClient {
    * Get current frequency in Hz
    */
   async getFrequency(): Promise<string | null> {
-    const response = await this.sendCommand('f');
+    const response = await this.sendCommand('f', 1);
     return response.success && response.data ? response.data : null;
   }
 
@@ -181,7 +330,7 @@ export class HamlibClient {
    * Set frequency in Hz
    */
   async setFrequency(frequency: string): Promise<boolean> {
-    const response = await this.sendCommand(`F ${frequency}`);
+    const response = await this.sendCommand(`F ${frequency}`, 0, true);
     return response.success;
   }
 
@@ -190,7 +339,7 @@ export class HamlibClient {
    * Returns: "USB 3000" or "CW 500", etc.
    */
   async getMode(): Promise<{ mode: string; bandwidth: number } | null> {
-    const response = await this.sendCommand('m');
+    const response = await this.sendCommand('m', 2);
     if (!response.success || !response.data) return null;
     
     const parts = response.data.split('\n');
@@ -206,7 +355,13 @@ export class HamlibClient {
    * Set mode and bandwidth
    */
   async setMode(mode: string, bandwidth: number): Promise<boolean> {
-    const response = await this.sendCommand(`M ${mode} ${bandwidth}`);
+    const token = this.normalizeModeToken(mode);
+    const response = await this.sendCommand(`M ${token} ${bandwidth}`, 0, true);
+    if (!response.success) {
+      console.warn(
+        `[Hamlib ${this.host}:${this.port}] setMode failed for ${token} ${bandwidth}: ${response.error || 'unknown error'}`
+      );
+    }
     return response.success;
   }
 
@@ -214,12 +369,22 @@ export class HamlibClient {
    * Get power level in watts
    */
   async getPower(): Promise<number | null> {
-    const response = await this.sendCommand('l RFPOWER');
+    const response = await this.sendCommand('l RFPOWER', 1);
     if (!response.success || !response.data) return null;
     
     // Response is a float 0.0-1.0, convert to percentage
     const powerFraction = parseFloat(response.data);
-    return Math.round(powerFraction * 100);
+    
+    // Validate: should be 0.0-1.0 (or 0-100 if radio returns that way)
+    // Clamp to 0-100 range to prevent invalid values
+    if (isNaN(powerFraction)) return null;
+    
+    const percentage = powerFraction > 1 ? powerFraction : powerFraction * 100;
+    const clamped = Math.max(0, Math.min(100, Math.round(percentage)));
+    
+    console.debug(`[Hamlib ${this.host}:${this.port}] Power raw="${response.data}" fraction=${powerFraction} clamped=${clamped}%`);
+    
+    return clamped;
   }
 
   /**
@@ -227,7 +392,7 @@ export class HamlibClient {
    */
   async setPower(powerPercent: number): Promise<boolean> {
     const powerFraction = powerPercent / 100;
-    const response = await this.sendCommand(`L RFPOWER ${powerFraction.toFixed(2)}`);
+    const response = await this.sendCommand(`L RFPOWER ${powerFraction.toFixed(2)}`, 0, true);
     return response.success;
   }
 
@@ -235,7 +400,7 @@ export class HamlibClient {
    * Get PTT state (0/1)
    */
   async getPtt(): Promise<boolean | null> {
-    const response = await this.sendCommand('t');
+    const response = await this.sendCommand('t', 1);
     if (!response.success || !response.data) return null;
     return response.data.trim() === '1';
   }
@@ -244,7 +409,7 @@ export class HamlibClient {
    * Set PTT state (true/false)
    */
   async setPtt(enabled: boolean): Promise<boolean> {
-    const response = await this.sendCommand(`T ${enabled ? 1 : 0}`);
+    const response = await this.sendCommand(`T ${enabled ? 1 : 0}`, 0, true);
     return response.success;
   }
 
@@ -252,7 +417,7 @@ export class HamlibClient {
    * Get VFO (e.g., VFOA, VFOB)
    */
   async getVfo(): Promise<string | null> {
-    const response = await this.sendCommand('v');
+    const response = await this.sendCommand('v', 1);
     return response.success && response.data ? response.data.trim() : null;
   }
 
@@ -260,7 +425,7 @@ export class HamlibClient {
    * Set VFO (e.g., VFOA, VFOB)
    */
   async setVfo(vfo: string): Promise<boolean> {
-    const response = await this.sendCommand(`V ${vfo}`);
+    const response = await this.sendCommand(`V ${vfo}`, 0, true);
     return response.success;
   }
 
@@ -275,7 +440,7 @@ export class HamlibClient {
    * Get radio info
    */
   async getInfo(): Promise<string | null> {
-    const response = await this.sendCommand('_');
+    const response = await this.sendCommand('_', 1);
     return response.success && response.data ? response.data : null;
   }
 
@@ -290,13 +455,12 @@ export class HamlibClient {
     ptt: boolean | null;
     vfo: string | null;
   }> {
-    const [frequency, modeData, power, ptt, vfo] = await Promise.all([
-      this.getFrequency(),
-      this.getMode(),
-      this.getPower(),
-      this.getPtt(),
-      this.getVfo(),
-    ]);
+    // Serialize to avoid response ordering issues
+    const frequency = await this.getFrequency();
+    const modeData = await this.getMode();
+    const power = await this.getPower();
+    const ptt = await this.getPtt();
+    const vfo = await this.getVfo();
 
     return {
       frequency,
@@ -344,6 +508,22 @@ export class MockHamlibClient implements RadioClient {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  async getSupportedModes(): Promise<string[] | null> {
+    return ['USB', 'LSB', 'CW', 'FM', 'AM', 'PKTUSB', 'PKTLSB'];
+  }
+
+  async getSupportedLevels(): Promise<string[] | null> {
+    return ['RFPOWER'];
+  }
+
+  async getSupportedFunctions(): Promise<string[] | null> {
+    return [];
+  }
+
+  async getSupportedParameters(): Promise<string[] | null> {
+    return [];
   }
 
   async getFrequency(): Promise<string | null> {
@@ -458,6 +638,9 @@ export class MockHamlibClient implements RadioClient {
 export class RadioManager {
   private connections: Map<string, RadioClient> = new Map();
   private pollIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private reconnectAttempts: Map<string, number> = new Map();
+  private maxReconnectAttempts = 5;
+  private pollInProgress: Map<string, boolean> = new Map();
 
   /**
    * Start managing a radio connection
@@ -513,7 +696,7 @@ export class RadioManager {
       },
     });
 
-    // Start polling
+    // Start polling immediately for real-time updates
     this.startPolling(radioId, radio.pollInterval);
 
     return true;
@@ -529,6 +712,10 @@ export class RadioManager {
       clearInterval(interval);
       this.pollIntervals.delete(radioId);
     }
+
+    // Clean up poll tracking
+    this.pollInProgress.delete(radioId);
+    this.reconnectAttempts.delete(radioId);
 
     // Disconnect client
     const client = this.connections.get(radioId);
@@ -551,7 +738,18 @@ export class RadioManager {
    */
   private startPolling(radioId: string, intervalMs: number): void {
     const interval = setInterval(async () => {
-      await this.pollRadio(radioId);
+      // Skip this poll tick if one is already in progress (prevents overlapping polls)
+      if (this.pollInProgress.get(radioId)) {
+        console.warn(`[RadioManager] Poll skipped for ${radioId} - previous poll still in progress`);
+        return;
+      }
+
+      this.pollInProgress.set(radioId, true);
+      try {
+        await this.pollRadio(radioId);
+      } finally {
+        this.pollInProgress.set(radioId, false);
+      }
     }, intervalMs);
 
     this.pollIntervals.set(radioId, interval);
@@ -563,7 +761,26 @@ export class RadioManager {
   private async pollRadio(radioId: string): Promise<void> {
     const client = this.connections.get(radioId);
     if (!client || !client.isConnected()) {
-      await this.stopRadio(radioId);
+      // Attempt to reconnect if still under max attempts
+      const attempts = this.reconnectAttempts.get(radioId) || 0;
+      if (attempts < this.maxReconnectAttempts) {
+        console.log(`[RadioManager] Radio ${radioId} disconnected. Attempting reconnect (${attempts + 1}/${this.maxReconnectAttempts})`);
+        this.reconnectAttempts.set(radioId, attempts + 1);
+        
+        // Try to reconnect
+        await this.stopRadio(radioId);
+        const reconnected = await this.startRadio(radioId);
+        if (reconnected) {
+          console.log(`[RadioManager] Radio ${radioId} reconnected successfully`);
+          this.reconnectAttempts.delete(radioId);
+          return;
+        }
+      } else {
+        // Max attempts reached, stop trying
+        console.error(`[RadioManager] Radio ${radioId} failed to reconnect after ${this.maxReconnectAttempts} attempts`);
+        await this.stopRadio(radioId);
+        this.reconnectAttempts.delete(radioId);
+      }
       return;
     }
 
