@@ -2,6 +2,8 @@
 
 Janus Gateway is a lightweight WebRTC media server that can capture audio from an RPi and expose it to YAHAML browser voice rooms.
 
+**Recommended topology:** run Janus on the RPi as a standalone server, and have YAHAML connect to it as a client. This keeps radio audio capture close to the hardware and avoids coupling Janus to the YAHAML backend.
+
 ## Architecture
 
 ```
@@ -30,7 +32,10 @@ sudo apt-get install -y \
   libmicrohttpd-dev \
   libjansson-dev \
   libssl-dev \
-  libsofia-sip-dev \
+  libnice-dev \
+  libsrtp2-dev \
+  libconfig-dev \
+  libsofia-sip-ua-dev \
   libglib2.0-dev \
   libopus-dev \
   libogg-dev \
@@ -44,14 +49,20 @@ sudo apt-get install -y \
   build-essential
 ```
 
-### 2. Install LibWebRTC (or use pre-built)
+### 2. Install Janus (source build)
 
-For RPi, use pre-built libwebrtc:
+For RPi, build from the release tarball:
 
 ```bash
-wget https://github.com/meetecho/janus-gateway/releases/download/v1.0.8/janus-gateway-1.0.8.tar.gz
-tar xzf janus-gateway-1.0.8.tar.gz
-cd janus-gateway-1.0.8
+wget https://github.com/meetecho/janus-gateway/releases/download/v1.4.0/janus-gateway-1.4.0.tar.gz
+tar xzf janus-gateway-1.4.0.tar.gz
+cd janus-gateway-1.4.0
+```
+
+If you cloned a git tag/branch (e.g., 1.4.0), run autogen first to create `configure`:
+
+```bash
+./autogen.sh
 ```
 
 ### 3. Compile Janus
@@ -68,73 +79,84 @@ cd janus-gateway-1.0.8
 
 make -j4
 sudo make install
+sudo make configs
+
+If you see missing `.jcfg` errors at startup, ensure the sample configs are installed:
+
+```bash
+ls -1 /opt/janus/etc/janus/*.jcfg
+```
+
+If the folder only contains `*.jcfg.sample` files, copy them into place:
+
+```bash
+cd /opt/janus/etc/janus
+sudo cp -n *.jcfg.sample *.jcfg
+```
 ```
 
 ### 4. Configure Janus
 
-Create `/opt/janus/etc/janus/janus.cfg.d/audiobridge.cfg`:
+Janus 1.4 uses `.jcfg` files by default. After `make configs`, edit the installed samples in `/opt/janus/etc/janus/`.
+
+Edit `/opt/janus/etc/janus/janus.plugin.audiobridge.jcfg` (room settings):
 
 ```cfg
-# AudioBridge configuration
 general: {
-  # Audio codec (opus recommended)
-  codec = "opus"
-  
   # Sample rate (48000 Hz for web compatibility)
-  sample_rate = 48000
-  
-  # Channels (stereo)
-  channels = 2
-  
-  # Bitrate (128 kbps per participant)
-  bitrate = 128000
+  #sampling_rate = 48000
 }
 
-# Rooms configuration
-rooms: (
-  {
-    room_id = 1
-    description = "Shack Voice Room"
-    record = false
-    permanent = true
-  }
-)
+room-1: {
+  description = "Shack Voice Room"
+  record = false
+}
 ```
 
-Create `/opt/janus/etc/janus/janus.cfg`:
+Edit `/opt/janus/etc/janus/janus.jcfg` (core settings):
 
 ```cfg
-# General configuration
 general: {
-  json = "indented"
   debug_level = 3
-  interface = "0.0.0.0"
-  secure_port = 8889
   admin_secret = "changeme"
 }
 
-# WebRTC configuration
+certificates: {
+  cert_pem = "/opt/janus/etc/janus/janus.pem"
+  cert_key = "/opt/janus/etc/janus/janus.key"
+}
+
 nat: {
+  # For LAN-only use, this can be omitted.
+  # If you want Internet access, keep a STUN server configured.
   stun_server = "stun.l.google.com"
   stun_port = 19302
 }
 
-# Admin HTTP API
-admin: {
-  admin = true
-  admin_port = 7088
+plugins: {
+  # Disable unused plugins to avoid startup errors (recordplay needs a recordings path).
+  disable = "libjanus_recordplay.so,libjanus_streaming.so,libjanus_videocall.so,libjanus_nosip.so"
 }
 
-# HTTP configuration
-http: {
+transports: {
+  # Disable Unix socket transport if you don't need it.
+  disable = "libjanus_pfunix.so"
+}
+```
+
+Edit `/opt/janus/etc/janus/janus.transport.http.jcfg` (HTTP + Admin API):
+
+```cfg
+general: {
   http = true
-  http_port = 8088
+  port = 8088
   https = false
 }
 
-plugins: {
-  plugin_folder = "/opt/janus/lib/janus/plugins"
-  audiobridge = "libjanus_audiobridge.so"
+admin: {
+  admin_http = true
+  admin_port = 7088
+  admin_secret = "changeme"
 }
 ```
 
@@ -146,41 +168,106 @@ List available ALSA devices:
 arecord -l
 ```
 
-Example output:
+Example output (IC-7300 USB audio):
 ```
 **** List of CAPTURE Hardware Devices ****
-card 0: ALSA           [ ALSA Default Audio Device ], device 0: USB Audio [USB Audio]
+card 2: CODEC [USB Audio CODEC], device 0: USB Audio [USB Audio]
   Subdevices: 1/1
   Subdevice #0: subdevice #0
 ```
 
-Create `/etc/asound.conf` for radio input:
+Create `/etc/asound.conf` for the radio input (IC-7300 in this case):
 
 ```conf
 pcm.radio {
   type hw
-  card 0
+  card 2
   device 0
 }
 
 ctl.radio {
   type hw
-  card 0
+  card 2
 }
 ```
 
+If you plan to add a separate headphones interface later, keep it as a separate ALSA device (e.g., `pcm.headphones`) and leave `pcm.radio` bound to the IC-7300 USB Audio CODEC.
+
 ### 6. Run Janus
+
+Generate a DTLS certificate and key (required):
+
+```bash
+sudo openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+  -keyout /opt/janus/etc/janus/janus.key \
+  -out /opt/janus/etc/janus/janus.pem \
+  -subj "/CN=janus"
+sudo chown janus:janus /opt/janus/etc/janus/janus.key /opt/janus/etc/janus/janus.pem
+
+> Janus CLI flags: `-C` is the config file, `-F` is the config folder.
+> The `-c`/`-k` flags are for DTLS cert/key only (use them only if you don't set `certificates` in `janus.jcfg`).
+```
 
 ```bash
 sudo /opt/janus/bin/janus \
-  -c /opt/janus/etc/janus/janus.cfg \
-  -C /opt/janus/etc/janus/janus.cfg.d/ \
-  -L
+  -C /opt/janus/etc/janus/janus.jcfg \
+  -F /opt/janus/etc/janus \
+  -L /var/log/janus.log
 ```
 
 Janus will run on:
 - WebRTC: `wss://rpi-ip:8889`
-- HTTP API: `http://rpi-ip:7088`
+- HTTP API: `http://rpi-ip:8088`
+- Admin API: `http://rpi-ip:7088`
+
+### 6b. Run Janus as a Service (recommended)
+
+Create a systemd unit at `/etc/systemd/system/janus.service`:
+
+```ini
+[Unit]
+Description=Janus WebRTC Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=janus
+Group=janus
+ExecStart=/opt/janus/bin/janus -C /opt/janus/etc/janus/janus.jcfg -F /opt/janus/etc/janus -L /var/log/janus.log
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create a `janus` user, set ownership, and enable the service:
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin janus
+sudo chown -R janus:janus /opt/janus
+sudo touch /var/log/janus.log
+sudo chown janus:janus /var/log/janus.log
+sudo systemctl daemon-reload
+sudo systemctl enable --now janus
+```
+
+### 6c. Validate the Server
+
+Confirm Janus is up:
+
+```bash
+systemctl status janus
+curl http://rpi-ip:8088/janus/info
+```
+
+If you see a JSON response, Janus is running.
+
+### 6d. YAHAML Connection Notes
+
+YAHAML is expected to connect to Janus as a client (AudioBridge room). Configure the radio audio source in the YAHAML UI to `Janus Gateway` and set the room ID to match the AudioBridge room you created.
+
+> Note: Janus client wiring in YAHAML is still marked as a TODO in the UI code. The server setup here is ready, but the client connection may need additional implementation before audio flows end-to-end.
 
 ### 7. Docker Alternative
 
@@ -259,6 +346,16 @@ curl -X POST http://rpi-ip:7088/admin \
 - Check ALSA device: `amixer -c 0`
 - Test recording: `arecord -D radio -f S16_LE -r 48000 test.wav`
 - Check Janus logs: `tail -f /var/log/janus.log`
+
+**FATAL: DTLS certificate and key must be specified**
+- Generate the cert/key and set `cert_pem`/`cert_key` in `janus.cfg` (see Step 6).
+
+**WARN: Couldn't access logger plugins folder**
+- Ensure `/opt/janus/lib/janus/loggers` exists and is readable by the `janus` user.
+
+**Missing .jcfg files / recordplay fatal**
+- Ensure `make configs` was run and `*.jcfg` files exist in `/opt/janus/etc/janus`.
+- If you don't need Record&Play/Streaming/Videocall, disable them in `janus.jcfg` as shown above.
 
 **WebRTC connection fails:**
 - Verify firewall: ports 8088, 8889 open

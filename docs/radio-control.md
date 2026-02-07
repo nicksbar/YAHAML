@@ -123,7 +123,9 @@ The control operator uses their phone/tablet to log:
 
 ## API Reference
 
-### Radio Connections
+### Radio Configuration (HTTP REST)
+
+Radio configuration and management endpoints use HTTP REST API.
 
 #### Create Radio Connection
 ```bash
@@ -169,7 +171,8 @@ Content-Type: application/json
 
 {
   "name": "Updated Name",
-  "isEnabled": true
+  "isEnabled": true,
+  "pollInterval": 500
 }
 ```
 
@@ -178,35 +181,127 @@ Content-Type: application/json
 DELETE /api/radios/:id
 ```
 
-#### Start/Connect Radio
-```bash
-POST /api/radios/:id/start
+### Radio Control (WebSocket)
+
+**All radio control operations now go through WebSocket for real-time, atomic execution.**
+
+#### Connect to WebSocket
+```javascript
+const ws = new WebSocket('ws://localhost:3000/ws');
+ws.onopen = () => {
+  console.log('Connected to radio control');
+};
 ```
 
-#### Stop/Disconnect Radio
-```bash
-POST /api/radios/:id/stop
+#### Send Radio Control Command
+```javascript
+ws.send(JSON.stringify({
+  type: 'radioControl',
+  data: {
+    radioId: 'clx123...',
+    command: 'setFrequency',
+    params: { frequencyHz: 14074000 }
+  }
+}));
 ```
 
-#### Test Radio Connection
-```bash
-POST /api/radios/:id/test
-```
+#### Radio Control Commands
 
-**Response:**
-```json
+All commands follow the same format: `{ type: 'radioControl', data: { radioId, command, params } }`
+
+##### setFrequency
+Set radio frequency in Hz.
+```javascript
 {
-  "success": true,
-  "state": {
-    "frequency": "14250000",
-    "mode": "USB",
-    "bandwidth": 3000,
-    "power": 100
+  command: 'setFrequency',
+  params: { frequencyHz: 14074000 }  // 14.074 MHz
+}
+```
+
+##### setMode
+Set frequency mode (USB, LSB, CW, FM, AM, PKTUSB, PKTLSB, RTTY, etc.) and optional bandwidth.
+```javascript
+{
+  command: 'setMode',
+  params: { 
+    mode: 'USB',           // Optional
+    bandwidth: 3000        // Optional, in Hz
   }
 }
 ```
 
-### Radio Assignments
+##### setPower
+Set transmit power (0-100%).
+```javascript
+{
+  command: 'setPower',
+  params: { power: 75 }  // 75% power
+}
+```
+
+##### setPtt
+Enable/disable push-to-talk (transmit).
+```javascript
+{
+  command: 'setPtt',
+  params: { enabled: true }  // true = TX, false = RX
+}
+```
+
+##### setVfo
+Select VFO (A or B).
+```javascript
+{
+  command: 'setVfo',
+  params: { vfo: 'VFO_A' }  // or 'VFO_B'
+}
+```
+
+##### sendRaw
+Send raw hamlib command (advanced).
+```javascript
+{
+  command: 'sendRaw',
+  params: { rawCommand: 'f\n' }  // Get frequency
+}
+```
+
+#### Command Response
+Each command receives a response or error:
+```javascript
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  
+  if (msg.type === 'radioControlResponse') {
+    console.log('Command succeeded:', msg.data);
+  } else if (msg.type === 'error') {
+    console.error('Command failed:', msg.data);
+  }
+};
+```
+
+#### Radio State Updates
+After successful commands, the radio's new state is broadcast to all connected clients via WebSocket:
+```javascript
+{
+  type: 'radioStateUpdate',
+  channel: 'radio',
+  data: {
+    radioId: 'clx123...',
+    state: {
+      frequency: 14074000,
+      mode: 'USB',
+      bandwidth: 3000,
+      power: 75,
+      ptt: false,
+      vfo: 'VFO_A',
+      isConnected: true
+    }
+  }
+}
+```
+
+### Radio Assignments (HTTP REST)
 
 #### Assign Radio to Station
 ```bash
@@ -232,25 +327,6 @@ GET /api/radio-assignments
 #### Unassign Radio
 ```bash
 POST /api/radio-assignments/:id/unassign
-```
-
-#### Get Station's Radio
-```bash
-GET /api/stations/:stationId/radio
-```
-
-**Response:**
-```json
-{
-  "radio": {
-    "id": "clx123...",
-    "name": "IC-7300 Station 1",
-    "frequency": "14250000",
-    "mode": "USB",
-    "power": 100,
-    "isConnected": true
-  }
-}
 ```
 
 ## Database Schema
@@ -300,6 +376,99 @@ model RadioAssignment {
 
 ## How It Works
 
+### WebSocket-Based Control Architecture
+
+YAHAML uses WebSocket for all real-time radio control to provide:
+- **Atomic execution**: Commands execute sequentially, no race conditions
+- **Instant feedback**: Frequency/mode changes visible immediately
+- **State consistency**: Single source of truth via state broadcast
+- **No polling overhead**: Only real changes generate updates
+
+#### Control Flow
+
+```
+┌─────────────┐
+│   Browser   │  1. User clicks "Change Frequency"
+│   (React)   │     or adjusts slider
+└──────┬──────┘
+       │ 2. Sends radioControl WebSocket message
+       │    { type: 'radioControl', 
+       │      data: { radioId, command, params } }
+       ▼
+┌─────────────────────────────┐
+│  WebSocket Manager          │ 3. Routes to handleRadioControl()
+│  (src/websocket.ts)         │
+└──────┬──────────────────────┘
+       │ 4. Validates command and parameters
+       │    (frequency range, mode, power 0-100, etc.)
+       ▼
+┌─────────────────────────────┐
+│  Radio Manager              │ 5. Executes command via hamlib
+│  (src/hamlib.ts)            │    - Serializes via commandQueue
+│  - commandQueue             │    - Prevents command interleaving
+│  - commandInFlight          │    - Fetches fresh state after command
+│  - pollInProgress           │
+└──────┬──────────────────────┘
+       │ 6. Fetches radio state from rigctld
+       │ 7. Updates database
+       ▼
+┌──────────────────────────────┐
+│  Broadcast radioStateUpdate  │ 8. Sends to ALL connected clients
+│  via WebSocket               │    (atomic state snapshot)
+└──────┬───────────────────────┘
+       │ 9. Clients receive state update
+       ▼
+┌──────────────────────────────┐
+│  Browser State Update        │ 10. React updates radioLiveState
+│  (React component)           │     - Frequency display changes
+│  radioLiveState[radioId]     │     - Mode dropdown updates
+│                              │     - Power slider moves
+└──────────────────────────────┘
+```
+
+### Polling System (Automatic State Reading)
+
+Separate from WebSocket control, YAHAML continuously polls radio state:
+
+- **Poll interval**: 1000ms (1 second) per radio, configurable
+- **Prevents overlap**: `pollInProgress` flag stops concurrent polls
+- **Queue protection**: Max ~5 pending commands regardless of frequency
+- **Non-blocking**: Polling doesn't block user commands in WebSocket
+
+#### Polling Flow
+
+```
+┌──────────────────────┐
+│ Poll Timer (1000ms)  │
+└─────────┬────────────┘
+          │ Check pollInProgress[radioId]
+          │
+          ├─ If true: SKIP (previous poll still running)
+          │           Queue stays small (~5 items)
+          │
+          └─ If false: PROCEED
+             ▼
+       ┌────────────────────┐
+       │ Set pollInProgress │
+       │ = true             │
+       └────────┬───────────┘
+                │ Send getState() command
+                ▼
+             rigctld Server
+                ▼
+       ┌────────────────────┐
+       │ Receive state      │
+       │ Update DB          │
+       └────────┬───────────┘
+                │ Broadcast radioStateUpdate
+                │ (to all connected clients)
+                ▼
+       ┌────────────────────┐
+       │ Set pollInProgress │
+       │ = false            │
+       └────────────────────┘
+```
+
 ### Automatic Tracking
 
 1. **Connection**: YAHAML connects to rigctld server via TCP
@@ -333,6 +502,27 @@ PSK/MFSK       → DIGITAL
 ```
 
 ## Troubleshooting
+
+### Control commands not working
+
+1. **Check WebSocket is connected:**
+   - Open browser DevTools → Network tab → WS
+   - Should see `ws://...:3000/ws` connection
+   - Status should be "Connected"
+
+2. **Check radio is enabled:**
+   - UI should show radio as "Connected" (green indicator)
+   - Status must say `isConnected: true`
+
+3. **Check command format:**
+   - Ensure correct `radioId` (copy from list)
+   - Ensure command name is exact (setFrequency, setMode, setPower, setPtt, setVfo, sendRaw)
+   - Ensure params match command requirements (see API Reference above)
+
+4. **Check hamlib command queue:**
+   - Look at server logs for hamlib errors
+   - If rigctld is unresponsive, queue backs up
+   - Max queue size ~5 commands
 
 ### Radio won't connect
 
@@ -428,34 +618,80 @@ Some radios (IC-7300, IC-9700) support network control:
 
 ## Future Enhancements
 
-- [ ] Direct network radio support (no rigctld)
+- [x] **Radio control from UI** (COMPLETED Feb 7, 2026) - WebSocket-based controls available
+- [x] **WebSocket radio control** (COMPLETED Feb 7, 2026) - Atomic message-driven architecture
+- [ ] Direct network radio support (no rigctld) - For modern radios with built-in network control
 - [ ] CAT command logging for debugging
-- [ ] Radio control from UI (set freq/mode)
-- [ ] Multi-operator sharing (time slicing)
-- [ ] Historical frequency tracking
+- [ ] Multi-operator radio sharing (time slicing / mode splitting)
+- [ ] Historical frequency tracking and statistics
 - [ ] Band/mode statistics per radio
-- [ ] Integration with contest scoring
-- [ ] Automatic power level adjustment
+- [ ] Integration with contest scoring (bonus points for activation)
+- [ ] Automatic power level adjustment based on band/mode
+- [ ] Radio state persistence (save/restore presets)
 
 ## Testing
 
-Test script included:
-```bash
-./test-radio-api.sh
+Test suite: `tests/websocket-radio-control.test.ts` - 13 tests covering all command types and error handling.
+
+### Manual Testing with WebSocket
+
+**JavaScript/Browser Console:**
+```javascript
+// Open browser DevTools console on YAHAML page
+const ws = new WebSocket('ws://localhost:3000/ws');
+
+ws.onopen = () => console.log('Connected');
+ws.onmessage = (e) => console.log('Response:', JSON.parse(e.data));
+ws.onerror = (e) => console.error('Error:', e);
+
+// Send a frequency change command
+ws.send(JSON.stringify({
+  type: 'radioControl',
+  data: {
+    radioId: 'YOUR_RADIO_ID',
+    command: 'setFrequency',
+    params: { frequencyHz: 14074000 }
+  }
+}));
 ```
 
-Manual test:
+### Manual Testing with curl (REST API)
+
+**Create a radio:**
 ```bash
-# Create radio
 curl -X POST http://localhost:3000/api/radios \
   -H "Content-Type: application/json" \
-  -d '{"name":"Test Radio","host":"localhost","port":4532}'
+  -d '{
+    "name": "Test Radio",
+    "host": "localhost",
+    "port": 4532,
+    "pollInterval": 1000
+  }'
+```
 
-# List radios
+**List radios:**
+```bash
 curl http://localhost:3000/api/radios | jq
+```
 
-# Get radio state
-curl -X POST http://localhost:3000/api/radios/RADIO_ID/test | jq
+**Update radio:**
+```bash
+curl -X PUT http://localhost:3000/api/radios/RADIO_ID \
+  -H "Content-Type: application/json" \
+  -d '{"isEnabled": true}'
+```
+
+### Running Automated Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run only radio control tests
+npm test -- websocket-radio-control
+
+# Run with verbose output
+npm test -- --verbose
 ```
 
 ## Support

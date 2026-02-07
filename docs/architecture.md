@@ -63,6 +63,16 @@ Organizations coordinating multi-operator events:
 5. Aggregation engine updates scoreboard and band occupancy
 6. Export available in ADIF and Cabrillo formats
 
+## Radio Control Flow
+1. User interacts with radio controls in UI (frequency slider, mode dropdown, PTT button)
+2. Frontend sends WebSocket message: `{ type: 'radioControl', data: { radioId, command, params } }`
+3. Backend WebSocket handler validates and routes to RadioManager
+4. RadioManager executes command via hamlib serialized command queue
+5. Command result and fresh radio state fetched from rigctld
+6. State update broadcast to all clients via WebSocket: `{ type: 'radioStateUpdate', ... }`
+7. All connected clients update their UI with new radio state
+8. Separate automatic polling (1000ms interval) ensures state stays fresh even without user commands
+
 ## API Endpoints
 
 ### Stations

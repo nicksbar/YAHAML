@@ -106,23 +106,35 @@ See [protocols-udp.md](./protocols-udp.md) for UDP strategy.
 - [x] Document field mappings
 - [x] Build working server stub
 
-### Phase 2: Stabilization (IN PROGRESS)
+### Phase 2: Stabilization (COMPLETE)
 - [x] Add TRANSACTION ACK handler
-- [ ] Test sustained connections (60+ seconds)
-- [ ] Multi-client relay validation
-- [ ] Edge case handling
+- [x] Test sustained connections (60+ seconds)
+- [x] Multi-client relay validation
+- [x] Edge case handling
 
-### Phase 3: Integration (PENDING)
-- [ ] Build canonical QSO dataclass
-- [ ] Create UDP adapter framework
-- [ ] Implement per-app parsers (N1MM+, DXLab, etc.)
-- [ ] Container deployment
+### Phase 3: Integration (COMPLETE)
+- [x] Build canonical QSO dataclass
+- [x] Create UDP adapter framework
+- [x] Implement per-app parsers (N1MM+, DXLab, etc.)
+- [x] Container deployment
 
-### Phase 4: Enhancement (PENDING)
-- [ ] HAMLib rig control integration
-- [ ] Web UI for log management
-- [ ] Multi-network relay support
-- [ ] ADIF export
+### Phase 4: Enhancement (COMPLETE)
+- [x] HAMLib rig control integration (rigctld polling)
+- [x] Web UI for log management
+- [x] Multi-network relay support
+- [x] ADIF/Cabrillo export
+
+### Phase 5: Real-time Architecture (COMPLETE)
+- [x] WebSocket real-time updates
+- [x] Contest templates system
+- [x] Band occupancy tracking
+- [x] Multi-operator coordination
+
+### Phase 5.2: WebSocket Radio Control (COMPLETE)
+- [x] WebSocket-based radio control (atomic command execution)
+- [x] Polling protection (no command queue buildup)
+- [x] Complete UI control buttons (frequency, mode, power, PTT, VFO)
+- [x] Comprehensive test coverage (13 tests)
 
 ## 📋 Document Structure
 

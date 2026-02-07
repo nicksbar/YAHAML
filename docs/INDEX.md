@@ -16,10 +16,11 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 - **[decisions.md](decisions.md)** - Key architectural decisions and rationale
 
 ## Development
-- **[testing.md](testing.md)** - Unit, API, and E2E testing patterns (213 tests passing)
+- **[testing.md](testing.md)** - Unit, API, and E2E testing patterns (244 tests passing)
 - **[testing-architecture.md](testing-architecture.md)** - Test infrastructure and utilities
 - **[code-recommendations.md](code-recommendations.md)** - Code style and patterns
 - **[LOGGING_BEST_PRACTICES.md](LOGGING_BEST_PRACTICES.md)** - Context logging patterns
+- **[RADIO_CONTROL_STANDARDS.md](RADIO_CONTROL_STANDARDS.md)** - Radio control implementation guardrails and best practices (No REST control endpoints, WebSocket-only, state architecture, command serialization)
 
 ## Deployment
 - **[DEPLOYMENT_READINESS.md](DEPLOYMENT_READINESS.md)** - Production deployment guide and environment variables
@@ -29,6 +30,7 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 ## Features
 - **[radio-control.md](radio-control.md)** - HAMLib integration and remote rig control
 - **[DIGITAL_MODES_DECODING.md](DIGITAL_MODES_DECODING.md)** - FT8/FT4/PSK31 decoder feasibility, architecture, and implementation roadmap
+- **[CW_DECODER.md](CW_DECODER.md)** - Real-time CW (Morse) decoder with multi-frequency waterfall visualization
 - **[callsign-management.md](callsign-management.md)** - Multi-operator and club callsign setup
 - **[contest-management.md](contest-management.md)** - Contest templates, scoring, validation
 - **[ui-quick-reference.md](ui-quick-reference.md)** - UI quick start and shortcuts
@@ -72,11 +74,11 @@ See [n3fjp_testing_guide.md](n3fjp_testing_guide.md) or [n3fjp_protocol_debuggin
 See [CONTRIBUTING.md](../CONTRIBUTING.md) in the root directory.
 
 ### What's the current status?
-- **Phase 5.1 Complete** (Feb 1, 2026): Contest templates system with 19 templates and self-managed calendar
+- **Phase 5.2 Complete** (Feb 7, 2026): WebSocket-only radio control with atomic command execution
 - **Real-time Updates** (Feb 1, 2026): WebSocket with auto-reconnect, live band occupancy, live event logs
-- **Test Suite**: 213 tests passing across all components
-- **Backend**: REST API, N3FJP relay, contest validation, export (ADIF/Cabrillo)
-- **Frontend**: React dashboard with Vite dev proxy, responsive UI, live updates
+- **Test Suite**: 244 tests passing (added 13 WebSocket radio control tests)
+- **Backend**: REST API, N3FJP relay, contest validation, export (ADIF/Cabrillo), WebSocket radio control
+- **Frontend**: React dashboard with Vite dev proxy, responsive UI, live updates, radio control via WebSocket
 
 ## Contact & Support
 
