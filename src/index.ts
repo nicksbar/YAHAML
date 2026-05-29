@@ -2513,7 +2513,7 @@ app.post(
             : null;
 
           let resolvedTemplate = template;
-          if (!resolvedTemplate && contestData.templateType) {
+          if (contestData.templateType) {
             const bundled = CONTEST_TEMPLATES.find((t) => t.type === contestData.templateType);
             if (bundled) {
               resolvedTemplate = await prisma.contestTemplate.upsert({

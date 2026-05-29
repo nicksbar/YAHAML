@@ -3,6 +3,14 @@ import { useState, useEffect } from 'react'
 export interface ContestTemplate {
   name: string
   requiredFields?: Record<string, { required?: boolean }> | string
+  uiConfig?: {
+    gota?: {
+      enabled?: boolean
+    }
+    logging?: {
+      gotaEnabled?: boolean
+    }
+  } | string
   validationRules?: {
     bands?: string[]
     modes?: string[]

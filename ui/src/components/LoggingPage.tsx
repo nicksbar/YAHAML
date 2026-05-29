@@ -628,6 +628,37 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }, [noiseGateEnabled, noiseGateThreshold])
 
+  const parseMaybeJson = <T,>(value: T | string | undefined | null): T | undefined => {
+    if (!value) return undefined
+    if (typeof value !== 'string') return value
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return undefined
+    }
+  }
+
+  const validationRules = parseMaybeJson<any>(contest?.template?.validationRules)
+  const requiredFields = parseMaybeJson<Record<string, { required?: boolean }>>(contest?.template?.requiredFields)
+  const uiConfig = parseMaybeJson<any>(contest?.template?.uiConfig)
+  const gotaEnabled = Boolean(uiConfig?.gota?.enabled || uiConfig?.logging?.gotaEnabled)
+  const contestFieldKeys = Array.from(
+    new Set([
+      ...(validationRules?.exchange?.required || []),
+      ...(validationRules?.exchange?.sent || []),
+      ...(validationRules?.exchange?.received || []),
+      ...Object.entries(requiredFields || {})
+        .filter(([, config]) => Boolean(config?.required))
+        .map(([key]) => key),
+    ])
+  )
+
+  useEffect(() => {
+    if (!gotaEnabled && activeLoggingTab === 'gota') {
+      setActiveLoggingTab('standard')
+    }
+  }, [gotaEnabled, activeLoggingTab])
+
   if (loading) {
     return (
       <div className="logging-page">
@@ -726,29 +757,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const parseMaybeJson = <T,>(value: T | string | undefined | null): T | undefined => {
-    if (!value) return undefined
-    if (typeof value !== 'string') return value
-    try {
-      return JSON.parse(value) as T
-    } catch {
-      return undefined
-    }
-  }
-
-  const validationRules = parseMaybeJson<any>(contest?.template?.validationRules)
-  const requiredFields = parseMaybeJson<Record<string, { required?: boolean }>>(contest?.template?.requiredFields)
-  const contestFieldKeys = Array.from(
-    new Set([
-      ...(validationRules?.exchange?.required || []),
-      ...(validationRules?.exchange?.sent || []),
-      ...(validationRules?.exchange?.received || []),
-      ...Object.entries(requiredFields || {})
-        .filter(([, config]) => Boolean(config?.required))
-        .map(([key]) => key),
-    ])
-  )
-
   return (
     <div className="logging-page" data-testid="logging-page">
       {submitError && (
@@ -766,13 +774,15 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         >
           Standard Log
         </button>
-        <button
-          className={`logging-tab ${activeLoggingTab === 'gota' ? 'active' : ''}`}
-          onClick={() => setActiveLoggingTab('gota')}
-          data-testid="logging-tab-gota"
-        >
-          GOTA Station
-        </button>
+        {gotaEnabled && (
+          <button
+            className={`logging-tab ${activeLoggingTab === 'gota' ? 'active' : ''}`}
+            onClick={() => setActiveLoggingTab('gota')}
+            data-testid="logging-tab-gota"
+          >
+            GOTA Station
+          </button>
+        )}
       </div>
 
       <div className="logging-layout">
@@ -820,7 +830,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
             </section>
           )}
 
-          {activeLoggingTab === 'gota' && (
+          {gotaEnabled && activeLoggingTab === 'gota' && (
             <QSOEntryForm
               stations={stations}
               stationId={gotaStationId || stationId}
