@@ -41,6 +41,8 @@ export interface ScenarioDefinition {
       remoteCallsign: string;
       band: string;
       mode: string;
+      exchangeClass?: string;
+      powerCategory?: 'HIGH' | 'LOW' | 'QRP';
       rstSent?: string;
       rstRcvd?: string;
       grid?: string;

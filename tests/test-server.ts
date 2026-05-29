@@ -4,6 +4,7 @@
 import http from 'http';
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import { wsManager } from '../src/websocket';
 
 let server: http.Server | null = null;
 let prisma: PrismaClient;
@@ -39,6 +40,8 @@ export async function startTestServer(): Promise<{ server: http.Server; prisma: 
 
 export async function stopTestServer(): Promise<void> {
   return new Promise(async (resolve, reject) => {
+    wsManager.close();
+
     // Disconnect Prisma first
     if (prisma) {
       try {

@@ -11,15 +11,15 @@ export const StatsPanel: React.FC<Props> = ({ contestId, className = '' }) => {
   const { stats, loading, error } = useStats(contestId);
 
   if (error) {
-    return <div className={`stats-panel error ${className}`}>Error: {error}</div>;
+    return <div className={`stats-panel error ${className}`} data-testid="stats-panel">Error: {error}</div>;
   }
 
   if (loading) {
-    return <div className={`stats-panel ${className}`}>Loading stats...</div>;
+    return <div className={`stats-panel ${className}`} data-testid="stats-panel">Loading stats...</div>;
   }
 
   if (!stats) {
-    return <div className={`stats-panel ${className}`}>No stats available</div>;
+    return <div className={`stats-panel ${className}`} data-testid="stats-panel">No stats available</div>;
   }
 
   const bandEntries = Object.entries(stats.bandDist || {})
@@ -30,20 +30,20 @@ export const StatsPanel: React.FC<Props> = ({ contestId, className = '' }) => {
     .sort(([, a], [, b]) => b - a);
 
   return (
-    <div className={`stats-panel ${className}`}>
+    <div className={`stats-panel ${className}`} data-testid="stats-panel">
       <h3>Contest Statistics</h3>
       
       <div className="stats-grid">
         {/* Main metrics */}
         <div className="stat-card">
           <div className="stat-label">QSOs</div>
-          <div className="stat-value">{stats.qsoCount}</div>
+          <div className="stat-value" data-testid="stats-qso-count">{stats.qsoCount}</div>
           <div className="stat-sub">{stats.qsoPerHour.toFixed(1)}/hour</div>
         </div>
 
         <div className="stat-card">
           <div className="stat-label">Points</div>
-          <div className="stat-value">{stats.pointsTotal}</div>
+          <div className="stat-value" data-testid="stats-points-total">{stats.pointsTotal}</div>
           <div className="stat-sub">
             {stats.qsoCount > 0 ? (stats.pointsTotal / stats.qsoCount).toFixed(1) : 0} per QSO
           </div>

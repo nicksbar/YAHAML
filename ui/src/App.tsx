@@ -138,6 +138,15 @@ const browserIdKey = 'yahaml:browserId'
 
 type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
 
+type N3fjpForwarderConfig = {
+  enabled: boolean
+  host: string
+  port: number
+  timeoutMs: number
+}
+
+const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'CW', 'CWR', 'AM', 'FM', 'DIGI', 'RTTY']
+
 function App() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
@@ -251,6 +260,12 @@ function App() {
   }>>({})
   const [radioLiveState, setRadioLiveState] = useState<Record<string, any>>({})
   const [radioControlInputs, setRadioControlInputs] = useState<Record<string, { frequency: string; power: string; mode: string; bandwidth: string; raw: string }>>({})
+  const [assignedRadio, setAssignedRadio] = useState<RadioAssignment | null>(null)
+  const [assignedRadioError, setAssignedRadioError] = useState<string | null>(null)
+  const [globalFrequencyInput, setGlobalFrequencyInput] = useState('')
+  const [globalModeInput, setGlobalModeInput] = useState('USB')
+  const [globalPowerInput, setGlobalPowerInput] = useState(50)
+  const [globalControlBusy, setGlobalControlBusy] = useState(false)
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -283,6 +298,17 @@ function App() {
   const [availableContests, setAvailableContests] = useState<any[]>([])
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loadingContests, setLoadingContests] = useState(false)
+
+  // System-wide N3FJP forwarding config (admin)
+  const [forwarderConfig, setForwarderConfig] = useState<N3fjpForwarderConfig>({
+    enabled: false,
+    host: '127.0.0.1',
+    port: 1000,
+    timeoutMs: 3000,
+  })
+  const [forwarderLoading, setForwarderLoading] = useState(false)
+  const [forwarderSaving, setForwarderSaving] = useState(false)
+  const [forwarderStatus, setForwarderStatus] = useState<string | null>(null)
   
   // Station management state
   const [allStations, setAllStations] = useState<any[]>([])
@@ -316,8 +342,10 @@ function App() {
     [stations],
   )
 
-  const getAuthHeaders = (): Record<string, string> =>
-    sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = sessionToken || localStorage.getItem(sessionTokenKey) || ''
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
 
   const formatFrequencyMHz = (frequency?: string | null) => {
     if (!frequency) return '---.---'
@@ -380,6 +408,38 @@ function App() {
       }
     } catch {
       // silent
+    }
+  }
+
+  const fetchAssignedRadio = async () => {
+    if (!sessionToken) {
+      setAssignedRadio(null)
+      setAssignedRadioError(null)
+      return
+    }
+
+    try {
+      const response = await fetch('/api/radio-assignments/me', {
+        headers: getAuthHeaders(),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        setAssignedRadio(null)
+        setAssignedRadioError(data?.error || 'Unable to load assigned radio')
+        return
+      }
+
+      const data = await response.json()
+      setAssignedRadio(data)
+      setAssignedRadioError(null)
+
+      if (data?.radio?.id) {
+        await refreshRadioState(data.radio.id)
+      }
+    } catch (error) {
+      setAssignedRadio(null)
+      setAssignedRadioError(error instanceof Error ? error.message : 'Unable to load assigned radio')
     }
   }
 
@@ -740,12 +800,13 @@ function App() {
 
   async function fetchAdminList() {
     try {
-      if (!sessionToken) {
+      const authToken = sessionToken || localStorage.getItem(sessionTokenKey) || ''
+      if (!authToken) {
         setIsAdmin(false)
         return
       }
       const response = await fetch('/api/admin/callsigns', {
-        headers: getAuthHeaders(),
+        headers: { Authorization: `Bearer ${authToken}` },
       })
       if (response.ok) {
         const data = await response.json()
@@ -869,6 +930,64 @@ function App() {
       console.error('Failed to fetch contests:', error)
     } finally {
       setLoadingContests(false)
+    }
+  }
+
+  async function fetchForwarderConfig() {
+    if (!sessionToken || !isAdmin) return
+    try {
+      setForwarderLoading(true)
+      setForwarderStatus(null)
+      const response = await fetch('/api/n3fjp-forwarder/config', {
+        headers: getAuthHeaders(),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to load forwarder config')
+      }
+
+      const data = await response.json()
+      setForwarderConfig({
+        enabled: Boolean(data.enabled),
+        host: data.host || '127.0.0.1',
+        port: Number(data.port || 1000),
+        timeoutMs: Number(data.timeoutMs || 3000),
+      })
+    } catch (error) {
+      setForwarderStatus(error instanceof Error ? error.message : 'Failed to load forwarder config')
+    } finally {
+      setForwarderLoading(false)
+    }
+  }
+
+  async function saveForwarderConfig() {
+    if (!sessionToken || !isAdmin) return
+    try {
+      setForwarderSaving(true)
+      setForwarderStatus(null)
+      const response = await fetch('/api/n3fjp-forwarder/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(forwarderConfig),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to save forwarder config')
+      }
+
+      const data = await response.json()
+      setForwarderConfig({
+        enabled: Boolean(data.enabled),
+        host: data.host || '127.0.0.1',
+        port: Number(data.port || 1000),
+        timeoutMs: Number(data.timeoutMs || 3000),
+      })
+      setForwarderStatus('N3FJP forwarding config saved')
+    } catch (error) {
+      setForwarderStatus(error instanceof Error ? error.message : 'Failed to save forwarder config')
+    } finally {
+      setForwarderSaving(false)
     }
   }
 
@@ -1320,6 +1439,12 @@ function App() {
   }, [callsignInput, adminCallsigns])
 
   useEffect(() => {
+    if (sessionToken) {
+      fetchAdminList()
+    }
+  }, [sessionToken])
+
+  useEffect(() => {
     if (selectedStationId) {
       fetchStationDetails(selectedStationId)
     }
@@ -1352,6 +1477,7 @@ function App() {
     if (currentView === 'admin') {
       fetchAvailableContests()
       fetchScenarios()
+      fetchForwarderConfig()
     }
   }, [currentView])
 
@@ -1393,11 +1519,141 @@ function App() {
   const currentCallsign = localStorage.getItem(storageKey) || ''
   const callsignDisplay = currentCallsign || 'Not set'
   const hasActiveCallsign = currentCallsign.trim().length > 0
+  const assignedRadioState = assignedRadio?.radio ? getRadioState(assignedRadio.radio as RadioConnection) : null
   const effectiveView = hasActiveCallsign
     ? currentView
     : allowCallsignSetup
       ? 'station'
       : 'dashboard'
+
+  useEffect(() => {
+    if (!hasActiveCallsign || !sessionToken) {
+      setAssignedRadio(null)
+      setAssignedRadioError(null)
+      return
+    }
+    fetchAssignedRadio()
+  }, [hasActiveCallsign, sessionToken, selectedStationId])
+
+  useEffect(() => {
+    if (!hasActiveCallsign || !sessionToken) return
+    const interval = setInterval(() => {
+      fetchAssignedRadio()
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [hasActiveCallsign, sessionToken])
+
+  useEffect(() => {
+    if (!assignedRadio?.radio?.id) return
+    const interval = setInterval(() => {
+      refreshRadioState(assignedRadio.radio!.id)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [assignedRadio?.radio?.id])
+
+  useEffect(() => {
+    if (!assignedRadio?.radio) {
+      setGlobalFrequencyInput('')
+      setGlobalModeInput('USB')
+      setGlobalPowerInput(50)
+      return
+    }
+
+    setGlobalFrequencyInput(formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency))
+    setGlobalModeInput((assignedRadioState?.mode || assignedRadio.radio.mode || 'USB').toUpperCase())
+    setGlobalPowerInput(Number(assignedRadioState?.power ?? assignedRadio.radio.power ?? 50))
+  }, [assignedRadio?.radio?.id, assignedRadioState?.frequency, assignedRadioState?.mode, assignedRadioState?.power])
+
+  const setAssignedFrequency = async () => {
+    if (!assignedRadio?.radio?.id) return
+    const hz = toFrequencyHz(globalFrequencyInput)
+    if (!hz) {
+      addError('Enter a valid frequency in MHz')
+      return
+    }
+
+    try {
+      setGlobalControlBusy(true)
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/frequency`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ frequency: hz }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to set frequency')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to set frequency')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
+
+  const setAssignedMode = async (mode: string) => {
+    if (!assignedRadio?.radio?.id) return
+    try {
+      setGlobalControlBusy(true)
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ mode }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to set mode')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to set mode')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
+
+  const setAssignedPower = async () => {
+    if (!assignedRadio?.radio?.id) return
+    try {
+      setGlobalControlBusy(true)
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/power`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ power: globalPowerInput }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to set power')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to set power')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
+
+  const toggleAssignedPtt = async () => {
+    if (!assignedRadio?.radio?.id) return
+    try {
+      setGlobalControlBusy(true)
+      const enabled = !assignedRadioState?.ptt
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/ptt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ enabled }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to toggle PTT')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to toggle PTT')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (effectiveView === 'logging') return
@@ -1418,7 +1674,7 @@ function App() {
 
   function renderDashboard() {
     return (
-      <div className="dashboard-grid dashboard-v2">
+      <div className="dashboard-grid dashboard-v2" data-testid="dashboard-view">
         {/* Row 1: System Status + Active Stations */}
         <section className="panel system-panel">
           <h2>System Status</h2>
@@ -3590,8 +3846,9 @@ function App() {
                   placeholder="W1AW"
                   className={stationFormErrors.callsign ? 'input-error' : undefined}
                   style={{ flex: 1 }}
+                  data-testid="station-callsign-input"
                 />
-                <button className="btn primary" onClick={saveCallsign}>
+                <button className="btn primary" onClick={saveCallsign} data-testid="station-callsign-save">
                   💾 Save
                 </button>
               </div>
@@ -4045,6 +4302,85 @@ function App() {
           </section>
 
           <section className="panel">
+            <h2>🔁 N3FJP Forwarding (System-wide)</h2>
+            <p className="hint">
+              Global setting for forwarding incoming logging events to an external N3FJP host.
+              This applies to relay, UDP, and API-ingested QSOs across the whole system.
+            </p>
+            {forwarderStatus && (
+              <div className={`notice ${forwarderStatus.includes('saved') ? 'success' : 'error'}`}>
+                {forwarderStatus}
+              </div>
+            )}
+            <div className="form-grid">
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={forwarderConfig.enabled}
+                    onChange={(e) =>
+                      setForwarderConfig((prev) => ({ ...prev, enabled: e.target.checked }))
+                    }
+                    disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  />
+                  Enable external N3FJP forwarding
+                </label>
+              </div>
+              <div className="field">
+                <label>Host</label>
+                <input
+                  value={forwarderConfig.host}
+                  onChange={(e) =>
+                    setForwarderConfig((prev) => ({ ...prev, host: e.target.value }))
+                  }
+                  disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  placeholder="127.0.0.1"
+                />
+              </div>
+              <div className="field">
+                <label>Port</label>
+                <input
+                  type="number"
+                  value={forwarderConfig.port}
+                  onChange={(e) =>
+                    setForwarderConfig((prev) => ({ ...prev, port: Number(e.target.value || 0) }))
+                  }
+                  disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  placeholder="1000"
+                />
+              </div>
+              <div className="field">
+                <label>Timeout (ms)</label>
+                <input
+                  type="number"
+                  value={forwarderConfig.timeoutMs}
+                  onChange={(e) =>
+                    setForwarderConfig((prev) => ({ ...prev, timeoutMs: Number(e.target.value || 0) }))
+                  }
+                  disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  placeholder="3000"
+                />
+              </div>
+            </div>
+            <div className="action-buttons">
+              <button
+                className="btn secondary"
+                onClick={fetchForwarderConfig}
+                disabled={forwarderLoading || forwarderSaving || !isAdmin}
+              >
+                {forwarderLoading ? '⏳ Loading...' : '🔄 Reload'}
+              </button>
+              <button
+                className="btn primary"
+                onClick={saveForwarderConfig}
+                disabled={forwarderLoading || forwarderSaving || !isAdmin}
+              >
+                {forwarderSaving ? '💾 Saving...' : '💾 Save System Config'}
+              </button>
+            </div>
+          </section>
+
+          <section className="panel">
             <h2>👥 Station Management</h2>
             <p className="hint">
               View and manage all stations in the system. Check for duplicate callsigns and active sessions.
@@ -4212,7 +4548,7 @@ function App() {
             )}
           </section>
 
-          <section className="panel">
+          <section className="panel" data-testid="scenario-loading-panel">
             <h2>🎬 Scenario Loading</h2>
             <p className="hint">
               Fully reset the instance and load example data. Choose a scenario to get started with realistic demo configurations.
@@ -4226,6 +4562,7 @@ function App() {
                     className="btn danger"
                     onClick={() => loadScenario(scenarioLoadConfirm)}
                     disabled={scenarioLoading}
+                    data-testid="scenario-confirm-load"
                   >
                     {scenarioLoading ? '⏳ Loading...' : '✓ Confirm & Load'}
                   </button>
@@ -4239,7 +4576,7 @@ function App() {
                 </div>
               </div>
             )}
-            {Object.entries(scenariosByCategory).map(([category, items]) => (
+            {Object.entries(scenariosByCategory as Record<string, any[]>).map(([category, items]) => (
               <div key={category} style={{ marginBottom: '1.5rem' }}>
                 <h3 style={{ fontSize: '0.95rem', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   {categoryLabels[category] || category}
@@ -4248,6 +4585,7 @@ function App() {
                   {items.map((scenario: any) => (
                     <div
                       key={scenario.id}
+                      data-testid={`scenario-card-${scenario.id}`}
                       style={{
                         padding: 'var(--space-md)',
                         border: '1px solid var(--border)',
@@ -4271,6 +4609,7 @@ function App() {
                         onClick={() => setScenarioLoadConfirm(scenario.id)}
                         disabled={scenarioLoading || scenarioLoadingId === scenario.id}
                         style={{ marginTop: 'auto' }}
+                        data-testid={`scenario-load-${scenario.id}`}
                       >
                         {scenarioLoadingId === scenario.id ? '⏳ Loading...' : '📥 Load Scenario'}
                       </button>
@@ -4337,6 +4676,7 @@ function App() {
             <button
               className={`nav-btn ${effectiveView === 'dashboard' ? 'active' : ''}`}
               onClick={() => handleViewChange('dashboard')}
+              data-testid="nav-dashboard"
             >
               Dashboard
             </button>
@@ -4344,6 +4684,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'club' ? 'active' : ''}`}
               onClick={() => handleViewChange('club')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-club"
             >
               Club
             </button>
@@ -4359,6 +4700,7 @@ function App() {
                 fetchUpcomingContests()
               }}
               disabled={!hasActiveCallsign}
+              data-testid="nav-contests"
             >
               Contests
             </button>
@@ -4366,6 +4708,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'station' ? 'active' : ''}`}
               onClick={() => handleViewChange('station')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-station"
             >
               Station
             </button>
@@ -4373,6 +4716,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'logging' ? 'active' : ''}`}
               onClick={() => handleViewChange('logging')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-logging"
             >
               Logging
             </button>
@@ -4380,6 +4724,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'rig' ? 'active' : ''}`}
               onClick={() => handleViewChange('rig')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-rig"
             >
               Rig
             </button>
@@ -4388,6 +4733,7 @@ function App() {
                 className={`nav-btn ${effectiveView === 'admin' ? 'active' : ''}`}
                 onClick={() => handleViewChange('admin')}
                 disabled={!hasActiveCallsign}
+                data-testid="nav-admin"
               >
                 Admin
               </button>
@@ -4397,6 +4743,7 @@ function App() {
               onClick={() => handleViewChange('debug')}
               disabled={!hasActiveCallsign}
               title="Debug logs and system status"
+              data-testid="nav-debug"
             >
               🐛 Debug
             </button>
@@ -4454,6 +4801,7 @@ function App() {
               className={`callsign-toggle ${hasActiveCallsign ? '' : 'callsign-toggle--empty'}`}
               onClick={() => setShowCallsignPicker((prev) => !prev)}
               aria-expanded={showCallsignPicker}
+              data-testid="callsign-toggle"
             >
               <span>{callsignDisplay}</span>
               <span className="callsign-toggle-caret">▾</span>
@@ -4467,15 +4815,16 @@ function App() {
                       key={station.id}
                       className={`quick-btn ${station.callsign === currentCallsign ? 'active' : ''}`}
                       onClick={() => handleCallsignSelect(station.callsign)}
+                      data-testid={`callsign-option-${station.callsign}`}
                     >
                       {station.callsign}
                     </button>
                   ))}
-                  <button className="quick-btn secondary" onClick={() => handleCallsignSelect('__new__')}>
+                  <button className="quick-btn secondary" onClick={() => handleCallsignSelect('__new__')} data-testid="callsign-add-new">
                     ＋ Add new callsign
                   </button>
                   {hasActiveCallsign && (
-                    <button className="quick-btn" onClick={() => handleCallsignSelect('__unset__')}>
+                    <button className="quick-btn" onClick={() => handleCallsignSelect('__unset__')} data-testid="callsign-unset">
                       Unset callsign
                     </button>
                   )}
@@ -4511,6 +4860,101 @@ function App() {
         {effectiveView === 'admin' && renderAdminView()}
         {effectiveView === 'debug' && <DebugPanel />}
       </main>
+
+      {hasActiveCallsign && (
+        <footer className="global-ops-bar" role="complementary" aria-label="Global radio controls and band occupancy">
+          <section className="global-ops-bar-section global-radio-controls">
+            <div className="global-ops-bar-header">
+              <h3>📻 Radio Control</h3>
+              {assignedRadio?.radio ? (
+                <span className={`pill ${assignedRadio.radio.isConnected ? 'success' : 'error'}`}>
+                  {assignedRadio.radio.isConnected ? 'Connected' : 'Disconnected'}
+                </span>
+              ) : (
+                <span className="pill">No assignment</span>
+              )}
+            </div>
+
+            {assignedRadioError && <p className="global-ops-note error">{assignedRadioError}</p>}
+
+            {!assignedRadio?.radio ? (
+              <p className="global-ops-note">Assign a radio in the Rig tab to enable controls here.</p>
+            ) : (
+              <>
+                <div className="global-ops-summary">
+                  <strong>{assignedRadio.radio.name}</strong>
+                  <span>{formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency)} MHz</span>
+                  <span>{(assignedRadioState?.mode || assignedRadio.radio.mode || '---').toUpperCase()}</span>
+                  <span>{assignedRadioState?.power ?? assignedRadio.radio.power ?? '---'}W</span>
+                </div>
+
+                <div className="global-ops-controls">
+                  <div className="global-control-row">
+                    <input
+                      value={globalFrequencyInput}
+                      onChange={(e) => setGlobalFrequencyInput(e.target.value)}
+                      placeholder="MHz"
+                      aria-label="Frequency MHz"
+                    />
+                    <button className="btn small" onClick={setAssignedFrequency} disabled={globalControlBusy}>
+                      Set Freq
+                    </button>
+                  </div>
+
+                  <div className="global-control-row">
+                    <select
+                      value={globalModeInput}
+                      onChange={async (e) => {
+                        const mode = e.target.value
+                        setGlobalModeInput(mode)
+                        await setAssignedMode(mode)
+                      }}
+                      aria-label="Mode"
+                    >
+                      {RADIO_MODE_OPTIONS.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={globalPowerInput}
+                      onChange={(e) => setGlobalPowerInput(Number(e.target.value || 0))}
+                      aria-label="Power watts"
+                    />
+                    <button className="btn small" onClick={setAssignedPower} disabled={globalControlBusy}>
+                      Set W
+                    </button>
+                  </div>
+
+                  <div className="global-control-row actions">
+                    <button
+                      className={`btn small ${assignedRadioState?.ptt ? 'danger' : 'primary'}`}
+                      onClick={toggleAssignedPtt}
+                      disabled={globalControlBusy}
+                    >
+                      {assignedRadioState?.ptt ? 'TX' : 'RX'}
+                    </button>
+                    <button className="btn small secondary" onClick={() => fetchAssignedRadio()} disabled={globalControlBusy}>
+                      Refresh
+                    </button>
+                    <button className="btn small secondary" onClick={() => handleViewChange('rig')}>
+                      Open Rig
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
+
+          <section className="global-ops-bar-section global-band-occupancy">
+            <BandOccupancy contestId={contest?.id} className="global-occupancy" />
+          </section>
+        </footer>
+      )}
     </div>
   )
 }

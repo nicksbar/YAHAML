@@ -5,6 +5,9 @@
   min-height: 100vh;
   padding: var(--space-md);
   background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
 }
 
 .loading-state,
@@ -27,11 +30,64 @@
 
 /* Layout */
 .logging-layout {
-  display: grid;
-  grid-template-columns: 1fr 350px;
-  gap: var(--space-md);
-  max-width: 1400px;
+  display: block;
+  width: 100%;
   margin: 0 auto;
+}
+
+.logging-tabs {
+  display: flex;
+  gap: var(--space-sm);
+  width: 100%;
+  margin: 0 auto var(--space-md) auto;
+}
+
+.logging-tab {
+  padding: 0.55rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-elevated);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.logging-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.gota-panel {
+  border: 1px solid var(--border);
+}
+
+.gota-panel h3 {
+  margin: 0 0 var(--space-xs) 0;
+}
+
+.gota-hint {
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--text-muted);
+}
+
+.gota-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.gota-meta {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.gota-rule {
+  color: var(--text-muted);
 }
 
 .logging-column {
@@ -40,10 +96,37 @@
   gap: var(--space-md);
 }
 
-.logging-column.sidebar {
-  /* Fixed height with scroll if needed */
-  max-height: 100vh;
-  overflow-y: auto;
+.logging-column.main {
+  width: 100%;
+}
+
+.logging-bottom-dock {
+  position: sticky;
+  bottom: var(--space-sm);
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(380px, 1.2fr) minmax(320px, 1fr) minmax(260px, 0.9fr);
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.logging-bottom-section {
+  min-width: 0;
+}
+
+.logging-bottom-section > .panel,
+.logging-bottom-section > .band-occupancy {
+  margin-bottom: 0;
+  height: 100%;
+}
+
+.dock-band-occupancy .occupancy-table {
+  font-size: 0.78rem;
 }
 
 /* Compact Assigned Radio Panel */
@@ -447,13 +530,16 @@
 
 /* Responsive: Single column on mobile/tablet */
 @media (max-width: 1024px) {
-  .logging-layout {
+  .logging-bottom-dock {
+    position: static;
     grid-template-columns: 1fr;
+    backdrop-filter: none;
   }
 
-  .logging-column.sidebar {
-    max-height: none;
-    overflow-y: visible;
+  .radio-control-section,
+  .occupancy-section,
+  .stats-section {
+    width: 100%;
   }
 }
 
@@ -540,8 +626,11 @@
     padding: 0;
   }
 
-  .logging-column.sidebar {
-    display: none;
+  .logging-bottom-dock {
+    position: static;
+    border: none;
+    padding: 0;
+    display: block;
   }
 
   .qso-entry-form {

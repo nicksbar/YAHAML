@@ -2,6 +2,7 @@ import * as net from 'net';
 import prisma from './db';
 import { validateQsoAgainstTemplate } from './contest-validation';
 import { wsManager } from './websocket';
+import { forwardRawN3fjpMessage } from './n3fjp-forwarder';
 
 interface ConnectedClient {
   socket: net.Socket;
@@ -274,6 +275,9 @@ async function handleClientData(clientId: string, data: Buffer) {
   
   try {
     const msg = decodeMessage(data);
+
+    // Optional upstream forwarding to external N3FJP host (proxy mode)
+    void forwardRawN3fjpMessage(msg);
     
     // Log all relay messages (only if we have a stationId)
     if (client.stationId) {
@@ -526,9 +530,6 @@ export function startRelayServer(port: number = 10000, host: string = '0.0.0.0')
     const displayHost = host === '0.0.0.0' ? 'all interfaces' : host;
     console.log(`\n✓ YAHAML Relay Server listening on ${host}:${port}`);
     console.log(`  - Accessible from: ${displayHost}`);
-    console.log(`  - Protocol: N3FJP TCP relay`);
-    console.log(`  - Encoding: UTF-16LE with BOR/EOR framing`);
-    console.log(`  - Mode: Silent relay (broadcasts all messages to all clients)`);
     console.log(`  - Protocol: N3FJP TCP relay`);
     console.log(`  - Encoding: UTF-16LE with BOR/EOR framing`);
     console.log(`  - Mode: Silent relay (broadcasts all messages to all clients)`);

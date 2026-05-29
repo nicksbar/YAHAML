@@ -19,6 +19,10 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:e2e": "jest --testPathPattern=e2e",
+    "test:browser": "playwright test",
+    "test:browser:headed": "playwright test --headed",
+    "test:browser:local": "PLAYWRIGHT_USE_EXISTING_SERVER=true PLAYWRIGHT_API_PORT=3000 PLAYWRIGHT_UI_PORT=5173 playwright test",
+    "test:full": "npm test -- --runInBand && npm run test:browser",
     "relay": "ts-node scripts/n3fjp_mitm_relay.ts",
     "relay:default": "ts-node scripts/n3fjp_mitm_relay.ts 2000 localhost 1000",
     "lint": "eslint src --ext .ts"
@@ -39,6 +43,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.14",

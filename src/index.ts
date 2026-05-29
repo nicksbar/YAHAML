@@ -8,6 +8,11 @@ import { validateQsoAgainstTemplate } from './contest-validation';
 import { seedContestTemplates } from './seed-templates';
 import { startRelayServer } from './relay';
 import { parseUdpTargets, startUdpServer } from './udp';
+import {
+  forwardQsoAsTransaction,
+  getN3fjpForwarderConfig,
+  updateN3fjpForwarderConfig,
+} from './n3fjp-forwarder';
 import { radioManager } from './hamlib';
 import {
   generateAdifContent,
@@ -25,6 +30,7 @@ import {
   getBandOccupancy,
   getOperatorActivity,
 } from './aggregation';
+import { CONTEST_TEMPLATES } from './contest-templates';
 import { calculateNextOccurrence } from './contest-templates/scheduler';
 import { lookupCallsign, validateCallsign } from './hamdb';
 import { locationRouter } from './location-api';
@@ -67,6 +73,91 @@ function buildDedupeKey(input: {
 
 function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function safeParseJson<T>(value: unknown): T | null {
+  if (!value) return null;
+  if (typeof value !== 'string') return value as T;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeModeForScoring(mode: string): string {
+  const m = (mode || '').toUpperCase();
+  if (['SSB', 'PH', 'PHONE', 'USB', 'LSB', 'FM', 'AM'].includes(m)) return 'PHONE';
+  if (['FT8', 'FT4', 'RTTY', 'PSK', 'DIG', 'DIGI', 'DIGITAL'].includes(m)) return 'DIGITAL';
+  if (['CW', 'CWR'].includes(m)) return 'CW';
+  return m;
+}
+
+function calculateQsoPoints(contest: any | null, mode: string): number {
+  if (!contest) return 0;
+
+  const scoringRules = safeParseJson<Record<string, any>>(contest.template?.scoringRules) || {};
+  const normalizedMode = normalizeModeForScoring(mode);
+  const pointsByMode = scoringRules.pointsByMode || {};
+
+  const exactModePoints = pointsByMode[(mode || '').toUpperCase()];
+  if (typeof exactModePoints === 'number') return exactModePoints;
+
+  const normalizedModePoints = pointsByMode[normalizedMode];
+  if (typeof normalizedModePoints === 'number') return normalizedModePoints;
+
+  if (typeof scoringRules.pointsPerQso === 'number') return scoringRules.pointsPerQso;
+  if (typeof contest.pointsPerQso === 'number') return contest.pointsPerQso;
+
+  return 0;
+}
+
+function parseJsonField(value: unknown) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeContestTemplate(template: any | null) {
+  if (!template) return null;
+  return {
+    ...template,
+    scoringRules: parseJsonField(template.scoringRules),
+    requiredFields: parseJsonField(template.requiredFields),
+    validationRules: parseJsonField(template.validationRules),
+    schedule: parseJsonField(template.schedule),
+    uiConfig: parseJsonField(template.uiConfig),
+  };
+}
+
+async function hydrateContestTemplate<T extends { template?: any | null; mode?: string | null }>(contest: T | null): Promise<(T & { template: any | null }) | null> {
+  if (!contest) return null;
+
+  if (contest.template) {
+    return {
+      ...contest,
+      template: normalizeContestTemplate(contest.template),
+    };
+  }
+
+  if (!contest.mode) {
+    return {
+      ...contest,
+      template: null,
+    };
+  }
+
+  const fallbackTemplate = await prisma.contestTemplate.findUnique({
+    where: { type: contest.mode },
+  });
+
+  return {
+    ...contest,
+    template: normalizeContestTemplate(fallbackTemplate),
+  };
 }
 
 // Middleware
@@ -426,6 +517,35 @@ const requireAdmin = (
   next();
 };
 
+// N3FJP external forwarding controls
+app.get(
+  '/api/n3fjp-forwarder/config',
+  authMiddleware as express.RequestHandler,
+  async (_req: AuthRequest, res) => {
+    return res.json(getN3fjpForwarderConfig());
+  }
+);
+
+app.put(
+  '/api/n3fjp-forwarder/config',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { enabled, host, port, timeoutMs } = req.body || {};
+      const next = updateN3fjpForwarderConfig({
+        enabled: typeof enabled === 'boolean' ? enabled : undefined,
+        host: typeof host === 'string' ? host : undefined,
+        port: typeof port === 'number' ? port : undefined,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+      });
+      return res.json(next);
+    } catch (error) {
+      return res.status(400).json({ error: 'Failed to update N3FJP forwarding config' });
+    }
+  }
+);
+
 // Stations endpoints
 app.get('/api/stations', async (req, res) => {
   try {
@@ -646,6 +766,28 @@ app.get('/api/qso-logs', async (req, res) => {
   }
 });
 
+// GET /api/qso-logs/contest/:contestId - List QSOs for specific contest
+app.get('/api/qso-logs/contest/:contestId', async (req, res) => {
+  try {
+    const { limit } = req.query;
+    const { contestId } = req.params;
+    console.log(`[QSO-LOGS] Fetching QSOs for contest ${contestId}, limit=${limit || 'none'}`);
+    const logs = await prisma.logEntry.findMany({
+      where: { contestId },
+      orderBy: { qsoDate: 'desc' },
+      take: limit ? parseInt(limit as string) : 100,
+      include: {
+        station: { select: { callsign: true } },
+      },
+    });
+    console.log(`[QSO-LOGS] Found ${logs.length} QSOs for contest`);
+    return res.json(logs);
+  } catch (error: any) {
+    console.error('[QSO-LOGS] Contest error:', error.message);
+    return res.status(500).json({ error: 'Failed to fetch contest QSO logs' });
+  }
+});
+
 // GET /api/qso-logs/:stationId - List QSOs for specific station
 app.get('/api/qso-logs/:stationId', async (req, res) => {
   try {
@@ -680,6 +822,7 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
       source,
       dedupeKey,
       exchange,
+      notes,
       ...rest
     } = req.body;
 
@@ -696,12 +839,15 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
       where: { id: stationId },
     });
 
-    if (contestId) {
-      const contest = await prisma.contest.findUnique({
-        where: { id: contestId },
-        include: { template: true },
-      });
+    const rawContest = contestId
+      ? await prisma.contest.findUnique({
+          where: { id: contestId },
+          include: { template: true },
+        })
+      : null;
+    const contest = await hydrateContestTemplate(rawContest as any);
 
+    if (contestId) {
       if (contest?.template) {
         const validation = validateQsoAgainstTemplate(
           {
@@ -733,6 +879,13 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
     });
 
     try {
+      const existingRawPayload = safeParseJson<Record<string, any>>(rest.rawPayload) || {};
+      const mergedRawPayload = {
+        ...existingRawPayload,
+        ...(exchange ? { exchange } : {}),
+        ...(notes ? { notes } : {}),
+      };
+
       const qsoLog = await prisma.logEntry.create({
         data: {
           stationId,
@@ -746,9 +899,45 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
           operatorCallsign,
           source: source || 'api',
           dedupeKey: resolvedDedupeKey,
+          points: typeof req.body?.points === 'number' ? req.body.points : calculateQsoPoints(contest, mode),
+          rawPayload: Object.keys(mergedRawPayload).length > 0 ? JSON.stringify(mergedRawPayload) : null,
           ...rest,
         },
       });
+
+      const qsoContact = await prisma.qSOContact.upsert({
+        where: { logEntryId: qsoLog.id },
+        create: {
+          stationId,
+          contestId: contestId || null,
+          callsign,
+          band,
+          mode,
+          frequency: qsoLog.frequency || null,
+          rstSent: qsoLog.rstSent || null,
+          rstRcvd: qsoLog.rstRcvd || null,
+          state: qsoLog.state || null,
+          grid: qsoLog.grid || null,
+          qsoDateTime: qsoLog.qsoDate,
+          source: source || 'api',
+          logEntryId: qsoLog.id,
+        },
+        update: {
+          contestId: contestId || null,
+          callsign,
+          band,
+          mode,
+          frequency: qsoLog.frequency || null,
+          rstSent: qsoLog.rstSent || null,
+          rstRcvd: qsoLog.rstRcvd || null,
+          state: qsoLog.state || null,
+          grid: qsoLog.grid || null,
+          qsoDateTime: qsoLog.qsoDate,
+          source: source || 'api',
+        },
+      });
+
+      wsManager.broadcast('qsos', 'newQSO', qsoContact);
 
       // Update aggregates and check for duplicates (async, don't block response)
       if (contestId) {
@@ -780,6 +969,20 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
         });
       }
 
+      void forwardQsoAsTransaction({
+        stationCallsign: station?.callsign || req.session?.callsign || 'YAHAML',
+        operatorCallsign: operatorCallsign || req.session?.callsign || station?.callsign,
+        callsign,
+        band,
+        mode,
+        qsoDate: new Date(qsoDate),
+        qsoTime,
+        contestId: contestId || null,
+        stationClass: station?.class,
+        section: station?.section,
+        points: typeof qsoLog.points === 'number' ? qsoLog.points : 0,
+      });
+
       return res.status(201).json(qsoLog);
     } catch (error) {
       if (isUniqueConstraintError(error)) {
@@ -791,6 +994,86 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
     return res.status(400).json({ error: 'Failed to create QSO log' });
   }
 });
+
+const handlePatchQsoLog = async (req: AuthRequest, res: express.Response) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.logEntry.findUnique({ where: { id } });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'QSO log not found' });
+    }
+
+    if (req.session?.stationId !== existing.stationId) {
+      return res.status(403).json({ error: 'Unauthorized QSO edit' });
+    }
+
+    const updates: Record<string, any> = {};
+    const editableFields = ['callsign', 'band', 'mode', 'frequency', 'rstSent', 'rstRcvd', 'power', 'qsoDate', 'qsoTime'];
+
+    for (const key of editableFields) {
+      if (req.body[key] !== undefined) {
+        updates[key] = req.body[key];
+      }
+    }
+
+    if (updates.qsoDate) {
+      updates.qsoDate = new Date(updates.qsoDate);
+    }
+
+    const mergedRawPayload = {
+      ...(safeParseJson<Record<string, any>>(existing.rawPayload) || {}),
+      ...(req.body.exchange !== undefined ? { exchange: req.body.exchange } : {}),
+      ...(req.body.notes !== undefined ? { notes: req.body.notes } : {}),
+    };
+
+    updates.rawPayload = Object.keys(mergedRawPayload).length > 0 ? JSON.stringify(mergedRawPayload) : null;
+
+    const station = await prisma.station.findUnique({ where: { id: existing.stationId } });
+    const dedupeKey = buildDedupeKey({
+      stationCall: station?.callsign || existing.stationId,
+      callsign: updates.callsign || existing.callsign,
+      band: updates.band || existing.band,
+      mode: updates.mode || existing.mode,
+      qsoDate: updates.qsoDate || existing.qsoDate,
+      qsoTime: updates.qsoTime || existing.qsoTime,
+      contestId: existing.contestId,
+      clubId: existing.clubId,
+    });
+    updates.dedupeKey = dedupeKey;
+
+    const rawContest = existing.contestId
+      ? await prisma.contest.findUnique({
+          where: { id: existing.contestId },
+          include: { template: true },
+        })
+      : null;
+    const contest = await hydrateContestTemplate(rawContest as any);
+    updates.points = calculateQsoPoints(contest, updates.mode || existing.mode);
+
+    const updated = await prisma.logEntry.update({
+      where: { id },
+      data: updates,
+    });
+
+    if (existing.contestId) {
+      wsManager.broadcast(`contest:${existing.contestId}`, 'logEntry:updated', updated);
+    }
+
+    return res.json(updated);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return res.status(409).json({ error: 'Edit would create duplicate QSO' });
+    }
+    return res.status(400).json({ error: 'Failed to update QSO log' });
+  }
+};
+
+// PATCH /api/qso-logs/:id - Edit existing QSO (session station only)
+app.patch('/api/qso-logs/:id', authMiddleware as express.RequestHandler, handlePatchQsoLog);
+
+// PATCH /api/logs/:id - Backward-compatible alias for QSO edit
+app.patch('/api/logs/:id', authMiddleware as express.RequestHandler, handlePatchQsoLog);
 
 // Merge QSO log entries (mark duplicates as merged into primary)
 app.post('/api/logs/merge', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
@@ -1375,8 +1658,14 @@ app.get('/api/contests/active/current', async (_req, res) => {
         template: true,
       },
     });
-    
-    return res.json(contest);
+
+    if (!contest) {
+      return res.json(null);
+    }
+
+    const normalizedContest = await hydrateContestTemplate(contest as any);
+
+    return res.json(normalizedContest);
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch active contest' });
   }
@@ -2165,7 +2454,7 @@ app.post(
       }
 
       // Create stations
-      const stationMap = new Map<string, string>();
+      const stationMap = new Map<string, { id: string; class?: string | null; section?: string | null }>();
       if (scenario.data.stations) {
         for (const stationData of scenario.data.stations) {
           const locationId = stationData.location ? locationMap.get(stationData.location.name) : null;
@@ -2178,7 +2467,11 @@ app.post(
               locationId: locationId || null,
             },
           });
-          stationMap.set(stationData.callsign, station.id);
+          stationMap.set(stationData.callsign, {
+            id: station.id,
+            class: stationData.class || null,
+            section: stationData.location?.section || null,
+          });
         }
       }
 
@@ -2199,10 +2492,10 @@ app.post(
           
           // Link member stations to this club
           for (const operatorCall of clubData.operatorCallsigns) {
-            const stationId = stationMap.get(operatorCall);
-            if (stationId) {
+            const stationMeta = stationMap.get(operatorCall);
+            if (stationMeta?.id) {
               await prisma.station.update({
-                where: { id: stationId },
+                where: { id: stationMeta.id },
                 data: { clubId: club.id },
               });
             }
@@ -2212,28 +2505,105 @@ app.post(
 
       // Create contests
       const contestMap = new Map<string, string>();
+      let primaryContestId: string | null = null;
       if (scenario.data.contests) {
-        for (const contestData of scenario.data.contests) {
+        for (const [index, contestData] of scenario.data.contests.entries()) {
+          const template = contestData.templateType
+            ? await prisma.contestTemplate.findUnique({ where: { type: contestData.templateType } })
+            : null;
+
+          let resolvedTemplate = template;
+          if (contestData.templateType) {
+            const bundled = CONTEST_TEMPLATES.find((t) => t.type === contestData.templateType);
+            if (bundled) {
+              resolvedTemplate = await prisma.contestTemplate.upsert({
+                where: { type: bundled.type },
+                update: {
+                  name: bundled.name,
+                  description: bundled.description,
+                  organization: bundled.organization,
+                  scoringRules: JSON.stringify(bundled.scoringRules),
+                  requiredFields: JSON.stringify(bundled.requiredFields),
+                  validationRules: JSON.stringify(bundled.validationRules),
+                  schedule: bundled.schedule ? JSON.stringify(bundled.schedule) : null,
+                  uiConfig: bundled.uiConfig ? JSON.stringify(bundled.uiConfig) : null,
+                  isActive: bundled.isActive,
+                  isPublic: bundled.isPublic,
+                },
+                create: {
+                  type: bundled.type,
+                  name: bundled.name,
+                  description: bundled.description,
+                  organization: bundled.organization,
+                  scoringRules: JSON.stringify(bundled.scoringRules),
+                  requiredFields: JSON.stringify(bundled.requiredFields),
+                  validationRules: JSON.stringify(bundled.validationRules),
+                  schedule: bundled.schedule ? JSON.stringify(bundled.schedule) : null,
+                  uiConfig: bundled.uiConfig ? JSON.stringify(bundled.uiConfig) : null,
+                  isActive: bundled.isActive,
+                  isPublic: bundled.isPublic,
+                },
+              });
+            }
+          }
+
+          const templateScoring = safeParseJson<Record<string, any>>(resolvedTemplate?.scoringRules);
+          const resolvedPointsPerQso = contestData.pointsPerQso
+            ?? (typeof templateScoring?.pointsPerQso === 'number' ? templateScoring.pointsPerQso : 1);
+
           const contest = await prisma.contest.create({
             data: {
               name: contestData.name,
               mode: contestData.templateType || 'OTHER',
+              templateId: resolvedTemplate?.id || null,
               scoringMode: contestData.scoringMode || 'SIMPLE',
-              pointsPerQso: contestData.pointsPerQso || 1,
-              isActive: false,
+              pointsPerQso: resolvedPointsPerQso,
+              isActive: index === 0,
             },
           });
           contestMap.set(contestData.name, contest.id);
+          if (index === 0) {
+            primaryContestId = contest.id;
+          }
         }
+      }
+
+      // Associate stations/clubs to the primary contest for realistic logging context
+      if (primaryContestId) {
+        await prisma.station.updateMany({
+          where: {},
+          data: { contestId: primaryContestId },
+        });
+
+        await prisma.club.updateMany({
+          where: {},
+          data: { contestId: primaryContestId },
+        });
       }
 
       // Create QSOs
       let qsoCountByContest: Record<string, { count: number; points: number }> = {};
       if (scenario.data.qsos && scenario.data.contests && scenario.data.contests.length > 0) {
         // Use first contest for all QSOs if no specific contest mapping
-        const defaultContestId = contestMap.get(scenario.data.contests[0].name);
+        const defaultContestId = primaryContestId || contestMap.get(scenario.data.contests[0].name);
         const now = new Date();
-        const pointsPerQso = scenario.data.contests[0].pointsPerQso || 1;
+        const defaultContest = defaultContestId
+          ? await prisma.contest.findUnique({
+              where: { id: defaultContestId },
+              include: { template: true },
+            })
+          : null;
+
+        const fdClasses = ['1A', '2A', '3A', '4A', '1B', '2B', '1D', '1E', '2F'];
+        const fdSections = ['OK', 'TX', 'KS', 'AR', 'MO', 'CO', 'NM', 'LA', 'ENY', 'NFL', 'WMA', 'SCV'];
+        const deterministicPick = (seed: string, pool: string[]) => {
+          let hash = 0;
+          for (let i = 0; i < seed.length; i++) {
+            hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+          }
+          const idx = Math.abs(hash) % pool.length;
+          return pool[idx];
+        };
         
         // Get station-to-club mapping for clubId assignment
         const stationClubMap = new Map<string, string>();
@@ -2247,11 +2617,31 @@ app.post(
         }
         
         for (const qsoData of scenario.data.qsos) {
-          const stationId = stationMap.get(qsoData.stationCallsign);
-          if (!stationId) continue;
+          const stationMeta = stationMap.get(qsoData.stationCallsign);
+          if (!stationMeta?.id) continue;
+          const stationId = stationMeta.id;
           
           // Get clubId for this station
           const clubId = stationClubMap.get(qsoData.stationCallsign);
+
+          const exchange: Record<string, string> = {};
+          const templateType = defaultContest?.template?.type;
+          const normalizedMode = String(qsoData.mode || '').toUpperCase();
+
+          if (templateType === 'ARRL_FD' || templateType === 'WINTER_FD') {
+            exchange.class = qsoData.exchangeClass
+              || stationMeta.class
+              || deterministicPick(`${qsoData.remoteCallsign}-class`, fdClasses);
+            exchange.section = qsoData.section
+              || stationMeta.section
+              || deterministicPick(`${qsoData.remoteCallsign}-section`, fdSections);
+            exchange.power = qsoData.powerCategory || 'LOW';
+          }
+
+          if (templateType === 'POTA') {
+            exchange.rst = qsoData.rstRcvd || qsoData.rstSent || (normalizedMode === 'CW' ? '599' : '59');
+            exchange.park = 'K-0001';
+          }
 
           // Calculate QSO date
           const qsoDate = new Date(now);
@@ -2265,7 +2655,11 @@ app.post(
           const qsoTime = `${String(randomHour).padStart(2, '0')}:${String(randomMinute).padStart(2, '0')}`;
 
           const dedupeKey = `${stationId}-${qsoData.remoteCallsign}-${qsoData.band}-${qsoData.mode}-${qsoDate.toISOString().split('T')[0]}-${qsoTime}`;
-          const points = pointsPerQso;
+          const points = calculateQsoPoints(defaultContest, qsoData.mode);
+
+          const rawPayload = Object.keys(exchange).length > 0
+            ? JSON.stringify({ exchange })
+            : null;
 
           const logEntry = await prisma.logEntry.create({
             data: {
@@ -2280,8 +2674,9 @@ app.post(
               rstSent: qsoData.rstSent || '579',
               rstRcvd: qsoData.rstRcvd || '579',
               grid: qsoData.grid || null,
-              state: qsoData.section || null,
+              state: qsoData.section || exchange.section || null,
               points,
+              rawPayload,
               dedupeKey,
               source: 'scenario',
               merge_status: 'primary',
@@ -2299,7 +2694,7 @@ app.post(
               rstSent: qsoData.rstSent || '579',
               rstRcvd: qsoData.rstRcvd || '579',
               grid: qsoData.grid || null,
-              section: qsoData.section || null,
+              section: qsoData.section || exchange.section || null,
               qsoDateTime: new Date(qsoDate.getTime() + randomHour * 3600000 + randomMinute * 60000),
               source: 'scenario',
               logEntryId: logEntry.id,
@@ -3089,6 +3484,60 @@ app.get('/api/band-occupancy', async (req, res) => {
   }
 });
 
+app.post('/api/band-occupancy', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const { stationId, contestId, band, mode, source } = req.body || {};
+
+    if (!stationId || !band || !mode) {
+      return res.status(400).json({ error: 'stationId, band, and mode are required' });
+    }
+
+    if (req.session?.stationId !== stationId) {
+      return res.status(403).json({ error: 'Unauthorized band occupancy update' });
+    }
+
+    const normalizedBand = String(band).trim().toUpperCase();
+    const normalizedMode = String(mode).trim().toUpperCase();
+
+    await prisma.bandOccupancy.deleteMany({
+      where: {
+        stationId,
+        contestId: contestId ? String(contestId) : null,
+      },
+    });
+
+    const created = await prisma.bandOccupancy.create({
+      data: {
+        stationId,
+        contestId: contestId ? String(contestId) : null,
+        band: normalizedBand,
+        mode: normalizedMode,
+        source: source ? String(source) : 'ui',
+      },
+      include: {
+        station: true,
+      },
+    });
+
+    wsManager.broadcast('stations', 'bandModeChange', {
+      stationId,
+      band: normalizedBand,
+      mode: normalizedMode,
+      source: created.source,
+    });
+
+    return res.status(201).json({
+      band: created.band,
+      mode: created.mode,
+      stationId: created.stationId,
+      source: created.source,
+      lastSeen: created.lastSeen,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to update band occupancy' });
+  }
+});
+
 // QSO Contacts (for map)
 app.get('/api/qso-contacts', async (req, res) => {
   try {
@@ -3125,6 +3574,39 @@ app.get('/api/qso-contacts', async (req, res) => {
       take: 200,
     });
 
+    if (contacts.length === 0) {
+      const fallbackLogs = await prisma.logEntry.findMany({
+        where: {
+          contestId: contestId ? String(contestId) : undefined,
+          qsoDate: {
+            gte: sinceTime,
+            lte: now,
+          },
+          merge_status: { not: 'duplicate_of' },
+        },
+        orderBy: { qsoDate: 'desc' },
+        take: 200,
+      });
+
+      return res.json(
+        fallbackLogs.map((log) => ({
+          id: log.id,
+          stationId: log.stationId,
+          contestId: log.contestId,
+          callsign: log.callsign,
+          band: log.band,
+          mode: log.mode,
+          frequency: log.frequency,
+          rstSent: log.rstSent,
+          rstRcvd: log.rstRcvd,
+          state: log.state,
+          grid: log.grid,
+          qsoDateTime: log.qsoDate,
+          source: log.source,
+        }))
+      );
+    }
+
     return res.json(contacts);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -3150,49 +3632,122 @@ app.get('/api/operator-messages', async (req, res) => {
   }
 });
 
-// Contest stats
-app.get('/api/contest-stats', async (req, res) => {
+const handleContestStatsRequest = async (req: express.Request, res: express.Response) => {
   try {
     const { contestId, period = 'hour' } = req.query;
 
-    const stats = await prisma.contestStats.findFirst({
-      where: {
-        contestId: contestId ? String(contestId) : undefined,
-        stationId: null, // Contest-wide only
-        period: String(period),
+    const now = new Date();
+    const periodValue = String(period);
+    const since = new Date(now);
+    let useTimeWindow = true;
+
+    switch (periodValue) {
+      case 'contest':
+      case 'all':
+        useTimeWindow = false;
+        break;
+      case 'day':
+        since.setDate(since.getDate() - 1);
+        break;
+      case '6h':
+        since.setHours(since.getHours() - 6);
+        break;
+      case 'hour':
+      default:
+        since.setHours(since.getHours() - 1);
+        break;
+    }
+
+    // Keep periodic aggregation warm for websocket consumers, but serve live data
+    if (contestId) {
+      try {
+        await aggregateContestStats(String(contestId));
+      } catch {
+        // non-blocking: endpoint serves live-calculated values below
+      }
+    }
+
+    const where: Prisma.LogEntryWhereInput = {
+      contestId: contestId ? String(contestId) : undefined,
+      ...(useTimeWindow
+        ? {
+            qsoDate: {
+              gte: since,
+              lte: now,
+            },
+          }
+        : {}),
+    };
+
+    const qsos = await prisma.logEntry.findMany({
+      where,
+      include: {
+        station: {
+          select: { callsign: true },
+        },
       },
-      orderBy: { periodStart: 'desc' },
     });
 
-    if (!stats) {
-      return res.json({
-        qsoCount: 0,
-        pointsTotal: 0,
-        mults: 0,
-        dupeCount: 0,
-        qsoPerHour: 0,
-        topCalls: [],
-        bandDist: {},
-        modeDist: {},
-        lastUpdated: new Date().toISOString(),
-      });
+    const primaryQsos = qsos.filter((q) => q.merge_status !== 'duplicate_of');
+    const qsoCount = primaryQsos.length;
+    const pointsTotal = primaryQsos.reduce((sum, q) => sum + (q.points || 0), 0);
+    const dupeCount = qsos.filter((q) => q.merge_status === 'duplicate_of').length;
+    const mults = new Set(primaryQsos.map((q) => q.callsign.toUpperCase())).size;
+
+    const bandDist = primaryQsos.reduce<Record<string, number>>((acc, q) => {
+      acc[q.band] = (acc[q.band] || 0) + 1;
+      return acc;
+    }, {});
+
+    const modeDist = primaryQsos.reduce<Record<string, number>>((acc, q) => {
+      acc[q.mode] = (acc[q.mode] || 0) + 1;
+      return acc;
+    }, {});
+
+    const operatorCounts = primaryQsos.reduce<Record<string, number>>((acc, q) => {
+      const operator = (q.operatorCallsign || q.station.callsign || 'UNKNOWN').toUpperCase();
+      acc[operator] = (acc[operator] || 0) + 1;
+      return acc;
+    }, {});
+
+    const topCalls = Object.entries(operatorCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10)
+      .map(([callsign, count]) => ({ callsign, qsoCount: count }));
+
+    let periodHours: number;
+    if (useTimeWindow) {
+      periodHours = Math.max((now.getTime() - since.getTime()) / (1000 * 60 * 60), 1 / 60);
+    } else if (primaryQsos.length > 1) {
+      const sorted = [...primaryQsos].sort((a, b) => a.qsoDate.getTime() - b.qsoDate.getTime());
+      const first = sorted[0].qsoDate.getTime();
+      const last = sorted[sorted.length - 1].qsoDate.getTime();
+      periodHours = Math.max((last - first) / (1000 * 60 * 60), 1 / 60);
+    } else {
+      periodHours = 1;
     }
 
     return res.json({
-      qsoCount: stats.qsoCount,
-      pointsTotal: stats.pointsTotal,
-      mults: stats.mults,
-      dupeCount: stats.dupeCount,
-      qsoPerHour: stats.qsoCount / ((stats.periodEnd.getTime() - stats.periodStart.getTime()) / (1000 * 60 * 60)),
-      topCalls: stats.topCallsign ? [{ callsign: stats.topCallsign, qsoCount: stats.topCallCount }] : [],
-      bandDist: stats.bandDist ? JSON.parse(stats.bandDist) : {},
-      modeDist: stats.modeDist ? JSON.parse(stats.modeDist) : {},
-      lastUpdated: stats.updatedAt.toISOString(),
+      qsoCount,
+      pointsTotal,
+      mults,
+      dupeCount,
+      qsoPerHour: qsoCount / periodHours,
+      topCalls,
+      bandDist,
+      modeDist,
+      lastUpdated: now.toISOString(),
     });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
-});
+};
+
+// Contest stats (canonical)
+app.get('/api/stats/contest', handleContestStatsRequest);
+
+// Contest stats (backward-compatible alias)
+app.get('/api/contest-stats', handleContestStatsRequest);
 
 // ============================================================================
 // VOICE ROOMS ENDPOINTS

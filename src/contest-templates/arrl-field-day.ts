@@ -150,6 +150,9 @@ export const ARRL_FIELD_DAY: ContestTemplate = {
   uiConfig: {
     primaryColor: '#FF6B35',
     icon: '🎯',
+    gota: {
+      enabled: true,
+    },
     logForm: {
       fields: ['callsign', 'band', 'mode', 'exchange', 'section'],
       layout: 'standard',

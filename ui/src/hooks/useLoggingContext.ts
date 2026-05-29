@@ -2,14 +2,25 @@ import { useState, useEffect } from 'react'
 
 export interface ContestTemplate {
   name: string
+  requiredFields?: Record<string, { required?: boolean }> | string
+  uiConfig?: {
+    gota?: {
+      enabled?: boolean
+    }
+    logging?: {
+      gotaEnabled?: boolean
+    }
+  } | string
   validationRules?: {
     bands?: string[]
     modes?: string[]
     exchange?: {
       required?: string[]
+      sent?: string[]
+      received?: string[]
       validation?: Record<string, string>
     }
-  }
+  } | string
 }
 
 export interface ActiveContest {
@@ -45,7 +56,7 @@ export function useLoggingContext(options?: UseLoggingContextOptions) {
   useEffect(() => {
     const fetchContest = async () => {
       try {
-        const response = await fetch('/api/contests/active')
+        const response = await fetch('/api/contests/active/current')
         if (response.ok) {
           const data = await response.json()
           setContest(data || null)

@@ -69,43 +69,43 @@ export async function aggregateContestStats(contestId: string) {
     const uniqueCallsigns = new Set(qsos.map((q) => q.callsign));
     const mults = uniqueCallsigns.size;
 
-    // Store in ContestStats table
-    const stats = await prisma.contestStats.upsert({
+    // Store contest-wide stats. Prisma composite upserts do not accept nullable
+    // unique members in the selector, so contest-wide rows need a find/update/create flow.
+    const existingStats = await prisma.contestStats.findFirst({
       where: {
-        contestId_stationId_periodStart_period: {
-          contestId,
-          stationId: null as any,
-          periodStart: hourStart,
-          period: 'hour',
-        },
-      },
-      create: {
         contestId,
-        stationId: null as any,
+        stationId: null,
         periodStart: hourStart,
-        periodEnd: now,
         period: 'hour',
-        qsoCount,
-        pointsTotal,
-        mults,
-        dupeCount,
-        topCallsign: topCalls[0]?.callsign || undefined,
-        topCallCount: topCalls[0]?.qsoCount || 0,
-        bandDist: JSON.stringify(bandDist),
-        modeDist: JSON.stringify(modeDist),
-      },
-      update: {
-        qsoCount,
-        pointsTotal,
-        mults,
-        dupeCount,
-        topCallsign: topCalls[0]?.callsign || undefined,
-        topCallCount: topCalls[0]?.qsoCount || 0,
-        bandDist: JSON.stringify(bandDist),
-        modeDist: JSON.stringify(modeDist),
-        periodEnd: now,
       },
     });
+
+    const statsPayload = {
+      qsoCount,
+      pointsTotal,
+      mults,
+      dupeCount,
+      topCallsign: topCalls[0]?.callsign || undefined,
+      topCallCount: topCalls[0]?.qsoCount || 0,
+      bandDist: JSON.stringify(bandDist),
+      modeDist: JSON.stringify(modeDist),
+      periodEnd: now,
+    };
+
+    const stats = existingStats
+      ? await prisma.contestStats.update({
+          where: { id: existingStats.id },
+          data: statsPayload,
+        })
+      : await prisma.contestStats.create({
+          data: {
+            contestId,
+            stationId: null,
+            periodStart: hourStart,
+            period: 'hour',
+            ...statsPayload,
+          },
+        });
 
     // Broadcast stats update via WebSocket
     wsManager.broadcast('stats', 'statsUpdate', {

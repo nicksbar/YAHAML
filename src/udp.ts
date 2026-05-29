@@ -1,6 +1,7 @@
 import dgram from 'dgram';
 import { Prisma } from '@prisma/client';
 import prisma from './db';
+import { forwardQsoAsTransaction } from './n3fjp-forwarder';
 
 export interface UdpTarget {
   host: string;
@@ -288,6 +289,7 @@ export function startUdpServer(port: number, host: string = '0.0.0.0', targets: 
     }
 
     const station = await getOrCreateStation(qso.stationCall);
+    let created = false;
     const dedupeKey = buildDedupeKey({
       stationCall: qso.stationCall,
       callsign: qso.callsign,
@@ -319,10 +321,26 @@ export function startUdpServer(port: number, host: string = '0.0.0.0', targets: 
           rawPayload: payload.substring(0, 2000),
         },
       });
+      created = true;
     } catch (error) {
       if (!isUniqueConstraintError(error)) {
         throw error;
       }
+    }
+
+    if (created) {
+      void forwardQsoAsTransaction({
+        stationCallsign: station.callsign,
+        operatorCallsign: station.callsign,
+        callsign: qso.callsign,
+        band: qso.band,
+        mode: qso.mode,
+        qsoDate: qso.qsoDate,
+        qsoTime: qso.qsoTime,
+        stationClass: station.class,
+        section: station.section,
+        points: qso.points || 0,
+      });
     }
 
     await logBandActivity(station.id, qso.band, qso.mode).catch(() => {});

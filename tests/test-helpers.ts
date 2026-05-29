@@ -72,6 +72,8 @@ export async function stopTestServer(weStartedIt: boolean): Promise<void> {
     return;
   }
 
+  wsManager.close();
+
   return new Promise((resolve, reject) => {
     // Close all existing connections first
     if (typeof (testServer as any).closeAllConnections === 'function') {
