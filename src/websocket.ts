@@ -113,6 +113,13 @@ class WebSocketManager {
         }
       }, 30000); // 30 seconds
 
+      const clearPingInterval = () => {
+        clearInterval(pingInterval);
+      };
+
+      ws.on('close', clearPingInterval);
+      ws.on('error', clearPingInterval);
+
       ws.on('pong', () => {
         // Client is alive
       });

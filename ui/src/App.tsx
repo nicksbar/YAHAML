@@ -145,6 +145,8 @@ type N3fjpForwarderConfig = {
   timeoutMs: number
 }
 
+const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'CW', 'CWR', 'AM', 'FM', 'DIGI', 'RTTY']
+
 function App() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
@@ -258,6 +260,12 @@ function App() {
   }>>({})
   const [radioLiveState, setRadioLiveState] = useState<Record<string, any>>({})
   const [radioControlInputs, setRadioControlInputs] = useState<Record<string, { frequency: string; power: string; mode: string; bandwidth: string; raw: string }>>({})
+  const [assignedRadio, setAssignedRadio] = useState<RadioAssignment | null>(null)
+  const [assignedRadioError, setAssignedRadioError] = useState<string | null>(null)
+  const [globalFrequencyInput, setGlobalFrequencyInput] = useState('')
+  const [globalModeInput, setGlobalModeInput] = useState('USB')
+  const [globalPowerInput, setGlobalPowerInput] = useState(50)
+  const [globalControlBusy, setGlobalControlBusy] = useState(false)
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -398,6 +406,38 @@ function App() {
       }
     } catch {
       // silent
+    }
+  }
+
+  const fetchAssignedRadio = async () => {
+    if (!sessionToken) {
+      setAssignedRadio(null)
+      setAssignedRadioError(null)
+      return
+    }
+
+    try {
+      const response = await fetch('/api/radio-assignments/me', {
+        headers: getAuthHeaders(),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        setAssignedRadio(null)
+        setAssignedRadioError(data?.error || 'Unable to load assigned radio')
+        return
+      }
+
+      const data = await response.json()
+      setAssignedRadio(data)
+      setAssignedRadioError(null)
+
+      if (data?.radio?.id) {
+        await refreshRadioState(data.radio.id)
+      }
+    } catch (error) {
+      setAssignedRadio(null)
+      setAssignedRadioError(error instanceof Error ? error.message : 'Unable to load assigned radio')
     }
   }
 
@@ -1470,11 +1510,141 @@ function App() {
   const currentCallsign = localStorage.getItem(storageKey) || ''
   const callsignDisplay = currentCallsign || 'Not set'
   const hasActiveCallsign = currentCallsign.trim().length > 0
+  const assignedRadioState = assignedRadio?.radio ? getRadioState(assignedRadio.radio as RadioConnection) : null
   const effectiveView = hasActiveCallsign
     ? currentView
     : allowCallsignSetup
       ? 'station'
       : 'dashboard'
+
+  useEffect(() => {
+    if (!hasActiveCallsign || !sessionToken) {
+      setAssignedRadio(null)
+      setAssignedRadioError(null)
+      return
+    }
+    fetchAssignedRadio()
+  }, [hasActiveCallsign, sessionToken, selectedStationId])
+
+  useEffect(() => {
+    if (!hasActiveCallsign || !sessionToken) return
+    const interval = setInterval(() => {
+      fetchAssignedRadio()
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [hasActiveCallsign, sessionToken])
+
+  useEffect(() => {
+    if (!assignedRadio?.radio?.id) return
+    const interval = setInterval(() => {
+      refreshRadioState(assignedRadio.radio!.id)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [assignedRadio?.radio?.id])
+
+  useEffect(() => {
+    if (!assignedRadio?.radio) {
+      setGlobalFrequencyInput('')
+      setGlobalModeInput('USB')
+      setGlobalPowerInput(50)
+      return
+    }
+
+    setGlobalFrequencyInput(formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency))
+    setGlobalModeInput((assignedRadioState?.mode || assignedRadio.radio.mode || 'USB').toUpperCase())
+    setGlobalPowerInput(Number(assignedRadioState?.power ?? assignedRadio.radio.power ?? 50))
+  }, [assignedRadio?.radio?.id, assignedRadioState?.frequency, assignedRadioState?.mode, assignedRadioState?.power])
+
+  const setAssignedFrequency = async () => {
+    if (!assignedRadio?.radio?.id) return
+    const hz = toFrequencyHz(globalFrequencyInput)
+    if (!hz) {
+      addError('Enter a valid frequency in MHz')
+      return
+    }
+
+    try {
+      setGlobalControlBusy(true)
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/frequency`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ frequency: hz }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to set frequency')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to set frequency')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
+
+  const setAssignedMode = async (mode: string) => {
+    if (!assignedRadio?.radio?.id) return
+    try {
+      setGlobalControlBusy(true)
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ mode }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to set mode')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to set mode')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
+
+  const setAssignedPower = async () => {
+    if (!assignedRadio?.radio?.id) return
+    try {
+      setGlobalControlBusy(true)
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/power`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ power: globalPowerInput }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to set power')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to set power')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
+
+  const toggleAssignedPtt = async () => {
+    if (!assignedRadio?.radio?.id) return
+    try {
+      setGlobalControlBusy(true)
+      const enabled = !assignedRadioState?.ptt
+      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/ptt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ enabled }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || 'Failed to toggle PTT')
+      }
+      await refreshRadioState(assignedRadio.radio.id)
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to toggle PTT')
+    } finally {
+      setGlobalControlBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (effectiveView === 'logging') return
@@ -4667,6 +4837,101 @@ function App() {
         {effectiveView === 'admin' && renderAdminView()}
         {effectiveView === 'debug' && <DebugPanel />}
       </main>
+
+      {hasActiveCallsign && (
+        <footer className="global-ops-bar" role="complementary" aria-label="Global radio controls and band occupancy">
+          <section className="global-ops-bar-section global-radio-controls">
+            <div className="global-ops-bar-header">
+              <h3>📻 Radio Control</h3>
+              {assignedRadio?.radio ? (
+                <span className={`pill ${assignedRadio.radio.isConnected ? 'success' : 'error'}`}>
+                  {assignedRadio.radio.isConnected ? 'Connected' : 'Disconnected'}
+                </span>
+              ) : (
+                <span className="pill">No assignment</span>
+              )}
+            </div>
+
+            {assignedRadioError && <p className="global-ops-note error">{assignedRadioError}</p>}
+
+            {!assignedRadio?.radio ? (
+              <p className="global-ops-note">Assign a radio in the Rig tab to enable controls here.</p>
+            ) : (
+              <>
+                <div className="global-ops-summary">
+                  <strong>{assignedRadio.radio.name}</strong>
+                  <span>{formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency)} MHz</span>
+                  <span>{(assignedRadioState?.mode || assignedRadio.radio.mode || '---').toUpperCase()}</span>
+                  <span>{assignedRadioState?.power ?? assignedRadio.radio.power ?? '---'}W</span>
+                </div>
+
+                <div className="global-ops-controls">
+                  <div className="global-control-row">
+                    <input
+                      value={globalFrequencyInput}
+                      onChange={(e) => setGlobalFrequencyInput(e.target.value)}
+                      placeholder="MHz"
+                      aria-label="Frequency MHz"
+                    />
+                    <button className="btn small" onClick={setAssignedFrequency} disabled={globalControlBusy}>
+                      Set Freq
+                    </button>
+                  </div>
+
+                  <div className="global-control-row">
+                    <select
+                      value={globalModeInput}
+                      onChange={async (e) => {
+                        const mode = e.target.value
+                        setGlobalModeInput(mode)
+                        await setAssignedMode(mode)
+                      }}
+                      aria-label="Mode"
+                    >
+                      {RADIO_MODE_OPTIONS.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={globalPowerInput}
+                      onChange={(e) => setGlobalPowerInput(Number(e.target.value || 0))}
+                      aria-label="Power watts"
+                    />
+                    <button className="btn small" onClick={setAssignedPower} disabled={globalControlBusy}>
+                      Set W
+                    </button>
+                  </div>
+
+                  <div className="global-control-row actions">
+                    <button
+                      className={`btn small ${assignedRadioState?.ptt ? 'danger' : 'primary'}`}
+                      onClick={toggleAssignedPtt}
+                      disabled={globalControlBusy}
+                    >
+                      {assignedRadioState?.ptt ? 'TX' : 'RX'}
+                    </button>
+                    <button className="btn small secondary" onClick={() => fetchAssignedRadio()} disabled={globalControlBusy}>
+                      Refresh
+                    </button>
+                    <button className="btn small secondary" onClick={() => handleViewChange('rig')}>
+                      Open Rig
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
+
+          <section className="global-ops-bar-section global-band-occupancy">
+            <BandOccupancy contestId={contest?.id} className="global-occupancy" />
+          </section>
+        </footer>
+      )}
     </div>
   )
 }

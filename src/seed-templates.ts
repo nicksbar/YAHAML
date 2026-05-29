@@ -6,7 +6,11 @@ import prisma from './db';
 import { CONTEST_TEMPLATES } from './contest-templates';
 
 export async function seedContestTemplates() {
-  console.log('🌱 Seeding contest templates...');
+  const verbose = process.env.YAHAML_VERBOSE_SEED === 'true' || process.env.NODE_ENV !== 'test';
+
+  if (verbose) {
+    console.log('🌱 Seeding contest templates...');
+  }
   
   for (const template of CONTEST_TEMPLATES) {
     try {
@@ -38,13 +42,17 @@ export async function seedContestTemplates() {
           isPublic: template.isPublic,
         },
       });
-      console.log(`  ✓ ${template.name} (${template.type})`);
+      if (verbose) {
+        console.log(`  ✓ ${template.name} (${template.type})`);
+      }
     } catch (error) {
       console.error(`  ✗ Failed to seed ${template.name}:`, error);
     }
   }
-  
-  console.log('✓ Contest templates seeded\n');
+
+  if (verbose) {
+    console.log('✓ Contest templates seeded\n');
+  }
 }
 
 // Run if called directly

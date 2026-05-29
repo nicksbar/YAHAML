@@ -28,13 +28,18 @@ export function useStats(contestId?: string) {
     // Fetch current stats
     const fetchStats = async () => {
       try {
-        const url = contestId
-          ? `/api/contest-stats?contestId=${contestId}&period=hour`
-          : '/api/contest-stats?period=hour';
-        
-        const response = await fetch(url);
+        const query = contestId
+          ? `contestId=${encodeURIComponent(contestId)}&period=hour`
+          : 'period=hour';
+
+        let response = await fetch(`/api/stats/contest?${query}`);
+        if (response.status === 404) {
+          // Backward-compatible fallback for older API route
+          response = await fetch(`/api/contest-stats?${query}`);
+        }
+
         if (!response.ok) throw new Error('Failed to fetch stats');
-        
+
         const data = await response.json();
         setStats(data);
         setLoading(false);

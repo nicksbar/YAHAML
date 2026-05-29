@@ -10,6 +10,15 @@ interface Props {
 export const BandOccupancy: React.FC<Props> = ({ contestId, className = '' }) => {
   const { occupancy, loading, error } = useBandOccupancy(contestId);
 
+  const formatBandLabel = (band: string) => {
+    const trimmed = band.trim();
+    const lower = trimmed.toLowerCase();
+    if (lower.endsWith('m') || lower.endsWith('cm')) {
+      return trimmed;
+    }
+    return `${trimmed}m`;
+  };
+
   if (loading) {
     return <div className={`band-occupancy ${className}`}>Loading...</div>;
   }
@@ -38,7 +47,7 @@ export const BandOccupancy: React.FC<Props> = ({ contestId, className = '' }) =>
         <tbody>
           {occupancy.map((entry) => (
             <tr key={`${entry.band}-${entry.mode}`}>
-              <td className="band-cell">{entry.band}m</td>
+              <td className="band-cell">{formatBandLabel(entry.band)}</td>
               <td className="mode-cell">{entry.mode}</td>
               <td className="stations-cell">
                 <span className="callsign-list">

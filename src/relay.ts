@@ -533,9 +533,6 @@ export function startRelayServer(port: number = 10000, host: string = '0.0.0.0')
     console.log(`  - Protocol: N3FJP TCP relay`);
     console.log(`  - Encoding: UTF-16LE with BOR/EOR framing`);
     console.log(`  - Mode: Silent relay (broadcasts all messages to all clients)`);
-    console.log(`  - Protocol: N3FJP TCP relay`);
-    console.log(`  - Encoding: UTF-16LE with BOR/EOR framing`);
-    console.log(`  - Mode: Silent relay (broadcasts all messages to all clients)`);
   });
   
   return server;

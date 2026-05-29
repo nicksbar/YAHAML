@@ -13,16 +13,32 @@ export interface Contest {
   name: string
   template?: {
     name: string
+    requiredFields?: Record<string, { required?: boolean }> | string
     validationRules?: {
       bands?: string[]
       modes?: string[]
       exchange?: {
         required?: string[]
+        sent?: string[]
+        received?: string[]
         validation?: Record<string, string>
       }
-    }
+    } | string
   }
 }
+
+type ValidationRules = {
+  bands?: string[]
+  modes?: string[]
+  exchange?: {
+    required?: string[]
+    sent?: string[]
+    received?: string[]
+    validation?: Record<string, string>
+  }
+}
+
+type RequiredFieldConfig = Record<string, { required?: boolean }>
 
 export interface QSOEntry {
   stationId: string
@@ -41,13 +57,24 @@ interface QSOEntryFormProps {
   stationId: string
   activeContest?: Contest | null
   onSubmit: (qso: QSOEntry) => Promise<void>
+  onBandModeSelected?: (payload: { stationId: string; band: string; mode: string }) => void
   loading?: boolean
 }
 
 const QUICK_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '70cm']
-const QUICK_MODES = ['CW', 'SSB', 'Digital', 'AM']
+const QUICK_MODES = ['CW', 'SSB', 'PHONE', 'DIGITAL', 'FT8', 'RTTY', 'AM', 'FM']
 
-export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loading }: QSOEntryFormProps) {
+function parseMaybeJson<T>(value: T | string | null | undefined): T | undefined {
+  if (!value) return undefined
+  if (typeof value !== 'string') return value as T
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return undefined
+  }
+}
+
+export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onBandModeSelected, loading }: QSOEntryFormProps) {
   const [contactCallsign, setContactCallsign] = useState('')
   const [band, setBand] = useState('')
   const [mode, setMode] = useState('')
@@ -60,10 +87,20 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loa
   const [submitting, setSubmitting] = useState(false)
 
   const selectedStation = stations.find((s) => s.id === stationId)
-  const validationRules = activeContest?.template?.validationRules
+  const validationRules = parseMaybeJson<ValidationRules>(activeContest?.template?.validationRules)
+  const requiredFieldConfig = parseMaybeJson<RequiredFieldConfig>(activeContest?.template?.requiredFields)
   const allowedBands = validationRules?.bands || QUICK_BANDS
   const allowedModes = validationRules?.modes || QUICK_MODES
-  const requiredExchange = validationRules?.exchange?.required || []
+  const requiredExchange = Array.from(
+    new Set([
+      ...(validationRules?.exchange?.required || []),
+      ...(validationRules?.exchange?.sent || []),
+      ...(validationRules?.exchange?.received || []),
+      ...Object.entries(requiredFieldConfig || {})
+        .filter(([, config]) => Boolean(config?.required))
+        .map(([key]) => key),
+    ])
+  )
 
   const validateForm = (): boolean => {
     const newErrors: string[] = []
@@ -125,12 +162,35 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loa
     }))
   }
 
+  useEffect(() => {
+    if (!stationId || !band || !mode || !onBandModeSelected) return
+
+    const timer = setTimeout(() => {
+      onBandModeSelected({ stationId, band: band.trim(), mode: mode.trim().toUpperCase() })
+    }, 200)
+
+    return () => clearTimeout(timer)
+  }, [stationId, band, mode, onBandModeSelected])
+
   return (
     <form className="qso-entry-form" onSubmit={handleSubmit}>
       <div className="qso-form-header">
         <h2>Log QSO</h2>
         {activeContest && <span className="contest-badge">{activeContest.name}</span>}
       </div>
+
+      {activeContest?.template && (
+        <div className="contest-template-meta">
+          <span className="template-name">Template: {activeContest.template.name}</span>
+          {requiredExchange.length > 0 ? (
+            <span className="template-requirements">
+              Required exchange: {requiredExchange.join(', ')}
+            </span>
+          ) : (
+            <span className="template-requirements">No additional exchange fields required.</span>
+          )}
+        </div>
+      )}
 
       {errors.length > 0 && (
         <div className="form-errors">
@@ -159,6 +219,28 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loa
         </div>
       </div>
 
+      {/* Contest-Specific Exchange Fields */}
+      {requiredExchange.length > 0 && (
+        <div className="exchange-section">
+          <h3>Exchange</h3>
+          <div className="form-row">
+            {requiredExchange.map((field) => (
+              <div key={field} className="form-group">
+                <label htmlFor={field}>{field}</label>
+                <input
+                  id={field}
+                  type="text"
+                  value={exchange[field] || ''}
+                  onChange={(e) => handleExchangeChange(field, e.target.value)}
+                  disabled={submitting}
+                  required
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Band & Mode Selection */}
       <div className="form-row">
         <div className="form-group">
@@ -176,6 +258,18 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loa
               </button>
             ))}
           </div>
+          <input
+            list="band-options"
+            value={band}
+            onChange={(e) => setBand(e.target.value)}
+            placeholder="Manual band (e.g., 20m, 20, 70cm)"
+            disabled={submitting}
+          />
+          <datalist id="band-options">
+            {allowedBands.map((b) => (
+              <option key={b} value={b} />
+            ))}
+          </datalist>
         </div>
 
         <div className="form-group">
@@ -193,6 +287,18 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loa
               </button>
             ))}
           </div>
+          <input
+            list="mode-options"
+            value={mode}
+            onChange={(e) => setMode(e.target.value.toUpperCase())}
+            placeholder="Manual mode (e.g., CW, SSB, FT8)"
+            disabled={submitting}
+          />
+          <datalist id="mode-options">
+            {allowedModes.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
         </div>
       </div>
 
@@ -235,28 +341,6 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, loa
           />
         </div>
       </div>
-
-      {/* Contest-Specific Exchange Fields */}
-      {requiredExchange.length > 0 && (
-        <div className="exchange-section">
-          <h3>Exchange</h3>
-          <div className="form-row">
-            {requiredExchange.map((field) => (
-              <div key={field} className="form-group">
-                <label htmlFor={field}>{field}</label>
-                <input
-                  id={field}
-                  type="text"
-                  value={exchange[field] || ''}
-                  onChange={(e) => handleExchangeChange(field, e.target.value)}
-                  disabled={submitting}
-                  required
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Notes */}
       <div className="form-row">

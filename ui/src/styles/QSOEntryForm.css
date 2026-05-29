@@ -34,6 +34,20 @@
   font-weight: 500;
 }
 
+.contest-template-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: calc(var(--space-sm) * -1);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.contest-template-meta .template-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* Form Errors */
 .form-errors {
   display: flex;
@@ -154,6 +168,10 @@
 .qso-entry-form .quick-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.qso-entry-form .form-group > input[list] {
+  margin-top: var(--space-sm);
 }
 
 /* Exchange Section */

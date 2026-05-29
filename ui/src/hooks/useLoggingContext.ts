@@ -2,14 +2,17 @@ import { useState, useEffect } from 'react'
 
 export interface ContestTemplate {
   name: string
+  requiredFields?: Record<string, { required?: boolean }> | string
   validationRules?: {
     bands?: string[]
     modes?: string[]
     exchange?: {
       required?: string[]
+      sent?: string[]
+      received?: string[]
       validation?: Record<string, string>
     }
-  }
+  } | string
 }
 
 export interface ActiveContest {

@@ -63,6 +63,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const [gotaOperatorCallsign, setGotaOperatorCallsign] = useState(localStorage.getItem('yahaml:callsign') || '')
   const [gotaRadio, setGotaRadio] = useState<any | null>(null)
   const keepAudioAliveRef = useRef(keepAudioAlive)
+  const lastPublishedBandModeRef = useRef<string | null>(null)
 
   const token = localStorage.getItem('yahaml:sessionToken')
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
@@ -674,6 +675,80 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
+  const normalizeBandForOccupancy = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    const lower = trimmed.toLowerCase()
+
+    if (lower.endsWith('cm')) {
+      return trimmed.toUpperCase()
+    }
+
+    if (lower.endsWith('m')) {
+      return trimmed.slice(0, -1).toUpperCase()
+    }
+
+    return trimmed.toUpperCase()
+  }
+
+  const publishBandModeSelection = async ({ stationId: selectedStationId, band, mode }: { stationId: string; band: string; mode: string }) => {
+    if (!token || !selectedStationId || !band || !mode) return
+
+    const normalizedBand = normalizeBandForOccupancy(band)
+    const normalizedMode = mode.trim().toUpperCase()
+    const dedupeKey = `${selectedStationId}|${contest?.id || 'none'}|${normalizedBand}|${normalizedMode}`
+
+    if (lastPublishedBandModeRef.current === dedupeKey) {
+      return
+    }
+
+    try {
+      const response = await fetch('/api/band-occupancy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          stationId: selectedStationId,
+          contestId: contest?.id || null,
+          band: normalizedBand,
+          mode: normalizedMode,
+          source: 'ui',
+        }),
+      })
+
+      if (response.ok) {
+        lastPublishedBandModeRef.current = dedupeKey
+      }
+    } catch {
+      // non-blocking UX enhancement only
+    }
+  }
+
+  const parseMaybeJson = <T,>(value: T | string | undefined | null): T | undefined => {
+    if (!value) return undefined
+    if (typeof value !== 'string') return value
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return undefined
+    }
+  }
+
+  const validationRules = parseMaybeJson<any>(contest?.template?.validationRules)
+  const requiredFields = parseMaybeJson<Record<string, { required?: boolean }>>(contest?.template?.requiredFields)
+  const contestFieldKeys = Array.from(
+    new Set([
+      ...(validationRules?.exchange?.required || []),
+      ...(validationRules?.exchange?.sent || []),
+      ...(validationRules?.exchange?.received || []),
+      ...Object.entries(requiredFields || {})
+        .filter(([, config]) => Boolean(config?.required))
+        .map(([key]) => key),
+    ])
+  )
+
   return (
     <div className="logging-page">
       {submitError && (
@@ -699,7 +774,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       </div>
 
       <div className="logging-layout">
-        {/* Main Logging Form */}
+        {/* Main Logging Workspace */}
         <div className="logging-column main">
           {activeLoggingTab === 'standard' ? (
             <QSOEntryForm
@@ -707,6 +782,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
               stationId={stationId}
               activeContest={contest || undefined}
               onSubmit={handleSubmit}
+              onBandModeSelected={publishBandModeSelection}
               loading={submitting}
             />
           ) : (
@@ -748,213 +824,13 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
               stationId={gotaStationId || stationId}
               activeContest={contest || undefined}
               onSubmit={handleGotaSubmit}
+              onBandModeSelected={publishBandModeSelection}
               loading={submitting}
             />
           )}
 
           {/* Live QSO Feed */}
-          <LiveQSOFeed contestId={contest?.id} maxEntries={15} />
-        </div>
-
-        {/* Right Sidebar: Stats & Band Occupancy */}
-        <div className="logging-column sidebar">
-          <section className="panel compact-radio">
-            <div className="compact-radio-header">
-              <h3>📻 Assigned Radio</h3>
-              {assignedRadio?.radio?.isConnected ? (
-                <span className="status-pill connected">Connected</span>
-              ) : (
-                <span className="status-pill disconnected">Disconnected</span>
-              )}
-            </div>
-            {radioError && <div className="compact-radio-error">{radioError}</div>}
-            {!assignedRadio && (
-              <div className="compact-radio-empty">
-                <p>No radio assigned to this callsign.</p>
-                <span>Assign one in the Radio Control screen.</span>
-              </div>
-            )}
-            {assignedRadio?.radio && (
-              <div className="compact-radio-body">
-                <div className="compact-radio-frequency">
-                  {formatFrequencyMHz(radioState?.frequency)}
-                  <span className="compact-radio-unit">MHz</span>
-                </div>
-                <div className="compact-radio-meta">
-                  <span>{radioState?.mode || '---'}</span>
-                  <span>{radioState?.vfo || 'VFO?'}</span>
-                  <span>{radioState?.power != null ? `${radioState.power}W` : '---'}</span>
-                </div>
-                <div className="compact-radio-actions">
-                  <button
-                    className={`btn ${radioState?.ptt ? 'danger' : 'primary'}`}
-                    onClick={() => togglePtt(assignedRadio.radio.id, !radioState?.ptt)}
-                  >
-                    {radioState?.ptt ? 'TX' : 'RX'}
-                  </button>
-                </div>
-
-                {/* Radio Audio Controls */}
-                <div className="radio-audio-section">
-                  <div className="radio-audio-header">
-                    <span className="radio-audio-label">🔊 Audio</span>
-                    <div className="radio-audio-header-buttons">
-                      <button
-                        className={`radio-audio-ptt ${radioAudioPtt ? 'active' : ''}`}
-                        onClick={toggleRadioAudioPtt}
-                        title={radioAudioPtt ? 'Release PTT' : 'Press PTT'}
-                      >
-                        {radioAudioPtt ? '📡 TX' : '🎤 PTT'}
-                      </button>
-                      <button
-                        className={`radio-audio-mute ${radioAudioMuted ? 'muted' : ''}`}
-                        onClick={toggleRadioAudioMute}
-                        title={radioAudioMuted ? 'Unmute' : 'Mute'}
-                      >
-                        {radioAudioMuted ? '🔇' : '🔊'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="radio-audio-controls">
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={radioAudioVolume}
-                      onChange={(e) => updateRadioAudioVolume(parseInt(e.target.value))}
-                      className="radio-audio-slider"
-                      disabled={radioAudioMuted}
-                    />
-                    <span className="radio-audio-label-value">{radioAudioVolume}%</span>
-                  </div>
-
-                  {/* Keep Audio Alive Toggle */}
-                  <div className="radio-audio-keep-alive">
-                    <label className="audio-control-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={keepAudioAlive}
-                        onChange={(e) => {
-                          const enabled = e.target.checked
-                          setKeepAudioAlive(enabled)
-                          localStorage.setItem('yahaml:keepAudioAlive', enabled.toString())
-                          console.log('[AUDIO] Keep audio alive:', enabled)
-                        }}
-                      />
-                      <span>Keep audio alive when tab hidden</span>
-                    </label>
-                  </div>
-
-                  {/* Advanced Audio Controls (Loopback Only) */}
-                  {assignedRadio.radio.audioSourceType === 'loopback' && (
-                    <div className="radio-audio-advanced">
-                      <button
-                        className="radio-audio-advanced-toggle"
-                        onClick={() => setShowAdvancedControls(!showAdvancedControls)}
-                      >
-                        {showAdvancedControls ? '▼' : '▶'} Advanced
-                      </button>
-
-                      {showAdvancedControls && (
-                        <div className="radio-audio-advanced-panel">
-                          {/* 3-Band Equalizer */}
-                          <div className="audio-control-group">
-                            <label className="audio-control-label">Equalizer</label>
-                            <div className="audio-eq-controls">
-                              <div className="audio-eq-band">
-                                <label>Bass</label>
-                                <input
-                                  type="range"
-                                  min="-12"
-                                  max="12"
-                                  step="1"
-                                  value={bassGain}
-                                  onChange={(e) => setBassGain(parseInt(e.target.value))}
-                                  className="audio-slider"
-                                />
-                                <span>{bassGain > 0 ? '+' : ''}{bassGain}dB</span>
-                              </div>
-                              <div className="audio-eq-band">
-                                <label>Mid</label>
-                                <input
-                                  type="range"
-                                  min="-12"
-                                  max="12"
-                                  step="1"
-                                  value={midGain}
-                                  onChange={(e) => setMidGain(parseInt(e.target.value))}
-                                  className="audio-slider"
-                                />
-                                <span>{midGain > 0 ? '+' : ''}{midGain}dB</span>
-                              </div>
-                              <div className="audio-eq-band">
-                                <label>Treble</label>
-                                <input
-                                  type="range"
-                                  min="-12"
-                                  max="12"
-                                  step="1"
-                                  value={trebleGain}
-                                  onChange={(e) => setTrebleGain(parseInt(e.target.value))}
-                                  className="audio-slider"
-                                />
-                                <span>{trebleGain > 0 ? '+' : ''}{trebleGain}dB</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Compressor */}
-                          <div className="audio-control-group">
-                            <label className="audio-control-checkbox">
-                              <input
-                                type="checkbox"
-                                checked={compressionEnabled}
-                                onChange={(e) => setCompressionEnabled(e.target.checked)}
-                              />
-                              <span>Compressor (normalize levels)</span>
-                            </label>
-                          </div>
-
-                          {/* Noise Gate */}
-                          <div className="audio-control-group">
-                            <label className="audio-control-checkbox">
-                              <input
-                                type="checkbox"
-                                checked={noiseGateEnabled}
-                                onChange={(e) => setNoiseGateEnabled(e.target.checked)}
-                              />
-                              <span>Noise Gate</span>
-                            </label>
-                            {noiseGateEnabled && (
-                              <div className="audio-control-slider">
-                                <label>Threshold</label>
-                                <input
-                                  type="range"
-                                  min="-60"
-                                  max="0"
-                                  step="1"
-                                  value={noiseGateThreshold}
-                                  onChange={(e) => setNoiseGateThreshold(parseInt(e.target.value))}
-                                  className="audio-slider"
-                                />
-                                <span>{noiseGateThreshold}dB</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Statistics Panel */}
-          {contest && <StatsPanel contestId={contest.id} />}
-
-          {/* Band Occupancy */}
-          <BandOccupancy />
+          <LiveQSOFeed contestId={contest?.id} contestFieldKeys={contestFieldKeys} maxEntries={15} />
         </div>
       </div>
 
