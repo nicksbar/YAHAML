@@ -236,7 +236,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
   }
 
   return (
-    <div className="live-qso-feed">
+    <div className="live-qso-feed" data-testid="live-qso-feed">
       <h3>Live QSO Feed</h3>
       {qsos.length === 0 ? (
         <div className="empty-message">No QSOs logged yet. Start logging!</div>
@@ -247,13 +247,13 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
             const exchangeEntries = raw.exchange ? Object.entries(raw.exchange) : []
 
             return (
-              <div key={qso.id} className="qso-entry">
+              <div key={qso.id} className="qso-entry" data-testid="qso-feed-entry">
                 <div className="qso-time">
                   {qso.qsoTime.substring(0, 5)}
                 </div>
                 <div className="qso-details">
                   <div className="qso-summary-row">
-                    <div className="qso-callsign">{qso.callsign}</div>
+                    <div className="qso-callsign" data-testid="qso-feed-entry-callsign">{qso.callsign}</div>
                     <div className="qso-band-mode">
                       {qso.band} {qso.mode}
                       {qso.frequency && <span className="frequency">{String(qso.frequency)}</span>}
@@ -292,17 +292,17 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
                         />
                       ))}
 
-                      <textarea value={editForm.notes} onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Notes" rows={1} />
+                      <textarea value={editForm.notes} onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Notes" rows={1} data-testid="qso-edit-notes" />
                       <div className="qso-edit-actions">
-                        <button className="btn small primary" onClick={() => saveEdit(qso.id)}>Save</button>
-                        <button className="btn small secondary" onClick={() => setEditingId(null)}>Cancel</button>
+                        <button className="btn small primary" onClick={() => saveEdit(qso.id)} data-testid="qso-save-button">Save</button>
+                        <button className="btn small secondary" onClick={() => setEditingId(null)} data-testid="qso-cancel-button">Cancel</button>
                       </div>
                     </div>
                   )}
                 </div>
                 <div className="qso-actions-col">
                   <div className="qso-points">{qso.points} pts</div>
-                  <button className="btn small secondary" onClick={() => startEdit(qso)}>
+                  <button className="btn small secondary" onClick={() => startEdit(qso)} data-testid="qso-edit-button">
                     Edit
                   </button>
                 </div>

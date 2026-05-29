@@ -750,7 +750,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   )
 
   return (
-    <div className="logging-page">
+    <div className="logging-page" data-testid="logging-page">
       {submitError && (
         <div className="submit-error">
           <span>Error: {submitError}</span>
@@ -762,12 +762,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         <button
           className={`logging-tab ${activeLoggingTab === 'standard' ? 'active' : ''}`}
           onClick={() => setActiveLoggingTab('standard')}
+          data-testid="logging-tab-standard"
         >
           Standard Log
         </button>
         <button
           className={`logging-tab ${activeLoggingTab === 'gota' ? 'active' : ''}`}
           onClick={() => setActiveLoggingTab('gota')}
+          data-testid="logging-tab-gota"
         >
           GOTA Station
         </button>

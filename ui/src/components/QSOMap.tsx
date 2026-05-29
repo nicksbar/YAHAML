@@ -32,11 +32,11 @@ export const QSOMap: React.FC<Props> = ({
   const getBandColor = (band: string): string => bandColors[band] || '#999999';
 
   if (error) {
-    return <div className={`qso-map error ${className}`}>Error: {error}</div>;
+    return <div className={`qso-map error ${className}`} data-testid="qso-map">Error: {error}</div>;
   }
 
   return (
-    <div className={`qso-map ${className}`}>
+    <div className={`qso-map ${className}`} data-testid="qso-map">
       <div className="map-controls">
         <h3>Recent QSO Contacts</h3>
         <div className="time-window-selector">
@@ -71,7 +71,7 @@ export const QSOMap: React.FC<Props> = ({
               <div>Bands active: <strong>{new Set(contacts.map(c => c.band)).size}</strong></div>
             </div>
             
-            <div className="contacts-list">
+            <div className="contacts-list" data-testid="recent-contacts-list">
               {contacts.slice(0, 20).map((contact) => (
                 <div key={contact.id} className="contact-item">
                   <div className="contact-call">

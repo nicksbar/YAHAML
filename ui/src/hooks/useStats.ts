@@ -29,8 +29,8 @@ export function useStats(contestId?: string) {
     const fetchStats = async () => {
       try {
         const query = contestId
-          ? `contestId=${encodeURIComponent(contestId)}&period=hour`
-          : 'period=hour';
+          ? `contestId=${encodeURIComponent(contestId)}&period=contest`
+          : 'period=contest';
 
         let response = await fetch(`/api/stats/contest?${query}`);
         if (response.status === 404) {

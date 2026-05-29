@@ -64,6 +64,22 @@ interface QSOEntryFormProps {
 const QUICK_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '70cm']
 const QUICK_MODES = ['CW', 'SSB', 'PHONE', 'DIGITAL', 'FT8', 'RTTY', 'AM', 'FM']
 
+function normalizeBandValue(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+
+  const lower = trimmed.toLowerCase()
+  if (lower.endsWith('cm')) {
+    return trimmed.toUpperCase()
+  }
+
+  if (lower.endsWith('m')) {
+    return trimmed.slice(0, -1).toUpperCase()
+  }
+
+  return trimmed.toUpperCase()
+}
+
 function parseMaybeJson<T>(value: T | string | null | undefined): T | undefined {
   if (!value) return undefined
   if (typeof value !== 'string') return value as T
@@ -104,10 +120,11 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
 
   const validateForm = (): boolean => {
     const newErrors: string[] = []
+    const normalizedBand = normalizeBandValue(band)
 
     if (!stationId) newErrors.push('No station selected')
     if (!contactCallsign.trim()) newErrors.push('Contact callsign is required')
-    if (!band) newErrors.push('Band is required')
+    if (!normalizedBand) newErrors.push('Band is required')
     if (!mode) newErrors.push('Mode is required')
 
     // Validate exchange fields
@@ -131,7 +148,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
       const qsoData: QSOEntry = {
         stationId,
         contactCallsign: contactCallsign.toUpperCase(),
-        band,
+        band: normalizeBandValue(band),
         mode,
         frequency: frequency ? parseInt(frequency) : undefined,
         rst: rst || undefined,
@@ -173,7 +190,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
   }, [stationId, band, mode, onBandModeSelected])
 
   return (
-    <form className="qso-entry-form" onSubmit={handleSubmit}>
+    <form className="qso-entry-form" onSubmit={handleSubmit} data-testid="qso-entry-form">
       <div className="qso-form-header">
         <h2>Log QSO</h2>
         {activeContest && <span className="contest-badge">{activeContest.name}</span>}
@@ -215,6 +232,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             autoFocus
             disabled={submitting}
             required
+            data-testid="contact-callsign-input"
           />
         </div>
       </div>
@@ -234,6 +252,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
                   onChange={(e) => handleExchangeChange(field, e.target.value)}
                   disabled={submitting}
                   required
+                  data-testid={`exchange-field-${field}`}
                 />
               </div>
             ))}
@@ -264,6 +283,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             onChange={(e) => setBand(e.target.value)}
             placeholder="Manual band (e.g., 20m, 20, 70cm)"
             disabled={submitting}
+            data-testid="band-input"
           />
           <datalist id="band-options">
             {allowedBands.map((b) => (
@@ -293,6 +313,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             onChange={(e) => setMode(e.target.value.toUpperCase())}
             placeholder="Manual mode (e.g., CW, SSB, FT8)"
             disabled={submitting}
+            data-testid="mode-input"
           />
           <datalist id="mode-options">
             {allowedModes.map((m) => (
@@ -314,6 +335,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             onChange={(e) => setFrequency(e.target.value)}
             placeholder="e.g., 7.101"
             disabled={submitting}
+            data-testid="frequency-input"
           />
         </div>
 
@@ -326,6 +348,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             onChange={(e) => setRst(e.target.value)}
             placeholder="e.g., 5/9"
             disabled={submitting}
+            data-testid="rst-input"
           />
         </div>
 
@@ -338,6 +361,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             onChange={(e) => setPower(e.target.value)}
             placeholder="e.g., 100"
             disabled={submitting}
+            data-testid="power-input"
           />
         </div>
       </div>
@@ -353,6 +377,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
             placeholder="Additional info..."
             rows={2}
             disabled={submitting}
+            data-testid="notes-input"
           />
         </div>
       </div>
@@ -363,6 +388,7 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
           type="submit"
           className="btn primary submit-btn"
           disabled={submitting || loading || !contactCallsign || !band || !mode}
+          data-testid="submit-qso-button"
         >
           {submitting ? 'Logging...' : 'Log QSO'} (Enter)
         </button>

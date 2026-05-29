@@ -30,6 +30,7 @@ import {
   getBandOccupancy,
   getOperatorActivity,
 } from './aggregation';
+import { CONTEST_TEMPLATES } from './contest-templates';
 import { calculateNextOccurrence } from './contest-templates/scheduler';
 import { lookupCallsign, validateCallsign } from './hamdb';
 import { locationRouter } from './location-api';
@@ -109,6 +110,54 @@ function calculateQsoPoints(contest: any | null, mode: string): number {
   if (typeof contest.pointsPerQso === 'number') return contest.pointsPerQso;
 
   return 0;
+}
+
+function parseJsonField(value: unknown) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeContestTemplate(template: any | null) {
+  if (!template) return null;
+  return {
+    ...template,
+    scoringRules: parseJsonField(template.scoringRules),
+    requiredFields: parseJsonField(template.requiredFields),
+    validationRules: parseJsonField(template.validationRules),
+    schedule: parseJsonField(template.schedule),
+    uiConfig: parseJsonField(template.uiConfig),
+  };
+}
+
+async function hydrateContestTemplate<T extends { template?: any | null; mode?: string | null }>(contest: T | null): Promise<(T & { template: any | null }) | null> {
+  if (!contest) return null;
+
+  if (contest.template) {
+    return {
+      ...contest,
+      template: normalizeContestTemplate(contest.template),
+    };
+  }
+
+  if (!contest.mode) {
+    return {
+      ...contest,
+      template: null,
+    };
+  }
+
+  const fallbackTemplate = await prisma.contestTemplate.findUnique({
+    where: { type: contest.mode },
+  });
+
+  return {
+    ...contest,
+    template: normalizeContestTemplate(fallbackTemplate),
+  };
 }
 
 // Middleware
@@ -790,12 +839,13 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
       where: { id: stationId },
     });
 
-    const contest = contestId
+    const rawContest = contestId
       ? await prisma.contest.findUnique({
           where: { id: contestId },
           include: { template: true },
         })
       : null;
+    const contest = await hydrateContestTemplate(rawContest as any);
 
     if (contestId) {
       if (contest?.template) {
@@ -992,12 +1042,13 @@ const handlePatchQsoLog = async (req: AuthRequest, res: express.Response) => {
     });
     updates.dedupeKey = dedupeKey;
 
-    const contest = existing.contestId
+    const rawContest = existing.contestId
       ? await prisma.contest.findUnique({
           where: { id: existing.contestId },
           include: { template: true },
         })
       : null;
+    const contest = await hydrateContestTemplate(rawContest as any);
     updates.points = calculateQsoPoints(contest, updates.mode || existing.mode);
 
     const updated = await prisma.logEntry.update({
@@ -1612,28 +1663,7 @@ app.get('/api/contests/active/current', async (_req, res) => {
       return res.json(null);
     }
 
-    const parseJsonField = (value: unknown) => {
-      if (typeof value !== 'string') return value;
-      try {
-        return JSON.parse(value);
-      } catch {
-        return value;
-      }
-    };
-
-    const normalizedContest = {
-      ...contest,
-      template: contest.template
-        ? {
-            ...contest.template,
-            scoringRules: parseJsonField(contest.template.scoringRules),
-            requiredFields: parseJsonField(contest.template.requiredFields),
-            validationRules: parseJsonField(contest.template.validationRules),
-            schedule: parseJsonField(contest.template.schedule),
-            uiConfig: parseJsonField(contest.template.uiConfig),
-          }
-        : null,
-    };
+    const normalizedContest = await hydrateContestTemplate(contest as any);
 
     return res.json(normalizedContest);
   } catch (error) {
@@ -2424,7 +2454,7 @@ app.post(
       }
 
       // Create stations
-      const stationMap = new Map<string, string>();
+      const stationMap = new Map<string, { id: string; class?: string | null; section?: string | null }>();
       if (scenario.data.stations) {
         for (const stationData of scenario.data.stations) {
           const locationId = stationData.location ? locationMap.get(stationData.location.name) : null;
@@ -2437,7 +2467,11 @@ app.post(
               locationId: locationId || null,
             },
           });
-          stationMap.set(stationData.callsign, station.id);
+          stationMap.set(stationData.callsign, {
+            id: station.id,
+            class: stationData.class || null,
+            section: stationData.location?.section || null,
+          });
         }
       }
 
@@ -2458,10 +2492,10 @@ app.post(
           
           // Link member stations to this club
           for (const operatorCall of clubData.operatorCallsigns) {
-            const stationId = stationMap.get(operatorCall);
-            if (stationId) {
+            const stationMeta = stationMap.get(operatorCall);
+            if (stationMeta?.id) {
               await prisma.station.update({
-                where: { id: stationId },
+                where: { id: stationMeta.id },
                 data: { clubId: club.id },
               });
             }
@@ -2471,28 +2505,105 @@ app.post(
 
       // Create contests
       const contestMap = new Map<string, string>();
+      let primaryContestId: string | null = null;
       if (scenario.data.contests) {
-        for (const contestData of scenario.data.contests) {
+        for (const [index, contestData] of scenario.data.contests.entries()) {
+          const template = contestData.templateType
+            ? await prisma.contestTemplate.findUnique({ where: { type: contestData.templateType } })
+            : null;
+
+          let resolvedTemplate = template;
+          if (!resolvedTemplate && contestData.templateType) {
+            const bundled = CONTEST_TEMPLATES.find((t) => t.type === contestData.templateType);
+            if (bundled) {
+              resolvedTemplate = await prisma.contestTemplate.upsert({
+                where: { type: bundled.type },
+                update: {
+                  name: bundled.name,
+                  description: bundled.description,
+                  organization: bundled.organization,
+                  scoringRules: JSON.stringify(bundled.scoringRules),
+                  requiredFields: JSON.stringify(bundled.requiredFields),
+                  validationRules: JSON.stringify(bundled.validationRules),
+                  schedule: bundled.schedule ? JSON.stringify(bundled.schedule) : null,
+                  uiConfig: bundled.uiConfig ? JSON.stringify(bundled.uiConfig) : null,
+                  isActive: bundled.isActive,
+                  isPublic: bundled.isPublic,
+                },
+                create: {
+                  type: bundled.type,
+                  name: bundled.name,
+                  description: bundled.description,
+                  organization: bundled.organization,
+                  scoringRules: JSON.stringify(bundled.scoringRules),
+                  requiredFields: JSON.stringify(bundled.requiredFields),
+                  validationRules: JSON.stringify(bundled.validationRules),
+                  schedule: bundled.schedule ? JSON.stringify(bundled.schedule) : null,
+                  uiConfig: bundled.uiConfig ? JSON.stringify(bundled.uiConfig) : null,
+                  isActive: bundled.isActive,
+                  isPublic: bundled.isPublic,
+                },
+              });
+            }
+          }
+
+          const templateScoring = safeParseJson<Record<string, any>>(resolvedTemplate?.scoringRules);
+          const resolvedPointsPerQso = contestData.pointsPerQso
+            ?? (typeof templateScoring?.pointsPerQso === 'number' ? templateScoring.pointsPerQso : 1);
+
           const contest = await prisma.contest.create({
             data: {
               name: contestData.name,
               mode: contestData.templateType || 'OTHER',
+              templateId: resolvedTemplate?.id || null,
               scoringMode: contestData.scoringMode || 'SIMPLE',
-              pointsPerQso: contestData.pointsPerQso || 1,
-              isActive: false,
+              pointsPerQso: resolvedPointsPerQso,
+              isActive: index === 0,
             },
           });
           contestMap.set(contestData.name, contest.id);
+          if (index === 0) {
+            primaryContestId = contest.id;
+          }
         }
+      }
+
+      // Associate stations/clubs to the primary contest for realistic logging context
+      if (primaryContestId) {
+        await prisma.station.updateMany({
+          where: {},
+          data: { contestId: primaryContestId },
+        });
+
+        await prisma.club.updateMany({
+          where: {},
+          data: { contestId: primaryContestId },
+        });
       }
 
       // Create QSOs
       let qsoCountByContest: Record<string, { count: number; points: number }> = {};
       if (scenario.data.qsos && scenario.data.contests && scenario.data.contests.length > 0) {
         // Use first contest for all QSOs if no specific contest mapping
-        const defaultContestId = contestMap.get(scenario.data.contests[0].name);
+        const defaultContestId = primaryContestId || contestMap.get(scenario.data.contests[0].name);
         const now = new Date();
-        const pointsPerQso = scenario.data.contests[0].pointsPerQso || 1;
+        const defaultContest = defaultContestId
+          ? await prisma.contest.findUnique({
+              where: { id: defaultContestId },
+              include: { template: true },
+            })
+          : null;
+
+        const fdClasses = ['1A', '2A', '3A', '4A', '1B', '2B', '1D', '1E', '2F'];
+        const fdSections = ['OK', 'TX', 'KS', 'AR', 'MO', 'CO', 'NM', 'LA', 'ENY', 'NFL', 'WMA', 'SCV'];
+        const deterministicPick = (seed: string, pool: string[]) => {
+          let hash = 0;
+          for (let i = 0; i < seed.length; i++) {
+            hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+          }
+          const idx = Math.abs(hash) % pool.length;
+          return pool[idx];
+        };
         
         // Get station-to-club mapping for clubId assignment
         const stationClubMap = new Map<string, string>();
@@ -2506,11 +2617,31 @@ app.post(
         }
         
         for (const qsoData of scenario.data.qsos) {
-          const stationId = stationMap.get(qsoData.stationCallsign);
-          if (!stationId) continue;
+          const stationMeta = stationMap.get(qsoData.stationCallsign);
+          if (!stationMeta?.id) continue;
+          const stationId = stationMeta.id;
           
           // Get clubId for this station
           const clubId = stationClubMap.get(qsoData.stationCallsign);
+
+          const exchange: Record<string, string> = {};
+          const templateType = defaultContest?.template?.type;
+          const normalizedMode = String(qsoData.mode || '').toUpperCase();
+
+          if (templateType === 'ARRL_FD' || templateType === 'WINTER_FD') {
+            exchange.class = qsoData.exchangeClass
+              || stationMeta.class
+              || deterministicPick(`${qsoData.remoteCallsign}-class`, fdClasses);
+            exchange.section = qsoData.section
+              || stationMeta.section
+              || deterministicPick(`${qsoData.remoteCallsign}-section`, fdSections);
+            exchange.power = qsoData.powerCategory || 'LOW';
+          }
+
+          if (templateType === 'POTA') {
+            exchange.rst = qsoData.rstRcvd || qsoData.rstSent || (normalizedMode === 'CW' ? '599' : '59');
+            exchange.park = 'K-0001';
+          }
 
           // Calculate QSO date
           const qsoDate = new Date(now);
@@ -2524,7 +2655,11 @@ app.post(
           const qsoTime = `${String(randomHour).padStart(2, '0')}:${String(randomMinute).padStart(2, '0')}`;
 
           const dedupeKey = `${stationId}-${qsoData.remoteCallsign}-${qsoData.band}-${qsoData.mode}-${qsoDate.toISOString().split('T')[0]}-${qsoTime}`;
-          const points = pointsPerQso;
+          const points = calculateQsoPoints(defaultContest, qsoData.mode);
+
+          const rawPayload = Object.keys(exchange).length > 0
+            ? JSON.stringify({ exchange })
+            : null;
 
           const logEntry = await prisma.logEntry.create({
             data: {
@@ -2539,8 +2674,9 @@ app.post(
               rstSent: qsoData.rstSent || '579',
               rstRcvd: qsoData.rstRcvd || '579',
               grid: qsoData.grid || null,
-              state: qsoData.section || null,
+              state: qsoData.section || exchange.section || null,
               points,
+              rawPayload,
               dedupeKey,
               source: 'scenario',
               merge_status: 'primary',
@@ -2558,7 +2694,7 @@ app.post(
               rstSent: qsoData.rstSent || '579',
               rstRcvd: qsoData.rstRcvd || '579',
               grid: qsoData.grid || null,
-              section: qsoData.section || null,
+              section: qsoData.section || exchange.section || null,
               qsoDateTime: new Date(qsoDate.getTime() + randomHour * 3600000 + randomMinute * 60000),
               source: 'scenario',
               logEntryId: logEntry.id,
@@ -3503,8 +3639,13 @@ const handleContestStatsRequest = async (req: express.Request, res: express.Resp
     const now = new Date();
     const periodValue = String(period);
     const since = new Date(now);
+    let useTimeWindow = true;
 
     switch (periodValue) {
+      case 'contest':
+      case 'all':
+        useTimeWindow = false;
+        break;
       case 'day':
         since.setDate(since.getDate() - 1);
         break;
@@ -3528,10 +3669,14 @@ const handleContestStatsRequest = async (req: express.Request, res: express.Resp
 
     const where: Prisma.LogEntryWhereInput = {
       contestId: contestId ? String(contestId) : undefined,
-      qsoDate: {
-        gte: since,
-        lte: now,
-      },
+      ...(useTimeWindow
+        ? {
+            qsoDate: {
+              gte: since,
+              lte: now,
+            },
+          }
+        : {}),
     };
 
     const qsos = await prisma.logEntry.findMany({
@@ -3570,7 +3715,17 @@ const handleContestStatsRequest = async (req: express.Request, res: express.Resp
       .slice(0, 10)
       .map(([callsign, count]) => ({ callsign, qsoCount: count }));
 
-    const periodHours = Math.max((now.getTime() - since.getTime()) / (1000 * 60 * 60), 1 / 60);
+    let periodHours: number;
+    if (useTimeWindow) {
+      periodHours = Math.max((now.getTime() - since.getTime()) / (1000 * 60 * 60), 1 / 60);
+    } else if (primaryQsos.length > 1) {
+      const sorted = [...primaryQsos].sort((a, b) => a.qsoDate.getTime() - b.qsoDate.getTime());
+      const first = sorted[0].qsoDate.getTime();
+      const last = sorted[sorted.length - 1].qsoDate.getTime();
+      periodHours = Math.max((last - first) / (1000 * 60 * 60), 1 / 60);
+    } else {
+      periodHours = 1;
+    }
 
     return res.json({
       qsoCount,

@@ -342,8 +342,10 @@ function App() {
     [stations],
   )
 
-  const getAuthHeaders = (): Record<string, string> =>
-    sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = sessionToken || localStorage.getItem(sessionTokenKey) || ''
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
 
   const formatFrequencyMHz = (frequency?: string | null) => {
     if (!frequency) return '---.---'
@@ -798,12 +800,13 @@ function App() {
 
   async function fetchAdminList() {
     try {
-      if (!sessionToken) {
+      const authToken = sessionToken || localStorage.getItem(sessionTokenKey) || ''
+      if (!authToken) {
         setIsAdmin(false)
         return
       }
       const response = await fetch('/api/admin/callsigns', {
-        headers: getAuthHeaders(),
+        headers: { Authorization: `Bearer ${authToken}` },
       })
       if (response.ok) {
         const data = await response.json()
@@ -1436,6 +1439,12 @@ function App() {
   }, [callsignInput, adminCallsigns])
 
   useEffect(() => {
+    if (sessionToken) {
+      fetchAdminList()
+    }
+  }, [sessionToken])
+
+  useEffect(() => {
     if (selectedStationId) {
       fetchStationDetails(selectedStationId)
     }
@@ -1665,7 +1674,7 @@ function App() {
 
   function renderDashboard() {
     return (
-      <div className="dashboard-grid dashboard-v2">
+      <div className="dashboard-grid dashboard-v2" data-testid="dashboard-view">
         {/* Row 1: System Status + Active Stations */}
         <section className="panel system-panel">
           <h2>System Status</h2>
@@ -3837,8 +3846,9 @@ function App() {
                   placeholder="W1AW"
                   className={stationFormErrors.callsign ? 'input-error' : undefined}
                   style={{ flex: 1 }}
+                  data-testid="station-callsign-input"
                 />
-                <button className="btn primary" onClick={saveCallsign}>
+                <button className="btn primary" onClick={saveCallsign} data-testid="station-callsign-save">
                   💾 Save
                 </button>
               </div>
@@ -4538,7 +4548,7 @@ function App() {
             )}
           </section>
 
-          <section className="panel">
+          <section className="panel" data-testid="scenario-loading-panel">
             <h2>🎬 Scenario Loading</h2>
             <p className="hint">
               Fully reset the instance and load example data. Choose a scenario to get started with realistic demo configurations.
@@ -4552,6 +4562,7 @@ function App() {
                     className="btn danger"
                     onClick={() => loadScenario(scenarioLoadConfirm)}
                     disabled={scenarioLoading}
+                    data-testid="scenario-confirm-load"
                   >
                     {scenarioLoading ? '⏳ Loading...' : '✓ Confirm & Load'}
                   </button>
@@ -4574,6 +4585,7 @@ function App() {
                   {items.map((scenario: any) => (
                     <div
                       key={scenario.id}
+                      data-testid={`scenario-card-${scenario.id}`}
                       style={{
                         padding: 'var(--space-md)',
                         border: '1px solid var(--border)',
@@ -4597,6 +4609,7 @@ function App() {
                         onClick={() => setScenarioLoadConfirm(scenario.id)}
                         disabled={scenarioLoading || scenarioLoadingId === scenario.id}
                         style={{ marginTop: 'auto' }}
+                        data-testid={`scenario-load-${scenario.id}`}
                       >
                         {scenarioLoadingId === scenario.id ? '⏳ Loading...' : '📥 Load Scenario'}
                       </button>
@@ -4663,6 +4676,7 @@ function App() {
             <button
               className={`nav-btn ${effectiveView === 'dashboard' ? 'active' : ''}`}
               onClick={() => handleViewChange('dashboard')}
+              data-testid="nav-dashboard"
             >
               Dashboard
             </button>
@@ -4670,6 +4684,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'club' ? 'active' : ''}`}
               onClick={() => handleViewChange('club')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-club"
             >
               Club
             </button>
@@ -4685,6 +4700,7 @@ function App() {
                 fetchUpcomingContests()
               }}
               disabled={!hasActiveCallsign}
+              data-testid="nav-contests"
             >
               Contests
             </button>
@@ -4692,6 +4708,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'station' ? 'active' : ''}`}
               onClick={() => handleViewChange('station')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-station"
             >
               Station
             </button>
@@ -4699,6 +4716,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'logging' ? 'active' : ''}`}
               onClick={() => handleViewChange('logging')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-logging"
             >
               Logging
             </button>
@@ -4706,6 +4724,7 @@ function App() {
               className={`nav-btn ${effectiveView === 'rig' ? 'active' : ''}`}
               onClick={() => handleViewChange('rig')}
               disabled={!hasActiveCallsign}
+              data-testid="nav-rig"
             >
               Rig
             </button>
@@ -4714,6 +4733,7 @@ function App() {
                 className={`nav-btn ${effectiveView === 'admin' ? 'active' : ''}`}
                 onClick={() => handleViewChange('admin')}
                 disabled={!hasActiveCallsign}
+                data-testid="nav-admin"
               >
                 Admin
               </button>
@@ -4723,6 +4743,7 @@ function App() {
               onClick={() => handleViewChange('debug')}
               disabled={!hasActiveCallsign}
               title="Debug logs and system status"
+              data-testid="nav-debug"
             >
               🐛 Debug
             </button>
@@ -4780,6 +4801,7 @@ function App() {
               className={`callsign-toggle ${hasActiveCallsign ? '' : 'callsign-toggle--empty'}`}
               onClick={() => setShowCallsignPicker((prev) => !prev)}
               aria-expanded={showCallsignPicker}
+              data-testid="callsign-toggle"
             >
               <span>{callsignDisplay}</span>
               <span className="callsign-toggle-caret">▾</span>
@@ -4793,15 +4815,16 @@ function App() {
                       key={station.id}
                       className={`quick-btn ${station.callsign === currentCallsign ? 'active' : ''}`}
                       onClick={() => handleCallsignSelect(station.callsign)}
+                      data-testid={`callsign-option-${station.callsign}`}
                     >
                       {station.callsign}
                     </button>
                   ))}
-                  <button className="quick-btn secondary" onClick={() => handleCallsignSelect('__new__')}>
+                  <button className="quick-btn secondary" onClick={() => handleCallsignSelect('__new__')} data-testid="callsign-add-new">
                     ＋ Add new callsign
                   </button>
                   {hasActiveCallsign && (
-                    <button className="quick-btn" onClick={() => handleCallsignSelect('__unset__')}>
+                    <button className="quick-btn" onClick={() => handleCallsignSelect('__unset__')} data-testid="callsign-unset">
                       Unset callsign
                     </button>
                   )}
