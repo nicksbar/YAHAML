@@ -1,0 +1,62 @@
+name: Development Sanity
+
+on:
+  push:
+    branches: [development]
+  workflow_dispatch:
+
+concurrency:
+  group: development-sanity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sanity:
+    name: Build and Unit Sanity
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix ui ci
+
+      - name: Setup test database
+        run: |
+          mkdir -p .test-db
+          echo "DATABASE_URL=file:./.test-db/test.db" >> $GITHUB_ENV
+
+      - name: Sync Prisma schema
+        run: npx prisma db push
+        env:
+          DATABASE_URL: file:./.test-db/test.db
+
+      - name: Lint backend
+        run: npm run lint
+        env:
+          DATABASE_URL: file:./.test-db/test.db
+
+      - name: Build backend
+        run: npm run build
+        env:
+          DATABASE_URL: file:./.test-db/test.db
+
+      - name: Build UI
+        run: npm --prefix ui run build
+
+      - name: Run backend unit tests
+        run: npm test
+        env:
+          CI: true
+          DATABASE_URL: file:./.test-db/test.db
