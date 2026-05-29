@@ -12,6 +12,8 @@ interface LoggingPageProps {
   isActive?: boolean
 }
 
+type LoggingTab = 'standard' | 'gota'
+
 export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const { contest, stations, loading, error } = useLoggingContext({ pollInterval: 5000 })
   const { submit, loading: submitting, error: submitError } = useQSOSubmit({
@@ -35,8 +37,8 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     masterGain?: GainNode
     cwOscillator?: OscillatorNode
     cwGain?: GainNode
-    cwInterval?: NodeJS.Timeout
-    keepAliveInterval?: NodeJS.Timeout
+    cwInterval?: ReturnType<typeof setInterval>
+    keepAliveInterval?: ReturnType<typeof setInterval>
     visibilityCleanup?: () => void
     // Advanced audio processing
     lowFilter?: BiquadFilterNode
@@ -56,10 +58,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const [keepAudioAlive, setKeepAudioAlive] = useState(
     localStorage.getItem('yahaml:keepAudioAlive') !== 'false' // default true
   )
+  const [activeLoggingTab, setActiveLoggingTab] = useState<LoggingTab>('standard')
+  const [gotaStationId, setGotaStationId] = useState(stationId)
+  const [gotaOperatorCallsign, setGotaOperatorCallsign] = useState(localStorage.getItem('yahaml:callsign') || '')
+  const [gotaRadio, setGotaRadio] = useState<any | null>(null)
   const keepAudioAliveRef = useRef(keepAudioAlive)
 
   const token = localStorage.getItem('yahaml:sessionToken')
-  const authHeaders = token ? { Authorization: `Bearer ${token}` } : {}
+  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
 
   const formatFrequencyMHz = (freq?: string | null) => {
     if (!freq) return '---.---'
@@ -502,6 +508,30 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     fetchAssignedRadio()
   }, [token])
 
+  useEffect(() => {
+    if (stationId && !gotaStationId) {
+      setGotaStationId(stationId)
+    }
+  }, [stationId, gotaStationId])
+
+  useEffect(() => {
+    const fetchGotaRadio = async () => {
+      if (!gotaStationId) {
+        setGotaRadio(null)
+        return
+      }
+      try {
+        const response = await fetch(`/api/stations/${gotaStationId}/radio`)
+        if (!response.ok) return
+        const data = await response.json()
+        setGotaRadio(data?.radio || null)
+      } catch {
+        setGotaRadio(null)
+      }
+    }
+    fetchGotaRadio()
+  }, [gotaStationId])
+
   // Setup/teardown radio audio when assigned radio changes
   useEffect(() => {
     if (assignedRadio?.radio?.audioSourceType) {
@@ -629,6 +659,21 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
+  const handleGotaSubmit = async (qsoData: any) => {
+    const result = await submit({
+      ...qsoData,
+      stationId: gotaStationId || stationId,
+      contestId: contest?.id,
+      source: 'gota-ui',
+      operatorCallsign: gotaOperatorCallsign || undefined,
+    })
+
+    if (result.success && result.id) {
+      setLastQsoId(result.id)
+      setTimeout(() => setLastQsoId(null), 2000)
+    }
+  }
+
   return (
     <div className="logging-page">
       {submitError && (
@@ -638,16 +683,74 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         </div>
       )}
 
+      <div className="logging-tabs">
+        <button
+          className={`logging-tab ${activeLoggingTab === 'standard' ? 'active' : ''}`}
+          onClick={() => setActiveLoggingTab('standard')}
+        >
+          Standard Log
+        </button>
+        <button
+          className={`logging-tab ${activeLoggingTab === 'gota' ? 'active' : ''}`}
+          onClick={() => setActiveLoggingTab('gota')}
+        >
+          GOTA Station
+        </button>
+      </div>
+
       <div className="logging-layout">
         {/* Main Logging Form */}
         <div className="logging-column main">
-          <QSOEntryForm
-            stations={stations}
-            stationId={stationId}
-            activeContest={contest || undefined}
-            onSubmit={handleSubmit}
-            loading={submitting}
-          />
+          {activeLoggingTab === 'standard' ? (
+            <QSOEntryForm
+              stations={stations}
+              stationId={stationId}
+              activeContest={contest || undefined}
+              onSubmit={handleSubmit}
+              loading={submitting}
+            />
+          ) : (
+            <section className="panel gota-panel">
+              <h3>🧢 GOTA Logging</h3>
+              <p className="gota-hint">
+                Track Get-On-The-Air station contacts separately while keeping shared contest context.
+              </p>
+              <div className="gota-controls">
+                <div className="field">
+                  <label>GOTA Station</label>
+                  <select value={gotaStationId} onChange={(e) => setGotaStationId(e.target.value)}>
+                    {stations.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.callsign} {s.class ? `(${s.class})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>GOTA Operator</label>
+                  <input
+                    value={gotaOperatorCallsign}
+                    onChange={(e) => setGotaOperatorCallsign(e.target.value.toUpperCase())}
+                    placeholder="Operator callsign"
+                  />
+                </div>
+              </div>
+              <div className="gota-meta">
+                <div>Assigned Radio: {gotaRadio ? `${gotaRadio.name} (${gotaRadio.host}:${gotaRadio.port})` : 'None assigned'}</div>
+                <div className="gota-rule">Tip: Keep GOTA operators and transmitter assignments consistent for bonus tracking.</div>
+              </div>
+            </section>
+          )}
+
+          {activeLoggingTab === 'gota' && (
+            <QSOEntryForm
+              stations={stations}
+              stationId={gotaStationId || stationId}
+              activeContest={contest || undefined}
+              onSubmit={handleGotaSubmit}
+              loading={submitting}
+            />
+          )}
 
           {/* Live QSO Feed */}
           <LiveQSOFeed contestId={contest?.id} maxEntries={15} />

@@ -45,7 +45,7 @@ export function useLoggingContext(options?: UseLoggingContextOptions) {
   useEffect(() => {
     const fetchContest = async () => {
       try {
-        const response = await fetch('/api/contests/active')
+        const response = await fetch('/api/contests/active/current')
         if (response.ok) {
           const data = await response.json()
           setContest(data || null)

@@ -11,6 +11,8 @@ export interface QSOSubmitData {
   exchange?: Record<string, string>
   notes?: string
   contestId?: string
+  source?: string
+  operatorCallsign?: string
 }
 
 export interface ValidationError {
@@ -39,8 +41,24 @@ export function useQSOSubmit(options?: UseQSOSubmitOptions) {
       setError(null)
 
       try {
+        const now = new Date()
+        const qsoDate = now.toISOString()
+        const qsoTime = now.toISOString().slice(11, 19)
         const payload = {
-          ...data,
+          stationId: data.stationId,
+          callsign: data.contactCallsign,
+          band: data.band,
+          mode: data.mode,
+          qsoDate,
+          qsoTime,
+          frequency: data.frequency ? String(data.frequency) : undefined,
+          rstSent: data.rst,
+          rstRcvd: data.rst,
+          power: data.power,
+          source: data.source,
+          operatorCallsign: data.operatorCallsign,
+          exchange: data.exchange,
+          notes: data.notes,
           contestId: options?.contestId,
         }
 

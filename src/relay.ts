@@ -2,6 +2,7 @@ import * as net from 'net';
 import prisma from './db';
 import { validateQsoAgainstTemplate } from './contest-validation';
 import { wsManager } from './websocket';
+import { forwardRawN3fjpMessage } from './n3fjp-forwarder';
 
 interface ConnectedClient {
   socket: net.Socket;
@@ -274,6 +275,9 @@ async function handleClientData(clientId: string, data: Buffer) {
   
   try {
     const msg = decodeMessage(data);
+
+    // Optional upstream forwarding to external N3FJP host (proxy mode)
+    void forwardRawN3fjpMessage(msg);
     
     // Log all relay messages (only if we have a stationId)
     if (client.stationId) {

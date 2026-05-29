@@ -42,7 +42,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
 
-  const getAuthHeaders = () =>
+  const getAuthHeaders = (): Record<string, string> =>
     sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
 
   // Fetch available rooms

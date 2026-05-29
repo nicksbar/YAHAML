@@ -138,6 +138,13 @@ const browserIdKey = 'yahaml:browserId'
 
 type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
 
+type N3fjpForwarderConfig = {
+  enabled: boolean
+  host: string
+  port: number
+  timeoutMs: number
+}
+
 function App() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
@@ -283,6 +290,17 @@ function App() {
   const [availableContests, setAvailableContests] = useState<any[]>([])
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loadingContests, setLoadingContests] = useState(false)
+
+  // System-wide N3FJP forwarding config (admin)
+  const [forwarderConfig, setForwarderConfig] = useState<N3fjpForwarderConfig>({
+    enabled: false,
+    host: '127.0.0.1',
+    port: 1000,
+    timeoutMs: 3000,
+  })
+  const [forwarderLoading, setForwarderLoading] = useState(false)
+  const [forwarderSaving, setForwarderSaving] = useState(false)
+  const [forwarderStatus, setForwarderStatus] = useState<string | null>(null)
   
   // Station management state
   const [allStations, setAllStations] = useState<any[]>([])
@@ -872,6 +890,64 @@ function App() {
     }
   }
 
+  async function fetchForwarderConfig() {
+    if (!sessionToken || !isAdmin) return
+    try {
+      setForwarderLoading(true)
+      setForwarderStatus(null)
+      const response = await fetch('/api/n3fjp-forwarder/config', {
+        headers: getAuthHeaders(),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to load forwarder config')
+      }
+
+      const data = await response.json()
+      setForwarderConfig({
+        enabled: Boolean(data.enabled),
+        host: data.host || '127.0.0.1',
+        port: Number(data.port || 1000),
+        timeoutMs: Number(data.timeoutMs || 3000),
+      })
+    } catch (error) {
+      setForwarderStatus(error instanceof Error ? error.message : 'Failed to load forwarder config')
+    } finally {
+      setForwarderLoading(false)
+    }
+  }
+
+  async function saveForwarderConfig() {
+    if (!sessionToken || !isAdmin) return
+    try {
+      setForwarderSaving(true)
+      setForwarderStatus(null)
+      const response = await fetch('/api/n3fjp-forwarder/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(forwarderConfig),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to save forwarder config')
+      }
+
+      const data = await response.json()
+      setForwarderConfig({
+        enabled: Boolean(data.enabled),
+        host: data.host || '127.0.0.1',
+        port: Number(data.port || 1000),
+        timeoutMs: Number(data.timeoutMs || 3000),
+      })
+      setForwarderStatus('N3FJP forwarding config saved')
+    } catch (error) {
+      setForwarderStatus(error instanceof Error ? error.message : 'Failed to save forwarder config')
+    } finally {
+      setForwarderSaving(false)
+    }
+  }
+
   async function activateContest(contestId: string) {
     try {
       const response = await fetch(`/api/admin/activate-contest/${contestId}`, {
@@ -1352,6 +1428,7 @@ function App() {
     if (currentView === 'admin') {
       fetchAvailableContests()
       fetchScenarios()
+      fetchForwarderConfig()
     }
   }, [currentView])
 
@@ -4045,6 +4122,85 @@ function App() {
           </section>
 
           <section className="panel">
+            <h2>🔁 N3FJP Forwarding (System-wide)</h2>
+            <p className="hint">
+              Global setting for forwarding incoming logging events to an external N3FJP host.
+              This applies to relay, UDP, and API-ingested QSOs across the whole system.
+            </p>
+            {forwarderStatus && (
+              <div className={`notice ${forwarderStatus.includes('saved') ? 'success' : 'error'}`}>
+                {forwarderStatus}
+              </div>
+            )}
+            <div className="form-grid">
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={forwarderConfig.enabled}
+                    onChange={(e) =>
+                      setForwarderConfig((prev) => ({ ...prev, enabled: e.target.checked }))
+                    }
+                    disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  />
+                  Enable external N3FJP forwarding
+                </label>
+              </div>
+              <div className="field">
+                <label>Host</label>
+                <input
+                  value={forwarderConfig.host}
+                  onChange={(e) =>
+                    setForwarderConfig((prev) => ({ ...prev, host: e.target.value }))
+                  }
+                  disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  placeholder="127.0.0.1"
+                />
+              </div>
+              <div className="field">
+                <label>Port</label>
+                <input
+                  type="number"
+                  value={forwarderConfig.port}
+                  onChange={(e) =>
+                    setForwarderConfig((prev) => ({ ...prev, port: Number(e.target.value || 0) }))
+                  }
+                  disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  placeholder="1000"
+                />
+              </div>
+              <div className="field">
+                <label>Timeout (ms)</label>
+                <input
+                  type="number"
+                  value={forwarderConfig.timeoutMs}
+                  onChange={(e) =>
+                    setForwarderConfig((prev) => ({ ...prev, timeoutMs: Number(e.target.value || 0) }))
+                  }
+                  disabled={forwarderLoading || forwarderSaving || !isAdmin}
+                  placeholder="3000"
+                />
+              </div>
+            </div>
+            <div className="action-buttons">
+              <button
+                className="btn secondary"
+                onClick={fetchForwarderConfig}
+                disabled={forwarderLoading || forwarderSaving || !isAdmin}
+              >
+                {forwarderLoading ? '⏳ Loading...' : '🔄 Reload'}
+              </button>
+              <button
+                className="btn primary"
+                onClick={saveForwarderConfig}
+                disabled={forwarderLoading || forwarderSaving || !isAdmin}
+              >
+                {forwarderSaving ? '💾 Saving...' : '💾 Save System Config'}
+              </button>
+            </div>
+          </section>
+
+          <section className="panel">
             <h2>👥 Station Management</h2>
             <p className="hint">
               View and manage all stations in the system. Check for duplicate callsigns and active sessions.
@@ -4239,7 +4395,7 @@ function App() {
                 </div>
               </div>
             )}
-            {Object.entries(scenariosByCategory).map(([category, items]) => (
+            {Object.entries(scenariosByCategory as Record<string, any[]>).map(([category, items]) => (
               <div key={category} style={{ marginBottom: '1.5rem' }}>
                 <h3 style={{ fontSize: '0.95rem', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   {categoryLabels[category] || category}

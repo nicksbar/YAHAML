@@ -8,6 +8,11 @@ import { validateQsoAgainstTemplate } from './contest-validation';
 import { seedContestTemplates } from './seed-templates';
 import { startRelayServer } from './relay';
 import { parseUdpTargets, startUdpServer } from './udp';
+import {
+  forwardQsoAsTransaction,
+  getN3fjpForwarderConfig,
+  updateN3fjpForwarderConfig,
+} from './n3fjp-forwarder';
 import { radioManager } from './hamlib';
 import {
   generateAdifContent,
@@ -426,6 +431,35 @@ const requireAdmin = (
   next();
 };
 
+// N3FJP external forwarding controls
+app.get(
+  '/api/n3fjp-forwarder/config',
+  authMiddleware as express.RequestHandler,
+  async (_req: AuthRequest, res) => {
+    return res.json(getN3fjpForwarderConfig());
+  }
+);
+
+app.put(
+  '/api/n3fjp-forwarder/config',
+  authMiddleware as express.RequestHandler,
+  requireAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const { enabled, host, port, timeoutMs } = req.body || {};
+      const next = updateN3fjpForwarderConfig({
+        enabled: typeof enabled === 'boolean' ? enabled : undefined,
+        host: typeof host === 'string' ? host : undefined,
+        port: typeof port === 'number' ? port : undefined,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+      });
+      return res.json(next);
+    } catch (error) {
+      return res.status(400).json({ error: 'Failed to update N3FJP forwarding config' });
+    }
+  }
+);
+
 // Stations endpoints
 app.get('/api/stations', async (req, res) => {
   try {
@@ -779,6 +813,20 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
           console.error('Failed to update aggregates:', error);
         });
       }
+
+      void forwardQsoAsTransaction({
+        stationCallsign: station?.callsign || req.session?.callsign || 'YAHAML',
+        operatorCallsign: operatorCallsign || req.session?.callsign || station?.callsign,
+        callsign,
+        band,
+        mode,
+        qsoDate: new Date(qsoDate),
+        qsoTime,
+        contestId: contestId || null,
+        stationClass: station?.class,
+        section: station?.section,
+        points: typeof qsoLog.points === 'number' ? qsoLog.points : 0,
+      });
 
       return res.status(201).json(qsoLog);
     } catch (error) {
