@@ -254,8 +254,20 @@ test.describe('operator browser workflows', () => {
     await openLoggingPage(page)
 
     await page.getByTestId('contact-callsign-input').fill('W1AW')
-    await page.getByTestId('band-input').fill('20m')
-    await page.getByTestId('mode-input').fill('CW')
+    const qsoForm = page.getByTestId('qso-entry-form')
+    const preferredBandButton = qsoForm.getByTestId('band-quick-20m')
+    if (await preferredBandButton.count()) {
+      await preferredBandButton.click()
+    } else {
+      await qsoForm.locator('[data-testid^="band-quick-"]').first().click()
+    }
+
+    const preferredModeButton = qsoForm.getByTestId('mode-quick-cw')
+    if (await preferredModeButton.count()) {
+      await preferredModeButton.click()
+    } else {
+      await qsoForm.locator('[data-testid^="mode-quick-"]').first().click()
+    }
     await page.getByTestId('rst-input').fill('599')
     await page.getByTestId('power-input').fill('100')
     await page.getByTestId('exchange-field-class').fill('2A')

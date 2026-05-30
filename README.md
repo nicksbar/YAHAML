@@ -1,71 +1,78 @@
 # Yet Another Ham Logger (YAHAML)
 
-> ⚠️ **Early Development**: This project is actively being developed and features are still stabilizing. Expect breaking changes, incomplete features, and rough edges. Use in production at your own risk!
+> Collaborative, field-ready ham radio logging platform for clubs, contest teams, and multi-operator stations.
 
-Collaborative ham radio logging with a focus on **group/club workflows**, **UDP interoperability**, **remote rig control**, and **real-time updates**.
+YAHAML combines **modern web logging**, **live rig/audio control**, and a major interoperability bridge:
 
-## Screenshots
+## 🚀 Why this is a big deal
 
-*Coming soon - screenshots will be added as features are finalized*
+### N3FJP compatibility layer (proxy + server-style ingest)
 
-## Quick Facts
+YAHAML can act as a practical interoperability bridge for N3FJP ecosystems:
 
-- **Status:** 🚧 Early Development (Active development, Feb 2026)
-- **Tests:** Jest + Supertest suite (run `npm test`)
-- **Deployment:** Docker-ready, VPS/cloud compatible
-- **Real-time:** WebSocket with auto-reconnect + WebRTC signaling
-- **Features:** Contest templates, band tracking, rig control, audio monitoring, voice rooms
+- **Protocol-aware ingest paths** for external logging clients
+- **TCP relay + UDP workflows** for station/band activity updates
+- **Server-replacement style architecture** for teams that want centralized web logging and control
+- **Real-time shared state** across operators (instead of isolated desktops)
 
-## Core Features
+If your ops workflow depends on N3FJP-compatible behavior, this is one of YAHAML’s biggest strategic advantages.
 
-### 📻 Logging & QSO Management
-- **Multi-user logging** by callsign with shared activity context (Field Day, POTA, SOTA, contests)
-- **Real-time QSO sync** across all connected clients via WebSocket
-- **Rich QSO data** with frequency, mode, band, RST, exchange fields, and notes
-- **Session management** with auto-restore and token-based authentication
-- **Activity feed** showing recent station activity in real-time
+## 📸 Product screenshots
 
-### 🎯 Contest Management
-- **19 contest templates** including Field Day, CQ WPX, ARRL DX, Sweepstakes, and more
-- **Dynamic scheduling** with contest instance creation and date management
-- **Contest validation** with rules enforcement and exchange verification
-- **Leaderboard tracking** for competitive events
+### Dashboard
 
-### 🔊 Advanced Audio & Rig Control
-- **Remote rig control** via HAMLib (rigctld) integration
-- **Real-time audio monitoring** with Web Audio API
-- **CW keying** with adjustable speed and automatic callsign playback
-- **PTT control** with audio loopback for monitoring
-- **Audio keep-alive** option to maintain connection across tab changes
-- **Live audio meters** for monitoring signal levels
+![YAHAML Dashboard](screenshots/dashboard.png)
 
-### �️ Voice Rooms & Streaming
-- **WebRTC voice rooms** with signaling over WebSocket
-- **Operator join/leave** with participant tracking and live status
-- **PTT + mute controls** and per-room volume control
-- **Radio audio sources**: loopback, Janus (optional), HTTP stream
-- **Field-ready topology** for multi-operator coordination
+### Logging workspace
 
-### �🌐 Interoperability & Integration
-- **UDP logging protocol** for N3FJP and other logging software
-- **TCP relay mode** for N3FJP band occupancy tracking
-- **ADIF export** for contact import/export with other logging tools
-- **Cabrillo export** for contest log submission
-- **HamDB/QRZ integration** for callsign lookups and validation
+![YAHAML Logging](screenshots/Logging.png)
 
-### 👥 Club & Special Event Operations
-- **Club callsign management** for group operations
-- **Special event station** support with shared logging
-- **Band occupancy tracking** to coordinate multi-operator stations
-- **Callsign rotation** for Field Day and other multi-transmitter events
+### GOTA logging mode
 
-### 🎨 Modern Web Interface
-- **Responsive design** optimized for desktop, tablet, and mobile
-- **Light/dark theme** with automatic system preference detection
-- **Real-time updates** without page refreshes
-- **Clean, intuitive UI** focused on efficient logging workflow
+![YAHAML Logging GOTA](screenshots/logging-gota.png)
 
-## Quick Start
+### Rig control
+
+![YAHAML Rig Control](screenshots/rig-control.png)
+
+### Contest management
+
+![YAHAML Contests](screenshots/contests.png)
+
+### Club operations
+
+![YAHAML Club View](screenshots/club.png)
+
+## ✅ Core capabilities
+
+### Real-time collaborative logging
+
+- Multi-operator QSO logging with shared activity state
+- Live QSO feed and station context updates over WebSocket
+- Callsign sessions with restore behavior for smoother ops continuity
+- Rich QSO fields: band, mode, frequency, power, RST, exchange, notes
+
+### Contest-first workflow
+
+- Built-in contest templates and validation rules
+- Exchange enforcement and contest-aware UI behavior
+- Band/mode occupancy publishing for team deconfliction
+- ADIF/Cabrillo export support for downstream workflows
+
+### Rig + audio operations
+
+- HAMLib (`rigctld`) rig control integration
+- Mode/frequency/PTT coordination in the UI
+- Radio audio pipelines: loopback, HTTP stream, or Janus
+- Voice-room signaling with WebRTC support for operator coordination
+
+### Club + event operations
+
+- Club callsign and special-event station support
+- GOTA-friendly split workflows
+- Multi-station operations with centralized control plane
+
+## ⚙️ Quick start (local)
 
 ```bash
 npm install
@@ -73,8 +80,12 @@ npm run db:generate
 npm run db:push
 npm run db:seed
 npm run dev:all
+```
 
-## Docker Deployment
+- UI: http://localhost:5173
+- API: http://localhost:3000
+
+## 🐳 Docker deployment
 
 ### Option A: SQLite (file-backed)
 
@@ -84,7 +95,7 @@ docker compose up -d --build
 
 - UI (root): http://localhost
 - API: http://localhost:3000
-- SQLite data: ./data/yahaml.db
+- SQLite data: `./data/yahaml.db`
 
 ### Option B: Postgres
 
@@ -92,36 +103,58 @@ docker compose up -d --build
 docker compose -f docker-compose.postgres.yml up -d --build
 ```
 
-Note: Postgres requires the Prisma datasource provider to be set to `postgresql` in [prisma/schema.prisma](prisma/schema.prisma). If you want this switch applied, ask and I’ll update it with the required migration guidance.
+> Note: Postgres requires Prisma datasource provider `postgresql` in `prisma/schema.prisma`.
 
-## Proxmox (helper script)
+## 🧰 Proxmox helper
 
 ```bash
 sudo bash scripts/proxmox-deploy.sh
 ```
 
-Set `COMPOSE_FILE=docker-compose.postgres.yml` to deploy with Postgres.
-```
+Set `COMPOSE_FILE=docker-compose.postgres.yml` if you want Postgres deployment.
 
-Access the UI at http://localhost:5173
+## 📤 Log export (current capabilities)
 
-## Project Status
+YAHAML currently supports export via backend endpoints (contest-scoped):
 
-See [STATUS.md](STATUS.md) for detailed status, deployment readiness, and phase completion.
+- `GET /api/export/adif?contestId=<contestId>&format=3`
+	- ADIF output (`.adi`)
+	- `format=2` or `format=3`
+- `GET /api/export/cabrillo?contestId=<contestId>&stationId=<stationId>&location=<optional>`
+	- Cabrillo output (`.log`)
+- `GET /api/export/reverse-log?contestId=<contestId>&remote_call=<CALL>&stationId=<stationId>`
+	- Reverse-log output for a specific worked station
 
-## Project Documentation
+Important notes:
 
-**Start here:** [docs/INDEX.md](docs/INDEX.md) - Complete documentation index
+- Export is currently **contest-specific** (`contestId` required).
+- UI export controls are not yet surfaced as first-class workflow buttons.
+- Duplicate-merged records (`merge_status = duplicate_of`) are excluded from export.
 
-Key documents:
-- **[Architecture](docs/architecture.md)** - System design, services, WebSocket real-time updates
-- **[Deployment](docs/DEPLOYMENT_READINESS.md)** - Production deployment guide (Docker, VPS, Cloud)
-- **[Testing](docs/testing.md)** - Test patterns and coverage
-- **[UI Design System](docs/ui-design-system.md)** - Component library and theming
-- **[WebRTC Peer Connections](docs/webrtc-peer-connections.md)** - Signaling flow and ICE notes
-- **[Janus Setup](docs/janus-setup.md)** - Optional media gateway setup
-- **[Radio Audio Sources](docs/radio-audio-sources.md)** - Loopback vs Janus vs HTTP stream
-- **[N3FJP Protocol](docs/protocol-summary.md)** - Protocol details and debugging
+### Practical workflow right now
 
-## How to Contribute
+1. Open active contest in UI (to identify the contest/station IDs you need).
+2. Use the export endpoints above.
+3. Import submission files into your destination system (LoTW/eQSL/contest robot).
+
+Planned UX enhancement: add one-click export actions directly in Logging/Admin views.
+
+## 📚 Documentation
+
+Start with [docs/INDEX.md](docs/INDEX.md), then see:
+
+- [Architecture](docs/architecture.md)
+- [Deployment readiness](docs/DEPLOYMENT_READINESS.md)
+- [Testing](docs/testing.md)
+- [Janus setup](docs/janus-setup.md)
+- [Radio audio sources](docs/radio-audio-sources.md)
+- [N3FJP protocol summary](docs/protocol-summary.md)
+- [N3FJP protocol debugging](docs/n3fjp_protocol_debugging.md)
+
+## 🧪 Project status
+
+YAHAML is under active development. For current progress and milestones, see [STATUS.md](STATUS.md).
+
+## 🤝 Contributing
+
 See [CONTRIBUTING.md](CONTRIBUTING.md).

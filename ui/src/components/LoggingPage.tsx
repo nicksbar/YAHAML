@@ -44,6 +44,9 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const janusPollAbortRef = useRef<AbortController | null>(null)
   const janusUnlockPlaybackRef = useRef<(() => void) | null>(null)
   const syncingSharedAudioRef = useRef(false)
+  const assignedRadioIdRef = useRef<string | null>(null)
+  const applyingBandModeRef = useRef(false)
+  const lastAppliedBandModeRef = useRef<string | null>(null)
   const assignmentFetchInFlightRef = useRef(false)
   const lastAssignmentSignatureRef = useRef<string>('')
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -113,6 +116,16 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       throw new Error(`Janus HTTP ${response.status}`)
     }
     return response.json()
+  }
+
+  const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 8000) => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   const resolveJanusApiCandidates = (radio: any): string[] => {
@@ -568,6 +581,48 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     return (value / 1_000_000).toFixed(3)
   }
 
+  const frequencyToBand = (freq?: string | number | null) => {
+    if (freq === null || freq === undefined) return ''
+    const value = typeof freq === 'number' ? freq : Number.parseInt(String(freq), 10)
+    if (!Number.isFinite(value) || value <= 0) return ''
+    if (value >= 1800000 && value <= 2000000) return '160m'
+    if (value >= 3500000 && value <= 4000000) return '80m'
+    if (value >= 7000000 && value <= 7300000) return '40m'
+    if (value >= 14000000 && value <= 14350000) return '20m'
+    if (value >= 21000000 && value <= 21450000) return '15m'
+    if (value >= 28000000 && value <= 29700000) return '10m'
+    if (value >= 50000000 && value <= 54000000) return '6m'
+    if (value >= 144000000 && value <= 148000000) return '2m'
+    if (value >= 420000000 && value <= 450000000) return '70cm'
+    return ''
+  }
+
+  const bandToFrequencyHz = (bandValue?: string | null): number | null => {
+    if (!bandValue) return null
+    const normalized = bandValue.trim().toLowerCase()
+    if (!normalized) return null
+
+    const compact = normalized.replace(/\s+/g, '')
+    const mhzBand = compact.endsWith('m') ? compact.slice(0, -1) : compact
+
+    if (compact.endsWith('cm')) {
+      if (compact === '70cm') return 433500000
+      return null
+    }
+
+    switch (mhzBand) {
+      case '160': return 1900000
+      case '80': return 3750000
+      case '40': return 7150000
+      case '20': return 14250000
+      case '15': return 21250000
+      case '10': return 28400000
+      case '6': return 50300000
+      case '2': return 146520000
+      default: return null
+    }
+  }
+
   useEffect(() => {
     if (!isActive) return
     const callsign = localStorage.getItem('yahaml:callsign') || 'Not set'
@@ -848,8 +903,8 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         }
 
         setRadioError(null)
-        // Update initial snapshot from assigned radio only when assignment config changes.
-        if (hasChanged && data?.radio?.id) {
+        // Keep radio state current even when assignment metadata is unchanged.
+        if (data?.radio?.id) {
           setRadioState({
             frequency: data.radio.frequency,
             mode: data.radio.mode,
@@ -1016,6 +1071,10 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   // Initialize WebSocket connection
   useEffect(() => {
+    assignedRadioIdRef.current = assignedRadio?.radio?.id || null
+  }, [assignedRadio?.radio?.id])
+
+  useEffect(() => {
     if (!token) return
 
     let isDisposing = false
@@ -1034,7 +1093,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         const message = JSON.parse(event.data)
         if (message.type === 'radioStateUpdate') {
           // Only update if this is our assigned radio
-          if (assignedRadio?.radio?.id === message.data.radioId) {
+          if (assignedRadioIdRef.current === message.data.radioId) {
             const state = message.data.state
             setRadioState({
               frequency: state.frequency,
@@ -1352,6 +1411,63 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     return trimmed.toUpperCase()
   }
 
+  const applyBandModeToAssignedRadio = async ({ stationId: selectedStationId, band, mode }: { stationId: string; band: string; mode: string }) => {
+    if (!token || selectedStationId !== stationId || !assignedRadio?.radio?.id || !assignedRadio?.radio?.isConnected) return
+
+    const normalizedBand = band.trim().toLowerCase()
+    const normalizedMode = mode.trim().toUpperCase()
+    if (!normalizedBand || !normalizedMode) return
+
+    const applyKey = `${selectedStationId}|${normalizedBand}|${normalizedMode}`
+    if (lastAppliedBandModeRef.current === applyKey || applyingBandModeRef.current) {
+      return
+    }
+
+    applyingBandModeRef.current = true
+    try {
+      const radioId = assignedRadio.radio.id
+      const targetFrequencyHz = bandToFrequencyHz(normalizedBand)
+      const currentBand = frequencyToBand(radioState?.frequency).toLowerCase()
+      const targetBand = targetFrequencyHz ? frequencyToBand(targetFrequencyHz).toLowerCase() : ''
+      const currentMode = String(radioState?.mode || '').toUpperCase()
+
+      if (targetFrequencyHz && targetBand && targetBand !== currentBand) {
+        const frequencyResponse = await fetchWithTimeout(`/api/radios/${radioId}/frequency`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify({ frequencyHz: targetFrequencyHz }),
+        })
+        if (!frequencyResponse.ok) {
+          const data = await frequencyResponse.json().catch(() => ({}))
+          throw new Error(data?.error || 'Failed to set frequency from logging selection')
+        }
+      }
+
+      if (normalizedMode && normalizedMode !== currentMode) {
+        const radioBandwidth = Number(radioState?.bandwidth ?? assignedRadio.radio.bandwidth ?? 3000)
+        const modeResponse = await fetchWithTimeout(`/api/radios/${radioId}/mode`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify({
+            mode: normalizedMode,
+            bandwidth: radioBandwidth,
+          }),
+        })
+        const modeData = await modeResponse.json().catch(() => ({}))
+        if (!modeResponse.ok || modeData?.success === false) {
+          throw new Error(modeData?.error || `Radio rejected mode ${normalizedMode}`)
+        }
+      }
+
+      await fetchAssignedRadio()
+      lastAppliedBandModeRef.current = applyKey
+    } catch (error) {
+      console.error('[RADIO] Failed to apply band/mode from logging form', error)
+    } finally {
+      applyingBandModeRef.current = false
+    }
+  }
+
   const publishBandModeSelection = async ({ stationId: selectedStationId, band, mode }: { stationId: string; band: string; mode: string }) => {
     if (!token || !selectedStationId || !band || !mode) return
 
@@ -1385,6 +1501,11 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     } catch {
       // non-blocking UX enhancement only
     }
+  }
+
+  const handleBandModeSelected = async (payload: { stationId: string; band: string; mode: string }) => {
+    await publishBandModeSelection(payload)
+    await applyBandModeToAssignedRadio(payload)
   }
 
   return (
@@ -1423,8 +1544,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
               stations={stations}
               stationId={stationId}
               activeContest={contest || undefined}
+              radioDefaults={{
+                band: frequencyToBand(radioState?.frequency),
+                mode: radioState?.mode ? String(radioState.mode).toUpperCase() : '',
+                frequencyMHz: radioState?.frequency ? formatFrequencyMHz(String(radioState.frequency)) : '',
+                power: radioState?.power,
+              }}
               onSubmit={handleSubmit}
-              onBandModeSelected={publishBandModeSelection}
+              onBandModeSelected={handleBandModeSelected}
               loading={submitting}
             />
           ) : (
@@ -1466,7 +1593,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
               stationId={gotaStationId || stationId}
               activeContest={contest || undefined}
               onSubmit={handleGotaSubmit}
-              onBandModeSelected={publishBandModeSelection}
+              onBandModeSelected={handleBandModeSelected}
               loading={submitting}
             />
           )}

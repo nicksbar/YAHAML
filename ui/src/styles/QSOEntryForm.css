@@ -72,6 +72,11 @@
   gap: var(--space-md);
 }
 
+.form-row.callsign-row {
+  grid-template-columns: minmax(300px, 460px) minmax(0, 1fr);
+  align-items: end;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -92,6 +97,19 @@
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.callsign-group {
+  padding: var(--space-sm);
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.14), rgba(59, 130, 246, 0.06));
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.12);
+}
+
+.callsign-group label {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 /* Input Fields */
@@ -121,6 +139,29 @@
 .form-group textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.form-group input.callsign-input {
+  font-size: clamp(1.35rem, 2vw, 1.8rem);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-width: 2px;
+  padding: 0.7rem 0.85rem;
+  min-height: 3.2rem;
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+}
+
+.form-group input.callsign-input::placeholder {
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.form-group input.callsign-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
 /* Quick Band/Mode Selection */
@@ -216,6 +257,10 @@
   }
 
   .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .form-row.callsign-row {
     grid-template-columns: 1fr;
   }
 
