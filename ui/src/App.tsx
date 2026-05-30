@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { ThemeProvider } from './context/ThemeContext'
 import { BandOccupancy } from './components/BandOccupancy'
@@ -145,7 +145,28 @@ type N3fjpForwarderConfig = {
   timeoutMs: number
 }
 
-const RADIO_MODE_OPTIONS = ['USB', 'LSB', 'CW', 'CWR', 'AM', 'FM', 'DIGI', 'RTTY']
+const PHONE_MODE_OPTIONS = ['LSB', 'USB', 'AM', 'FM', 'WFM', 'DSB']
+const CW_MODE_OPTIONS = ['CW', 'CWR']
+const DIGITAL_MODE_OPTIONS = ['PKTLSB', 'PKTUSB', 'PKTFM', 'RTTY', 'RTTYR', 'FAX']
+const ADVANCED_MODE_OPTIONS = ['ECSSLSB', 'ECSSUSB', 'SAM', 'SAH', 'SAL', 'AMS']
+const RADIO_MODE_OPTIONS = [
+  ...PHONE_MODE_OPTIONS,
+  ...CW_MODE_OPTIONS,
+  ...DIGITAL_MODE_OPTIONS,
+  ...ADVANCED_MODE_OPTIONS,
+]
+const TUNE_STEP_OPTIONS = [10, 50, 100, 500, 1000]
+const OPERATOR_MODE_OPTIONS = ['LSB', 'USB', 'CW', 'CWR', 'AM', 'FM', 'PKTUSB', 'RTTY']
+const BAND_PRESETS = [
+  { label: '160m', frequencyHz: 1900000 },
+  { label: '80m', frequencyHz: 3750000 },
+  { label: '40m', frequencyHz: 7150000 },
+  { label: '20m', frequencyHz: 14250000 },
+  { label: '15m', frequencyHz: 21250000 },
+  { label: '10m', frequencyHz: 28400000 },
+  { label: '6m', frequencyHz: 50300000 },
+  { label: '2m', frequencyHz: 146520000 },
+]
 
 function App() {
   const [stations, setStations] = useState<Station[]>([])
@@ -264,8 +285,15 @@ function App() {
   const [assignedRadioError, setAssignedRadioError] = useState<string | null>(null)
   const [globalFrequencyInput, setGlobalFrequencyInput] = useState('')
   const [globalModeInput, setGlobalModeInput] = useState('USB')
-  const [globalPowerInput, setGlobalPowerInput] = useState(50)
   const [globalControlBusy, setGlobalControlBusy] = useState(false)
+  const [globalTuneStepHz, setGlobalTuneStepHz] = useState(100)
+  const [globalOpsPicker, setGlobalOpsPicker] = useState<'band' | 'mode' | 'step' | null>(null)
+  const [radioStateSource, setRadioStateSource] = useState<'idle' | 'ws' | 'poll'>('idle')
+  const [lastRadioStateUpdateAt, setLastRadioStateUpdateAt] = useState<number | null>(null)
+  const [globalControlEditing, setGlobalControlEditing] = useState({
+    frequency: false,
+  })
+  const lastRadioStateUpdateAtRef = useRef<number>(0)
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -362,13 +390,69 @@ function App() {
     return Math.round(mhz * 1_000_000)
   }
 
+  const formatFrequencyInputMHz = (hz: number) => {
+    const mhz = hz / 1_000_000
+    return mhz.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+  }
+
+  const formatPowerLabel = (power?: number | null) => {
+    if (power === null || power === undefined) return null
+    const p = Number(power)
+    if (!Number.isFinite(p) || p < 0 || p > 100) return null
+    return `${Math.round(p)}%`
+  }
+
+  const formatBandwidthLabel = (bandwidth?: number | null) => {
+    if (bandwidth === null || bandwidth === undefined) return null
+    const hz = Number(bandwidth)
+    if (Number.isNaN(hz) || hz <= 0) return null
+    if (hz >= 1_000) {
+      const khz = hz / 1_000
+      return `BW ${khz % 1 === 0 ? khz.toFixed(0) : khz.toFixed(1)} kHz`
+    }
+    return `BW ${hz.toFixed(0)} Hz`
+  }
+
+  const frequencyToBandLabel = (frequency?: string | null) => {
+    if (!frequency) return '---'
+    const freq = parseInt(frequency, 10)
+    if (Number.isNaN(freq)) return '---'
+    if (freq >= 1800000 && freq <= 2000000) return '160m'
+    if (freq >= 3500000 && freq <= 4000000) return '80m'
+    if (freq >= 7000000 && freq <= 7300000) return '40m'
+    if (freq >= 14000000 && freq <= 14350000) return '20m'
+    if (freq >= 21000000 && freq <= 21450000) return '15m'
+    if (freq >= 28000000 && freq <= 29700000) return '10m'
+    if (freq >= 50000000 && freq <= 54000000) return '6m'
+    if (freq >= 144000000 && freq <= 148000000) return '2m'
+    return 'Other'
+  }
+
+  const markRadioStateUpdate = (source: 'ws' | 'poll') => {
+    const now = Date.now()
+    lastRadioStateUpdateAtRef.current = now
+    setLastRadioStateUpdateAt(now)
+    setRadioStateSource(source)
+  }
+
+  const mergeLiveRadioState = (previous: any, incoming: any) => ({
+    ...previous,
+    ...incoming,
+    frequency: incoming?.frequency ?? previous?.frequency ?? null,
+    mode: incoming?.mode ?? previous?.mode ?? null,
+    bandwidth: incoming?.bandwidth ?? previous?.bandwidth ?? null,
+    power: incoming?.power ?? previous?.power ?? null,
+    ptt: incoming?.ptt ?? previous?.ptt ?? null,
+    vfo: incoming?.vfo ?? previous?.vfo ?? null,
+  })
+
   const getRadioState = (radio: RadioConnection) => {
     const live = radioLiveState[radio.id]
     return {
-      frequency: live?.frequency || radio.frequency || null,
-      mode: live?.mode || radio.mode || null,
+      frequency: live?.frequency ?? radio.frequency ?? null,
+      mode: live?.mode ?? radio.mode ?? null,
       bandwidth: live?.bandwidth ?? radio.bandwidth ?? null,
-      power: live?.power ?? radio.power ?? null,
+      power: live?.power ?? null,  // live hamlib % only; radio.power (DB watts) is a different unit
       ptt: live?.ptt ?? null,
       vfo: live?.vfo ?? null,
     }
@@ -404,7 +488,11 @@ function App() {
       if (!response.ok) return
       const data = await response.json()
       if (data?.state) {
-        setRadioLiveState(prev => ({ ...prev, [radioId]: data.state }))
+        setRadioLiveState(prev => ({
+          ...prev,
+          [radioId]: mergeLiveRadioState(prev[radioId], data.state),
+        }))
+        markRadioStateUpdate('poll')
       }
     } catch {
       // silent
@@ -434,7 +522,7 @@ function App() {
       setAssignedRadio(data)
       setAssignedRadioError(null)
 
-      if (data?.radio?.id) {
+      if (data?.radio?.id && data?.radio?.isConnected) {
         await refreshRadioState(data.radio.id)
       }
     } catch (error) {
@@ -1379,6 +1467,11 @@ function App() {
     // Connect to WebSocket for real-time updates
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'subscribe', channel: 'stations' }))
+      ws.send(JSON.stringify({ type: 'subscribe', channel: 'radio' }))
+    }
     
     ws.onmessage = (event) => {
       try {
@@ -1393,6 +1486,14 @@ function App() {
               ? { ...station, currentBand: message.data.band, currentMode: message.data.mode }
               : station
           ))
+        }
+
+        if (message.type === 'radioStateUpdate' && message.data?.radioId && message.data?.state) {
+          setRadioLiveState((prev) => ({
+            ...prev,
+            [message.data.radioId]: mergeLiveRadioState(prev[message.data.radioId], message.data.state),
+          }))
+          markRadioStateUpdate('ws')
         }
       } catch (error) {
         console.error('WebSocket message parse error:', error)
@@ -1520,6 +1621,9 @@ function App() {
   const callsignDisplay = currentCallsign || 'Not set'
   const hasActiveCallsign = currentCallsign.trim().length > 0
   const assignedRadioState = assignedRadio?.radio ? getRadioState(assignedRadio.radio as RadioConnection) : null
+  const assignedBandwidthLabel = formatBandwidthLabel(
+    assignedRadioState?.bandwidth ?? assignedRadio?.radio?.bandwidth ?? null,
+  )
   const effectiveView = hasActiveCallsign
     ? currentView
     : allowCallsignSetup
@@ -1544,29 +1648,44 @@ function App() {
   }, [hasActiveCallsign, sessionToken])
 
   useEffect(() => {
-    if (!assignedRadio?.radio?.id) return
+    if (!assignedRadio?.radio?.id || !assignedRadio?.radio?.isConnected) return
     const interval = setInterval(() => {
-      refreshRadioState(assignedRadio.radio!.id)
-    }, 2500)
+      const isWsFresh = Date.now() - lastRadioStateUpdateAtRef.current < 4000
+      if (!isWsFresh) {
+        refreshRadioState(assignedRadio.radio!.id)
+      }
+    }, 1200)
     return () => clearInterval(interval)
-  }, [assignedRadio?.radio?.id])
+  }, [assignedRadio?.radio?.id, assignedRadio?.radio?.isConnected])
 
   useEffect(() => {
     if (!assignedRadio?.radio) {
       setGlobalFrequencyInput('')
       setGlobalModeInput('USB')
-      setGlobalPowerInput(50)
       return
     }
 
-    setGlobalFrequencyInput(formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency))
-    setGlobalModeInput((assignedRadioState?.mode || assignedRadio.radio.mode || 'USB').toUpperCase())
-    setGlobalPowerInput(Number(assignedRadioState?.power ?? assignedRadio.radio.power ?? 50))
-  }, [assignedRadio?.radio?.id, assignedRadioState?.frequency, assignedRadioState?.mode, assignedRadioState?.power])
+    if (!globalControlBusy && !globalControlEditing.frequency) {
+      setGlobalFrequencyInput(formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency))
+    }
 
-  const setAssignedFrequency = async () => {
+    if (!globalControlBusy) {
+      const liveMode = assignedRadioState?.mode
+      if (liveMode) {
+        setGlobalModeInput(liveMode.toUpperCase())
+      }
+    }
+
+  }, [
+    assignedRadio?.radio?.id,
+    assignedRadioState?.frequency,
+    assignedRadioState?.mode,
+    globalControlBusy,
+    globalControlEditing.frequency,
+  ])
+
+  const setAssignedFrequencyByHz = async (hz: number) => {
     if (!assignedRadio?.radio?.id) return
-    const hz = toFrequencyHz(globalFrequencyInput)
     if (!hz) {
       addError('Enter a valid frequency in MHz')
       return
@@ -1577,12 +1696,13 @@ function App() {
       const response = await fetch(`/api/radios/${assignedRadio.radio.id}/frequency`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ frequency: hz }),
+        body: JSON.stringify({ frequencyHz: hz }),
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
         throw new Error(data?.error || 'Failed to set frequency')
       }
+      setGlobalControlEditing((prev) => ({ ...prev, frequency: false }))
       await refreshRadioState(assignedRadio.radio.id)
     } catch (error) {
       addError(error instanceof Error ? error.message : 'Failed to set frequency')
@@ -1591,43 +1711,80 @@ function App() {
     }
   }
 
-  const setAssignedMode = async (mode: string) => {
+  const setAssignedFrequency = async () => {
     if (!assignedRadio?.radio?.id) return
-    try {
-      setGlobalControlBusy(true)
-      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/mode`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ mode }),
-      })
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data?.error || 'Failed to set mode')
-      }
-      await refreshRadioState(assignedRadio.radio.id)
-    } catch (error) {
-      addError(error instanceof Error ? error.message : 'Failed to set mode')
-    } finally {
-      setGlobalControlBusy(false)
+    const hz = toFrequencyHz(globalFrequencyInput)
+    if (!hz) {
+      addError('Enter a valid frequency in MHz')
+      return
     }
+    await setAssignedFrequencyByHz(hz)
   }
 
-  const setAssignedPower = async () => {
+  const commitAssignedFrequencyInline = async () => {
     if (!assignedRadio?.radio?.id) return
+    const hz = toFrequencyHz(globalFrequencyInput)
+    setGlobalControlEditing((prev) => ({ ...prev, frequency: false }))
+    if (!hz) return
+    const currentHz = Number.parseInt(
+      String(assignedRadioState?.frequency || assignedRadio.radio.frequency || ''),
+      10,
+    )
+    if (!Number.isNaN(currentHz) && currentHz === hz) return
+    await setAssignedFrequencyByHz(hz)
+  }
+
+  const nudgeAssignedFrequency = async (deltaHz: number) => {
+    if (globalControlBusy || !assignedRadio?.radio?.id) return
+    const currentHz = Number.parseInt(String(assignedRadioState?.frequency || ''), 10) || toFrequencyHz(globalFrequencyInput)
+    if (!currentHz) {
+      addError('Frequency unavailable to nudge')
+      return
+    }
+    const nextHz = Math.max(1, currentHz + deltaHz)
+    setGlobalControlEditing((prev) => ({ ...prev, frequency: false }))
+    setGlobalFrequencyInput(formatFrequencyInputMHz(nextHz))
+    await setAssignedFrequencyByHz(nextHz)
+  }
+
+  const setAssignedBand = async (frequencyHz: number) => {
+    if (globalControlBusy || !assignedRadio?.radio?.id) return
+    setGlobalControlEditing((prev) => ({ ...prev, frequency: false }))
+    setGlobalFrequencyInput(formatFrequencyInputMHz(frequencyHz))
+    await setAssignedFrequencyByHz(frequencyHz)
+  }
+
+  const setAssignedMode = async (mode: string) => {
+    if (!assignedRadio?.radio?.id) return
+    const radioId = assignedRadio.radio.id
+    const radioBandwidth = Number(assignedRadioState?.bandwidth ?? assignedRadio.radio.bandwidth ?? 3000)
     try {
       setGlobalControlBusy(true)
-      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/power`, {
+      const response = await fetch(`/api/radios/${radioId}/mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ power: globalPowerInput }),
+        body: JSON.stringify({
+          mode,
+          bandwidth: radioBandwidth,
+        }),
       })
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data?.error || 'Failed to set power')
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data?.success === false) {
+        throw new Error(data?.error || `Radio rejected mode ${mode}`)
       }
-      await refreshRadioState(assignedRadio.radio.id)
+
+      setRadioLiveState(prev => ({
+        ...prev,
+        [radioId]: {
+          ...prev[radioId],
+          mode,
+          bandwidth: radioBandwidth,
+        },
+      }))
+
+      await refreshRadioState(radioId)
     } catch (error) {
-      addError(error instanceof Error ? error.message : 'Failed to set power')
+      addError(error instanceof Error ? error.message : 'Failed to set mode')
     } finally {
       setGlobalControlBusy(false)
     }
@@ -3037,6 +3194,8 @@ function App() {
                           </div>
                           <div className="rig-display-meta">
                             <span>{state.mode || '---'}</span>
+                            {formatBandwidthLabel(state.bandwidth) ? <span>{formatBandwidthLabel(state.bandwidth)}</span> : null}
+                            {formatPowerLabel(state.power) ? <span>{formatPowerLabel(state.power)}</span> : null}
                             <span>{state.vfo || 'VFO?'}</span>
                             <span>{state.ptt ? 'PTT' : 'RX'}</span>
                             <button
@@ -3117,48 +3276,140 @@ function App() {
 
                           <div className="rig-control">
                             <label>Mode</label>
-                            <div className="quick-select">
-                              {['USB', 'LSB', 'CW', 'FM', 'AM', 'DIGI'].map((mode) => (
-                                <button
-                                  key={mode}
-                                  className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
-                                  onClick={async () => {
-                                    setControlInput(radio.id, { mode })
-                                    await fetch(`/api/radios/${radio.id}/mode`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                      body: JSON.stringify({ mode, bandwidth: Number(inputs.bandwidth) || 3000 }),
-                                    })
-                                    await refreshRadioState(radio.id)
-                                  }}
-                                >
-                                  {mode}
-                                </button>
-                              ))}
+                            <div className="global-mode-group">
+                              <span className="global-mode-group-label">Phone</span>
+                              <div className="global-mode-pills" role="group" aria-label="Rig phone modes">
+                                {PHONE_MODE_OPTIONS.map((mode) => (
+                                  <button
+                                    key={mode}
+                                    className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    onClick={async () => {
+                                      setControlInput(radio.id, { mode })
+                                      const response = await fetch(`/api/radios/${radio.id}/mode`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({ mode }),
+                                      })
+                                      const data = await response.json().catch(() => ({}))
+                                      if (!response.ok || data?.success === false) {
+                                        addError(data?.error || `Radio rejected mode ${mode}`)
+                                        return
+                                      }
+                                      await refreshRadioState(radio.id)
+                                    }}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="global-mode-group">
+                              <span className="global-mode-group-label">CW</span>
+                              <div className="global-mode-pills" role="group" aria-label="Rig CW modes">
+                                {CW_MODE_OPTIONS.map((mode) => (
+                                  <button
+                                    key={mode}
+                                    className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    onClick={async () => {
+                                      setControlInput(radio.id, { mode })
+                                      const response = await fetch(`/api/radios/${radio.id}/mode`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({ mode }),
+                                      })
+                                      const data = await response.json().catch(() => ({}))
+                                      if (!response.ok || data?.success === false) {
+                                        addError(data?.error || `Radio rejected mode ${mode}`)
+                                        return
+                                      }
+                                      await refreshRadioState(radio.id)
+                                    }}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="global-mode-group">
+                              <span className="global-mode-group-label">Digital</span>
+                              <div className="global-mode-pills" role="group" aria-label="Rig digital modes">
+                                {DIGITAL_MODE_OPTIONS.map((mode) => (
+                                  <button
+                                    key={mode}
+                                    className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    onClick={async () => {
+                                      setControlInput(radio.id, { mode })
+                                      const response = await fetch(`/api/radios/${radio.id}/mode`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({ mode }),
+                                      })
+                                      const data = await response.json().catch(() => ({}))
+                                      if (!response.ok || data?.success === false) {
+                                        addError(data?.error || `Radio rejected mode ${mode}`)
+                                        return
+                                      }
+                                      await refreshRadioState(radio.id)
+                                    }}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="global-mode-group">
+                              <span className="global-mode-group-label">Advanced</span>
+                              <div className="global-mode-pills" role="group" aria-label="Rig advanced modes">
+                                {ADVANCED_MODE_OPTIONS.map((mode) => (
+                                  <button
+                                    key={mode}
+                                    className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    onClick={async () => {
+                                      setControlInput(radio.id, { mode })
+                                      const response = await fetch(`/api/radios/${radio.id}/mode`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({ mode }),
+                                      })
+                                      const data = await response.json().catch(() => ({}))
+                                      if (!response.ok || data?.success === false) {
+                                        addError(data?.error || `Radio rejected mode ${mode}`)
+                                        return
+                                      }
+                                      await refreshRadioState(radio.id)
+                                    }}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                           </div>
 
                           <div className="rig-control">
-                            <label>Bandwidth (Hz)</label>
-                            <div className="rig-frequency-input">
-                              <input
-                                value={inputs.bandwidth}
-                                onChange={(e) => setControlInput(radio.id, { bandwidth: e.target.value })}
-                                placeholder="3000"
-                              />
-                              <button
-                                className="btn secondary"
-                                onClick={async () => {
-                                  await fetch(`/api/radios/${radio.id}/mode`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                                    body: JSON.stringify({ mode: inputs.mode, bandwidth: Number(inputs.bandwidth) || 3000 }),
-                                  })
-                                  await refreshRadioState(radio.id)
-                                }}
-                              >
-                                Apply
-                              </button>
+                            <label>Band</label>
+                            <div className="global-band-pills" role="group" aria-label="Rig band selection">
+                              {BAND_PRESETS.map((band) => (
+                                <button
+                                  key={band.label}
+                                  className="quick-btn"
+                                  onClick={async () => {
+                                    const response = await fetch(`/api/radios/${radio.id}/frequency`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                      body: JSON.stringify({ frequencyHz: band.frequencyHz }),
+                                    })
+                                    const data = await response.json().catch(() => ({}))
+                                    if (!response.ok || data?.success === false) {
+                                      addError(data?.error || `Failed to set band ${band.label}`)
+                                      return
+                                    }
+                                    await refreshRadioState(radio.id)
+                                  }}
+                                >
+                                  {band.label}
+                                </button>
+                              ))}
                             </div>
                           </div>
 
@@ -3265,26 +3516,39 @@ function App() {
                       <div className="form-grid">
                         <div className="field">
                           <label>Source Type</label>
-                          <select
-                            value={radio.audioSourceType || 'none'}
-                            onChange={async (e) => {
-                              try {
-                                await fetch(`/api/radios/${radio.id}`, {
-                                  method: 'PUT',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ audioSourceType: e.target.value === 'none' ? null : e.target.value }),
-                                })
-                                await fetchRadios()
-                              } catch (error) {
-                                console.error('Failed to update audio source:', error)
-                              }
-                            }}
-                          >
-                            <option value="none">No Audio</option>
-                            <option value="janus">Janus Gateway</option>
-                            <option value="http-stream">HTTP Stream</option>
-                            <option value="loopback">Loopback (Test/Demo)</option>
-                          </select>
+                          <div className="quick-select">
+                            {[
+                              { value: 'none', label: 'No Audio' },
+                              { value: 'janus', label: 'Janus' },
+                              { value: 'http-stream', label: 'HTTP Stream' },
+                              { value: 'loopback', label: 'Loopback' },
+                            ].map((option) => {
+                              const isActive = (radio.audioSourceType || 'none') === option.value
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`quick-btn ${isActive ? 'active' : ''}`}
+                                  onClick={async () => {
+                                    try {
+                                      await fetch(`/api/radios/${radio.id}`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          audioSourceType: option.value === 'none' ? null : option.value,
+                                        }),
+                                      })
+                                      await fetchRadios()
+                                    } catch (error) {
+                                      console.error('Failed to update audio source:', error)
+                                    }
+                                  }}
+                                >
+                                  {option.label}
+                                </button>
+                              )
+                            })}
+                          </div>
                         </div>
                         {radio.audioSourceType === 'janus' && (
                           <>
@@ -3325,6 +3589,53 @@ function App() {
                                 }}
                                 placeholder="radio1"
                               />
+                            </div>
+                            <div className="field" style={{ gridColumn: '1 / -1' }}>
+                              <label>Janus Actions</label>
+                              <div className="action-buttons" style={{ marginTop: '0.4rem' }}>
+                                <button
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    const room = (radio.janusRoomId || '').trim()
+                                    if (!room) {
+                                      addError('Janus room ID is required before testing')
+                                      return
+                                    }
+                                    addSuccess(`Janus config looks valid (room ${room}${radio.janusStreamId ? `, stream ${radio.janusStreamId}` : ''}).`)
+                                  }}
+                                >
+                                  Test Janus Config
+                                </button>
+                                <button
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    try {
+                                      const response = await fetch('/api/voice-rooms', {
+                                        headers: { ...getAuthHeaders() },
+                                      })
+                                      if (!response.ok) {
+                                        const data = await response.json().catch(() => ({}))
+                                        addError(data.error || 'Unable to discover voice rooms')
+                                        return
+                                      }
+                                      const rooms = await response.json()
+                                      if (!Array.isArray(rooms) || rooms.length === 0) {
+                                        addError('No voice rooms found to map for Janus yet')
+                                        return
+                                      }
+                                      const preview = rooms
+                                        .slice(0, 3)
+                                        .map((r: any) => r.id || r.name || 'room')
+                                        .join(', ')
+                                      addSuccess(`Discovered voice rooms: ${preview}`)
+                                    } catch (error) {
+                                      addError(error instanceof Error ? error.message : 'Failed to discover Janus options')
+                                    }
+                                  }}
+                                >
+                                  Discover Janus Options
+                                </button>
+                              </div>
                             </div>
                           </>
                         )}
@@ -4861,18 +5172,36 @@ function App() {
         {effectiveView === 'debug' && <DebugPanel />}
       </main>
 
-      {hasActiveCallsign && (
+      {hasActiveCallsign && effectiveView !== 'rig' && effectiveView !== 'admin' && (
         <footer className="global-ops-bar" role="complementary" aria-label="Global radio controls and band occupancy">
           <section className="global-ops-bar-section global-radio-controls">
             <div className="global-ops-bar-header">
-              <h3>📻 Radio Control</h3>
-              {assignedRadio?.radio ? (
-                <span className={`pill ${assignedRadio.radio.isConnected ? 'success' : 'error'}`}>
-                  {assignedRadio.radio.isConnected ? 'Connected' : 'Disconnected'}
-                </span>
-              ) : (
-                <span className="pill">No assignment</span>
-              )}
+              <h3>
+                📻 Radio Control
+                {assignedRadio?.radio ? ` · ${assignedRadio.radio.name}` : ''}
+              </h3>
+              <div className="global-header-meta">
+                {assignedRadio?.radio ? (
+                  <>
+                    <span className={`pill ${radioStateSource === 'ws' ? 'success' : ''}`}>
+                      {radioStateSource === 'ws' ? 'Live' : radioStateSource === 'poll' ? 'Polling' : 'Idle'}
+                    </span>
+                    {lastRadioStateUpdateAt ? (
+                      <span className="global-header-age">
+                        {Math.max(0, Math.floor((Date.now() - lastRadioStateUpdateAt) / 1000))}s ago
+                      </span>
+                    ) : null}
+                    {formatPowerLabel(assignedRadioState?.power) ? (
+                      <span className="pill">{formatPowerLabel(assignedRadioState?.power)} PWR</span>
+                    ) : null}
+                    <span className={`pill ${assignedRadio.radio.isConnected ? 'success' : 'error'}`}>
+                      {assignedRadio.radio.isConnected ? 'Connected' : 'Disconnected'}
+                    </span>
+                  </>
+                ) : (
+                  <span className="pill">No assignment</span>
+                )}
+              </div>
             </div>
 
             {assignedRadioError && <p className="global-ops-note error">{assignedRadioError}</p>}
@@ -4882,55 +5211,93 @@ function App() {
             ) : (
               <>
                 <div className="global-ops-summary">
-                  <strong>{assignedRadio.radio.name}</strong>
-                  <span>{formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency)} MHz</span>
-                  <span>{(assignedRadioState?.mode || assignedRadio.radio.mode || '---').toUpperCase()}</span>
-                  <span>{assignedRadioState?.power ?? assignedRadio.radio.power ?? '---'}W</span>
-                </div>
-
-                <div className="global-ops-controls">
-                  <div className="global-control-row">
-                    <input
-                      value={globalFrequencyInput}
-                      onChange={(e) => setGlobalFrequencyInput(e.target.value)}
-                      placeholder="MHz"
-                      aria-label="Frequency MHz"
-                    />
-                    <button className="btn small" onClick={setAssignedFrequency} disabled={globalControlBusy}>
-                      Set Freq
-                    </button>
-                  </div>
-
-                  <div className="global-control-row">
-                    <select
-                      value={globalModeInput}
-                      onChange={async (e) => {
-                        const mode = e.target.value
-                        setGlobalModeInput(mode)
-                        await setAssignedMode(mode)
-                      }}
-                      aria-label="Mode"
+                  <span className="global-frequency-readout" aria-label="Frequency quick controls">
+                    <button
+                      className="btn-icon global-tune-btn"
+                      onClick={() => nudgeAssignedFrequency(-globalTuneStepHz)}
+                      disabled={globalControlBusy}
+                      aria-label={`Tune down ${globalTuneStepHz} Hz`}
+                      title={`Tune down ${globalTuneStepHz} Hz`}
                     >
-                      {RADIO_MODE_OPTIONS.map((mode) => (
-                        <option key={mode} value={mode}>
-                          {mode}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={globalPowerInput}
-                      onChange={(e) => setGlobalPowerInput(Number(e.target.value || 0))}
-                      aria-label="Power watts"
-                    />
-                    <button className="btn small" onClick={setAssignedPower} disabled={globalControlBusy}>
-                      Set W
+                      −
+                    </button>
+                    {globalControlEditing.frequency ? (
+                      <input
+                        className="global-frequency-inline-input"
+                        value={globalFrequencyInput}
+                        onChange={(e) => setGlobalFrequencyInput(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            await commitAssignedFrequencyInline()
+                            return
+                          }
+                          if (e.key === 'Escape') {
+                            e.preventDefault()
+                            setGlobalControlEditing((prev) => ({ ...prev, frequency: false }))
+                            setGlobalFrequencyInput(
+                              formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio?.radio?.frequency),
+                            )
+                          }
+                        }}
+                        onBlur={commitAssignedFrequencyInline}
+                        autoFocus
+                        aria-label="Edit frequency MHz"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="global-frequency-value-btn"
+                        onClick={() => {
+                          setGlobalControlEditing((prev) => ({ ...prev, frequency: true }))
+                          setGlobalFrequencyInput(
+                            formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio?.radio?.frequency),
+                          )
+                        }}
+                        aria-label="Edit frequency"
+                        title="Click to edit frequency"
+                      >
+                        {formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency)} MHz
+                      </button>
+                    )}
+                    <button
+                      className="btn-icon global-tune-btn"
+                      onClick={() => nudgeAssignedFrequency(globalTuneStepHz)}
+                      disabled={globalControlBusy}
+                      aria-label={`Tune up ${globalTuneStepHz} Hz`}
+                      title={`Tune up ${globalTuneStepHz} Hz`}
+                    >
+                      +
+                    </button>
+                    {assignedBandwidthLabel ? <span className="global-bandwidth-info">{assignedBandwidthLabel}</span> : null}
+                  </span>
+                  <div className="global-selector-row global-selector-row-inline" role="group" aria-label="Operator quick selectors">
+                    <button
+                      type="button"
+                      className={`global-selector-card ${globalOpsPicker === 'band' ? 'active' : ''}`}
+                      onClick={() => setGlobalOpsPicker((prev) => (prev === 'band' ? null : 'band'))}
+                    >
+                      <span className="global-selector-label">Band</span>
+                      <span className="global-selector-value">{frequencyToBandLabel(assignedRadioState?.frequency)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`global-selector-card ${globalOpsPicker === 'mode' ? 'active' : ''}`}
+                      onClick={() => setGlobalOpsPicker((prev) => (prev === 'mode' ? null : 'mode'))}
+                    >
+                      <span className="global-selector-label">Mode</span>
+                      <span className="global-selector-value">{globalModeInput}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`global-selector-card ${globalOpsPicker === 'step' ? 'active' : ''}`}
+                      onClick={() => setGlobalOpsPicker((prev) => (prev === 'step' ? null : 'step'))}
+                    >
+                      <span className="global-selector-label">Step</span>
+                      <span className="global-selector-value">{globalTuneStepHz}Hz</span>
                     </button>
                   </div>
-
-                  <div className="global-control-row actions">
+                  <div className="global-summary-actions">
                     <button
                       className={`btn small ${assignedRadioState?.ptt ? 'danger' : 'primary'}`}
                       onClick={toggleAssignedPtt}
@@ -4938,13 +5305,72 @@ function App() {
                     >
                       {assignedRadioState?.ptt ? 'TX' : 'RX'}
                     </button>
-                    <button className="btn small secondary" onClick={() => fetchAssignedRadio()} disabled={globalControlBusy}>
-                      Refresh
-                    </button>
                     <button className="btn small secondary" onClick={() => handleViewChange('rig')}>
                       Open Rig
                     </button>
                   </div>
+                </div>
+
+                <div className="global-ops-controls">
+                  {globalOpsPicker === 'band' && (
+                    <div className="global-control-row global-control-row-compact">
+                      <div className="global-band-pills" role="group" aria-label="Band selection">
+                        {BAND_PRESETS.map((band) => (
+                          <button
+                            key={band.label}
+                            type="button"
+                            className="quick-btn"
+                            onClick={async () => {
+                              await setAssignedBand(band.frequencyHz)
+                            }}
+                            disabled={globalControlBusy}
+                          >
+                            {band.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {globalOpsPicker === 'mode' && (
+                    <div className="global-control-row global-control-row-compact">
+                      <div className="global-mode-pills" role="group" aria-label="Operator modes">
+                        {OPERATOR_MODE_OPTIONS.map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            className={`quick-btn ${globalModeInput === mode ? 'active' : ''}`}
+                            onClick={async () => {
+                              setGlobalModeInput(mode)
+                              await setAssignedMode(mode)
+                            }}
+                            disabled={globalControlBusy}
+                          >
+                            {mode}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {globalOpsPicker === 'step' && (
+                    <div className="global-control-row global-control-row-compact">
+                      <div className="global-step-pills" role="group" aria-label="Tune step">
+                        {TUNE_STEP_OPTIONS.map((step) => (
+                          <button
+                            key={step}
+                            type="button"
+                            className={`quick-btn ${globalTuneStepHz === step ? 'active' : ''}`}
+                            onClick={() => setGlobalTuneStepHz(step)}
+                            disabled={globalControlBusy}
+                          >
+                            {step}Hz
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               </>
             )}

@@ -569,6 +569,19 @@ main {
   gap: var(--space-sm);
 }
 
+.global-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.global-header-age {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 .global-ops-bar-header h3 {
   margin: 0;
   font-size: 0.78rem;
@@ -583,6 +596,48 @@ main {
   flex-wrap: wrap;
   align-items: center;
   font-size: 0.78rem;
+}
+
+.global-frequency-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-frequency-value-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.global-frequency-value-btn:hover {
+  background: var(--surface-muted);
+}
+
+.global-frequency-inline-input {
+  width: 118px;
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-bandwidth-info {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  margin-left: 2px;
+}
+
+.global-summary-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .global-ops-summary strong {
@@ -601,10 +656,132 @@ main {
   align-items: center;
 }
 
+.global-control-row-compact {
+  flex-wrap: wrap;
+}
+
 .global-control-row input,
 .global-control-row select {
   min-height: 30px;
   font-size: 0.8rem;
+}
+
+.global-control-row-compact input {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+
+.global-frequency-row {
+  display: grid;
+  grid-template-columns: 34px minmax(120px, 210px) 34px auto;
+  align-items: center;
+  justify-content: start;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.global-frequency-row input {
+  min-width: 0;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-tune-btn {
+  min-width: 30px;
+  min-height: 30px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.global-step-select {
+  max-width: 86px;
+}
+
+.global-step-pills,
+.global-mode-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.global-selector-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(92px, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+
+.global-selector-row-inline {
+  width: auto;
+  margin-left: auto;
+  min-width: 264px;
+}
+
+.global-selector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 42px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.global-selector-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.global-selector-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.global-selector-value {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.global-band-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.global-mode-group-row {
+  align-items: flex-start;
+}
+
+.global-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.global-mode-group-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.global-step-pills .quick-btn,
+.global-mode-pills .quick-btn,
+.global-band-pills .quick-btn {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 0.72rem;
+}
+
+.global-step-pills {
+  margin-right: 4px;
 }
 
 .global-control-row input[type='number'] {
@@ -792,6 +969,33 @@ main {
     margin: var(--space-sm);
     grid-template-columns: 1fr;
     backdrop-filter: none;
+  }
+
+  .global-tune-btn {
+    min-width: 36px;
+    min-height: 36px;
+    font-size: 1rem;
+  }
+
+  .global-frequency-row {
+    grid-template-columns: 40px minmax(120px, 1fr) 40px auto;
+    width: 100%;
+  }
+
+  .global-frequency-inline-input {
+    width: 128px;
+  }
+
+  .global-control-row-compact input,
+  .global-control-row-compact select,
+  .global-control-row-compact .btn.small {
+    min-height: 38px;
+  }
+
+  .global-selector-row-inline {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
   }
 }
 

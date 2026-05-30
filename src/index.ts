@@ -3065,13 +3065,62 @@ app.post('/api/radios/:id/stop', async (req, res) => {
 // Test radio connection (existing radio)
 app.post('/api/radios/:id/test', async (req, res) => {
   try {
-    const client = radioManager.getClient(req.params.id);
+    let client = radioManager.getClient(req.params.id);
+    let tempClient: any = null;
+
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      const radio = await prisma.radioConnection.findUnique({
+        where: { id: req.params.id },
+      });
+
+      if (!radio) {
+        return res.status(404).json({ error: 'Radio not found' });
+      }
+
+      const { HamlibClient, MockHamlibClient } = await import('./hamlib');
+      tempClient = (radio.connectionType === 'mock')
+        ? new MockHamlibClient({
+            frequency: radio.frequency || undefined,
+            mode: radio.mode || undefined,
+            bandwidth: radio.bandwidth || undefined,
+            power: radio.power || undefined,
+          })
+        : new HamlibClient(radio.host, Number(radio.port));
+
+      const connected = await tempClient.connect();
+      if (!connected) {
+        tempClient.disconnect();
+        return res.status(400).json({
+          error: 'Failed to connect to rigctld server. Check host/port and ensure rigctld is running.',
+        });
+      }
+
+      client = tempClient;
+    }
+
+    if (!client) {
+      return res.status(500).json({ error: 'Unable to initialize radio client for test' });
     }
 
     const state = await client.getState();
     const info = await client.getInfo();
+
+    await prisma.radioConnection.update({
+      where: { id: req.params.id },
+      data: {
+        frequency: state.frequency,
+        mode: state.mode,
+        bandwidth: state.bandwidth,
+        power: state.power,
+        lastSeen: new Date(),
+        lastError: null,
+      },
+    });
+
+    if (tempClient) {
+      tempClient.disconnect();
+    }
+
     return res.json({ success: true, state, info });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -3103,14 +3152,29 @@ async function assertRadioControlAccess(req: AuthRequest, res: express.Response,
   return assignment;
 }
 
+async function getOrStartRadioClient(radioId: string) {
+  let client = radioManager.getClient(radioId);
+  if (client) {
+    return client;
+  }
+
+  const started = await radioManager.startRadio(radioId);
+  if (!started) {
+    return null;
+  }
+
+  client = radioManager.getClient(radioId);
+  return client || null;
+}
+
 app.get('/api/radios/:id/state', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const assignment = await assertRadioControlAccess(req, res, req.params.id);
     if (!assignment) return;
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
 
     const state = await client.getState();
@@ -3125,14 +3189,14 @@ app.post('/api/radios/:id/frequency', authMiddleware as express.RequestHandler, 
     const assignment = await assertRadioControlAccess(req, res, req.params.id);
     if (!assignment) return;
 
-    const { frequencyHz } = req.body;
+    const frequencyHz = req.body?.frequencyHz ?? req.body?.frequency;
     if (!frequencyHz) {
       return res.status(400).json({ error: 'frequencyHz is required' });
     }
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
 
     const success = await client.setFrequency(String(frequencyHz));
@@ -3147,14 +3211,20 @@ app.post('/api/radios/:id/mode', authMiddleware as express.RequestHandler, async
     const assignment = await assertRadioControlAccess(req, res, req.params.id);
     if (!assignment) return;
 
-    const { mode, bandwidth } = req.body;
-    if (!mode || bandwidth === undefined) {
+    const mode = req.body?.mode;
+    let bandwidth = req.body?.bandwidth;
+    if (!mode) {
       return res.status(400).json({ error: 'mode and bandwidth are required' });
     }
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
+    }
+
+    if (bandwidth === undefined || bandwidth === null) {
+      const currentState = await client.getState();
+      bandwidth = currentState.bandwidth ?? 3000;
     }
 
     const success = await client.setMode(String(mode), Number(bandwidth));
@@ -3174,9 +3244,9 @@ app.post('/api/radios/:id/power', authMiddleware as express.RequestHandler, asyn
       return res.status(400).json({ error: 'power is required' });
     }
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
 
     const success = await client.setPower(Number(power));
@@ -3196,9 +3266,9 @@ app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async 
       return res.status(400).json({ error: 'enabled is required' });
     }
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
 
     const success = await client.setPtt(Boolean(enabled));
@@ -3242,9 +3312,9 @@ app.post('/api/radios/:id/vfo', authMiddleware as express.RequestHandler, async 
       return res.status(400).json({ error: 'vfo is required' });
     }
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
 
     const success = await client.setVfo(String(vfo));
@@ -3264,9 +3334,9 @@ app.post('/api/radios/:id/raw', authMiddleware as express.RequestHandler, async 
       return res.status(400).json({ error: 'command is required' });
     }
 
-    const client = radioManager.getClient(req.params.id);
+    const client = await getOrStartRadioClient(req.params.id);
     if (!client) {
-      return res.status(400).json({ error: 'Radio not connected. Start it first.' });
+      return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
 
     const response = await client.sendRaw(String(command));
