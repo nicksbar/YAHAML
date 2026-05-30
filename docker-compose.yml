@@ -1,10 +1,9 @@
-version: "3.9"
-
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile.api
+    restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -18,15 +17,16 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "3000:3000"
-      - "10000:10000"
-      - "2237:2237/udp"
+      - "${YAHAML_API_PORT:-3000}:3000"
+      - "${YAHAML_RELAY_PORT:-10000}:10000"
+      - "${YAHAML_UDP_PORT:-2237}:2237/udp"
 
   ui:
     build:
       context: ./ui
       dockerfile: Dockerfile
+    restart: unless-stopped
     depends_on:
       - api
     ports:
-      - "80:80"
+      - "${YAHAML_UI_PORT:-80}:80"
