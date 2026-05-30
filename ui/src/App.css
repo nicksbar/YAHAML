@@ -134,6 +134,101 @@
   box-shadow: 0 0 0 1px #2dd4bf, 0 10px 24px rgba(0, 0, 0, 0.35);
 }
 
+.theme-ham .global-ops-bar {
+  border-color: #2d4556;
+  background:
+    linear-gradient(180deg, rgba(9, 16, 22, 0.92), rgba(10, 17, 24, 0.92)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(45, 212, 191, 0.04) 0,
+      rgba(45, 212, 191, 0.04) 1px,
+      transparent 1px,
+      transparent 12px
+    );
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.36), inset 0 0 0 1px rgba(45, 212, 191, 0.12);
+}
+
+.theme-ham .global-ops-bar-section {
+  background: linear-gradient(180deg, #101c24, #0d171f);
+  border-color: #2d4556;
+}
+
+.theme-ham .global-ops-bar-header h3,
+.theme-ham .global-mode-group-label,
+.theme-ham .global-selector-label {
+  color: #8dc2d0;
+}
+
+.theme-ham .global-frequency-readout {
+  background: rgba(6, 12, 16, 0.7);
+  border: 1px solid #2d4556;
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.theme-ham .global-frequency-value-btn {
+  color: #b6fff4;
+  letter-spacing: 0.08em;
+  font-family: 'Roboto Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 1rem;
+  text-shadow: 0 0 10px rgba(45, 212, 191, 0.35);
+}
+
+.theme-ham .global-frequency-value-btn:hover {
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.theme-ham .global-frequency-inline-input,
+.theme-ham .global-control-row input,
+.theme-ham .global-control-row select {
+  background: #0a131a;
+  border-color: #36566a;
+  color: #d8f5ff;
+}
+
+.theme-ham .global-bandwidth-info,
+.theme-ham .global-header-age,
+.theme-ham .global-audio-inline-label,
+.theme-ham .global-audio-inline-value {
+  color: #8ba7b7;
+}
+
+.theme-ham .global-selector-card {
+  background: linear-gradient(180deg, #0f1a22, #0b141b);
+  border-color: #2d4556;
+}
+
+.theme-ham .global-selector-card.active {
+  border-color: #2dd4bf;
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.75), 0 0 14px rgba(45, 212, 191, 0.24);
+}
+
+.theme-ham .global-step-pills .quick-btn,
+.theme-ham .global-mode-pills .quick-btn,
+.theme-ham .global-band-pills .quick-btn,
+.theme-ham .global-tune-btn {
+  background: linear-gradient(180deg, #13232f, #0f1c26);
+  border-color: #2f4d60;
+  color: #d8f5ff;
+}
+
+.theme-ham .global-step-pills .quick-btn:hover,
+.theme-ham .global-mode-pills .quick-btn:hover,
+.theme-ham .global-band-pills .quick-btn:hover,
+.theme-ham .global-tune-btn:hover {
+  border-color: #2dd4bf;
+  color: #7df7e5;
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.25);
+}
+
+.theme-ham .global-step-pills .quick-btn.active,
+.theme-ham .global-mode-pills .quick-btn.active,
+.theme-ham .global-band-pills .quick-btn.active {
+  background: linear-gradient(180deg, #178f83, #0f6d65);
+  color: #ebfffc;
+  border-color: #2dd4bf;
+}
+
 /* ============================================================================
    CORE LAYOUT
    ============================================================================ */
