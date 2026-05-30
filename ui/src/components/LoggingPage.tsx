@@ -24,7 +24,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const [assignedRadio, setAssignedRadio] = useState<any | null>(null)
   const [radioState, setRadioState] = useState<any | null>(null)
   const [radioError, setRadioError] = useState<string | null>(null)
-  const [ws, setWs] = useState<WebSocket | null>(null)
   const [radioAudioMuted, setRadioAudioMuted] = useState(() => localStorage.getItem('yahaml:radioAudioMuted') === 'true')
   const [radioAudioVolume, setRadioAudioVolume] = useState(() => {
     const raw = Number(localStorage.getItem('yahaml:radioAudioVolume') || '100')
@@ -1123,8 +1122,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     websocket.onclose = () => {
       console.log('WebSocket disconnected')
     }
-
-    setWs(websocket)
 
     return () => {
       isDisposing = true

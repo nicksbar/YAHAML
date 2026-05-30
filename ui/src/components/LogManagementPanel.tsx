@@ -174,29 +174,30 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
 
       <div className="log-mgmt-filters">
         <input
+          data-testid="log-mgmt-filter-callsign"
           value={callsignFilter}
           onChange={(e) => setCallsignFilter(e.target.value.toUpperCase())}
           placeholder="Filter callsign (e.g. W1AW)"
         />
-        <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        <input data-testid="log-mgmt-filter-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+        <input data-testid="log-mgmt-filter-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
       </div>
 
       <div className="log-mgmt-actions">
         <button className="btn secondary" onClick={selectFiltered} disabled={!filteredEntries.length || applying}>
           Select filtered ({filteredEntries.length})
         </button>
-        <button className="btn secondary" onClick={clearSelection} disabled={!selectedCount || applying}>
+        <button className="btn secondary" data-testid="log-mgmt-clear-selection" onClick={clearSelection} disabled={!selectedCount || applying}>
           Clear selection
         </button>
-        <span className="selection-count">Selected: {selectedCount}</span>
+        <span className="selection-count" data-testid="log-mgmt-selected-count">Selected: {selectedCount}</span>
       </div>
 
       <div className="log-mgmt-bulk">
-        <input value={bulkBand} onChange={(e) => setBulkBand(e.target.value)} placeholder="Set band (e.g. 20m)" />
-        <input value={bulkMode} onChange={(e) => setBulkMode(e.target.value)} placeholder="Set mode (e.g. CW)" />
-        <input value={bulkPower} onChange={(e) => setBulkPower(e.target.value)} placeholder="Set power (W)" type="number" min="0" />
-        <button className="btn primary" onClick={applyBulkUpdate} disabled={applying || !selectedCount}>
+        <input data-testid="log-mgmt-bulk-band" value={bulkBand} onChange={(e) => setBulkBand(e.target.value)} placeholder="Set band (e.g. 20m)" />
+        <input data-testid="log-mgmt-bulk-mode" value={bulkMode} onChange={(e) => setBulkMode(e.target.value)} placeholder="Set mode (e.g. CW)" />
+        <input data-testid="log-mgmt-bulk-power" value={bulkPower} onChange={(e) => setBulkPower(e.target.value)} placeholder="Set power (W)" type="number" min="0" />
+        <button className="btn primary" data-testid="log-mgmt-apply" onClick={applyBulkUpdate} disabled={applying || !selectedCount}>
           {applying ? 'Applying…' : 'Apply to selected'}
         </button>
       </div>
@@ -206,14 +207,15 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
         {contestId ? (
           <>
             <a className="btn secondary" href={adifExportUrl}>ADIF</a>
-            <a className="btn secondary" href={cabrilloExportUrl}>Cabrillo</a>
+            <a className="btn secondary" data-testid="log-mgmt-export-adif" href={adifExportUrl}>ADIF</a>
+            <a className="btn secondary" data-testid="log-mgmt-export-cabrillo" href={cabrilloExportUrl}>Cabrillo</a>
           </>
         ) : (
           <span className="log-mgmt-muted">Select an active contest to enable export links.</span>
         )}
       </div>
 
-      {status && <div className="log-mgmt-status">{status}</div>}
+      {status && <div className="log-mgmt-status" data-testid="log-mgmt-status">{status}</div>}
       {error && <div className="log-mgmt-error">{error}</div>}
 
       <div className="log-mgmt-table-wrap">
@@ -233,6 +235,7 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
               <tr key={entry.id}>
                 <td>
                   <input
+                    data-testid={`log-mgmt-select-${entry.id}`}
                     type="checkbox"
                     checked={selectedIds.has(entry.id)}
                     onChange={() => toggleSelected(entry.id)}
