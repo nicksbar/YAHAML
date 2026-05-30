@@ -30,4 +30,4 @@ COPY package.json package-lock.json ./
 
 EXPOSE 3000 10000 2237
 
-CMD ["sh", "-c", "if [ \"${PRISMA_MIGRATE:-deploy}\" = \"push\" ]; then npx prisma db push --schema ${PRISMA_SCHEMA}; else npx prisma migrate deploy --schema ${PRISMA_SCHEMA}; fi && node dist/index.js"]
+CMD ["sh", "-c", "set -e; if [ \"${PRISMA_MIGRATE:-deploy}\" = \"push\" ]; then for i in $(seq 1 30); do npx prisma db push --schema ${PRISMA_SCHEMA} && break; echo \"[startup] prisma db push failed (attempt $i/30), retrying in 2s...\"; sleep 2; if [ \"$i\" -eq 30 ]; then echo \"[startup] prisma db push failed after retries\"; exit 1; fi; done; else for i in $(seq 1 30); do npx prisma migrate deploy --schema ${PRISMA_SCHEMA} && break; echo \"[startup] prisma migrate deploy failed (attempt $i/30), retrying in 2s...\"; sleep 2; if [ \"$i\" -eq 30 ]; then echo \"[startup] prisma migrate deploy failed after retries\"; exit 1; fi; done; fi; node dist/index.js"]

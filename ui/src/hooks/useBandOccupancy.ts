@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export interface BandOccupancyEntry {
   band: string;
@@ -21,7 +21,7 @@ export function useBandOccupancy(contestId?: string) {
   const [error, setError] = useState<string | null>(null);
 
   // Fetch function
-  const fetchOccupancy = async () => {
+  const fetchOccupancy = useCallback(async () => {
     try {
       const url = contestId 
         ? `/api/band-occupancy?contestId=${contestId}`
@@ -33,11 +33,11 @@ export function useBandOccupancy(contestId?: string) {
       const data = await response.json();
       setOccupancy(data);
       setLoading(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch band occupancy');
       setLoading(false);
     }
-  };
+  }, [contestId]);
 
   useEffect(() => {
     fetchOccupancy();
@@ -125,7 +125,7 @@ export function useBandOccupancy(contestId?: string) {
         ws.close();
       }
     };
-  }, [contestId]);
+  }, [contestId, fetchOccupancy]);
 
   return { occupancy, loading, error };
 }

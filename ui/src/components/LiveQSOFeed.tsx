@@ -49,7 +49,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
     notes: '',
   })
 
-  const parseRawPayload = (rawPayload?: string | Record<string, any> | null): { exchange?: Record<string, string>; notes?: string } => {
+  const parseRawPayload = (rawPayload?: string | Record<string, unknown> | null): { exchange?: Record<string, string>; notes?: string } => {
     if (!rawPayload) return {}
     if (typeof rawPayload === 'object') {
       return rawPayload as { exchange?: Record<string, string>; notes?: string }
@@ -95,7 +95,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
 
   const saveEdit = async (id: string) => {
     const token = localStorage.getItem('yahaml:sessionToken')
-    const payload: Record<string, any> = {
+    const payload: Record<string, string | number | Record<string, string> | null> = {
       callsign: editForm.callsign.toUpperCase(),
       band: editForm.band,
       mode: editForm.mode.toUpperCase(),
@@ -145,6 +145,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
 
   useEffect(() => {
     let isMounted = true
+    let isDisposing = false
 
     const fetchQSOs = async () => {
       try {
@@ -153,7 +154,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
           : `/api/qso-logs?limit=${maxEntries}`
 
         let response = await fetch(primaryUrl)
-        let data: any[] = []
+        let data: QSOLogEntry[] = []
 
         if (!response.ok && contestId) {
           // Fallback path for compatibility: fetch all and filter client-side
@@ -162,12 +163,15 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
             throw new Error(`Failed to fetch QSOs (${response.status})`)
           }
           const fallback = await response.json()
-          data = (Array.isArray(fallback) ? fallback : []).filter((qso) => qso.contestId === contestId)
+          data = (Array.isArray(fallback) ? fallback : []).filter((qso): qso is QSOLogEntry => {
+            return typeof qso === 'object' && qso !== null && 'id' in qso && 'contestId' in qso && (qso as QSOLogEntry).contestId === contestId
+          })
         } else {
           if (!response.ok) {
             throw new Error(`Failed to fetch QSOs (${response.status})`)
           }
-          data = await response.json()
+          const json = await response.json()
+          data = Array.isArray(json) ? (json as QSOLogEntry[]) : []
         }
 
         if (isMounted) {
@@ -214,10 +218,18 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
       }
     }
 
+    ws.onerror = () => {
+      if (isDisposing || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        return
+      }
+      // Avoid noisy console spam from Vite/React strict-mode mount/unmount cycles.
+    }
+
     // Refresh every 5 seconds
     const timer = setInterval(fetchQSOs, 5000)
     return () => {
       isMounted = false
+      isDisposing = true
       clearInterval(timer)
       if (ws.readyState === WebSocket.OPEN && contestId) {
         ws.send(
@@ -227,7 +239,9 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
           })
         )
       }
-      ws.close()
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close()
+      }
     }
   }, [maxEntries, contestId])
 

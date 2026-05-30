@@ -25,7 +25,7 @@
     "test:full": "npm test -- --runInBand && npm run test:browser",
     "relay": "ts-node scripts/n3fjp_mitm_relay.ts",
     "relay:default": "ts-node scripts/n3fjp_mitm_relay.ts 2000 localhost 1000",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts --max-warnings 0 && npm --prefix ui run lint"
   },
   "keywords": [
     "field-day",

@@ -254,8 +254,20 @@ test.describe('operator browser workflows', () => {
     await openLoggingPage(page)
 
     await page.getByTestId('contact-callsign-input').fill('W1AW')
-    await page.getByTestId('band-input').fill('20m')
-    await page.getByTestId('mode-input').fill('CW')
+    const qsoForm = page.getByTestId('qso-entry-form')
+    const preferredBandButton = qsoForm.getByTestId('band-quick-20m')
+    if (await preferredBandButton.count()) {
+      await preferredBandButton.click()
+    } else {
+      await qsoForm.locator('[data-testid^="band-quick-"]').first().click()
+    }
+
+    const preferredModeButton = qsoForm.getByTestId('mode-quick-cw')
+    if (await preferredModeButton.count()) {
+      await preferredModeButton.click()
+    } else {
+      await qsoForm.locator('[data-testid^="mode-quick-"]').first().click()
+    }
     await page.getByTestId('rst-input').fill('599')
     await page.getByTestId('power-input').fill('100')
     await page.getByTestId('exchange-field-class').fill('2A')
@@ -292,5 +304,64 @@ test.describe('operator browser workflows', () => {
       .toBeGreaterThan(0)
 
     await expect(page.getByTestId('recent-contacts-list')).toContainText('W1AW')
+  })
+
+  test('enables HAM console theme mode', async ({ page, request }) => {
+    await bootstrapFieldDayScenario(page, request)
+
+    const hamToggle = page.getByRole('button', { name: '📻' })
+    await expect(hamToggle).toBeVisible()
+    await hamToggle.click()
+
+    await expect
+      .poll(async () => page.evaluate(() => document.documentElement.classList.contains('theme-ham')))
+      .toBeTruthy()
+  })
+
+  test('supports bulk updates from log management panel', async ({ page, request }) => {
+    await bootstrapFieldDayScenario(page, request)
+
+    await openLoggingPage(page)
+
+    const qsoForm = page.getByTestId('qso-entry-form')
+    await page.getByTestId('contact-callsign-input').fill('K1MGT')
+
+    const preferredBandButton = qsoForm.getByTestId('band-quick-20m')
+    if (await preferredBandButton.count()) {
+      await preferredBandButton.click()
+    } else {
+      await qsoForm.locator('[data-testid^="band-quick-"]').first().click()
+    }
+
+    const preferredModeButton = qsoForm.getByTestId('mode-quick-cw')
+    if (await preferredModeButton.count()) {
+      await preferredModeButton.click()
+    } else {
+      await qsoForm.locator('[data-testid^="mode-quick-"]').first().click()
+    }
+
+    await page.getByTestId('rst-input').fill('599')
+    await page.getByTestId('exchange-field-class').fill('2A')
+    await page.getByTestId('exchange-field-section').fill('EMA')
+    await page.getByTestId('exchange-field-power').fill('LOW')
+    await page.getByTestId('submit-qso-button').click()
+    await expect(page.getByText(/QSO logged successfully!/)).toBeVisible()
+
+    await page.reload()
+    await openLoggingPage(page)
+
+    await page.getByTestId('log-mgmt-filter-callsign').fill('K1MGT')
+    const managedRow = page.locator('.log-mgmt-table tbody tr').filter({ hasText: 'K1MGT' }).first()
+    await expect(managedRow).toBeVisible()
+    await managedRow.locator('input[type="checkbox"]').click()
+    await expect(page.getByTestId('log-mgmt-selected-count')).toContainText('Selected: 1')
+
+    await page.getByTestId('log-mgmt-bulk-mode').fill('RTTY')
+    await page.getByTestId('log-mgmt-apply').click()
+    await expect(page.getByTestId('log-mgmt-status')).toContainText('Bulk update complete')
+
+    const updatedEntry = page.getByTestId('qso-feed-entry').filter({ hasText: 'K1MGT' }).first()
+    await expect(updatedEntry).toContainText('RTTY')
+    await expect(page.getByTestId('log-mgmt-export-adif')).toBeVisible()
   })
 })

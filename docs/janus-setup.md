@@ -179,8 +179,12 @@ sudo /opt/janus/bin/janus \
 ```
 
 Janus will run on:
-- WebRTC: `wss://rpi-ip:8889`
-- HTTP API: `http://rpi-ip:7088`
+- HTTP API: `http://rpi-ip:8088/janus`
+- WebSocket API: `ws://rpi-ip:8188`
+- Admin API (if enabled): `http://rpi-ip:7088/admin`
+
+> ✅ **YAHAML tested path:** `http://<rpi-ip>:8088/janus` and `ws://<rpi-ip>:8188`.
+> If TLS listeners are not configured, do **not** use `https://:8089` or `wss://:8989`.
 
 ### 7. Docker Alternative
 
@@ -255,9 +259,99 @@ curl -X POST http://rpi-ip:7088/admin \
 
 ## Troubleshooting
 
+### Known-good RPi publisher service (recommended)
+
+Use a dedicated systemd service to inject ALSA audio into AudioBridge via RTP.
+
+`/etc/systemd/system/pi-janus-rtp-publisher.service`
+
+```ini
+[Unit]
+Description=Pi Janus RTP Publisher (ALSA -> Janus AudioBridge)
+After=network-online.target janus.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pi-janus-rtp-publisher.py
+Restart=always
+RestartSec=3
+Environment=JANUS_URL=http://127.0.0.1:8088/janus
+Environment=JANUS_ROOM_ID=1234
+Environment=JANUS_DISPLAY=PiRTPIngest
+Environment=ALSA_DEVICE=radio_in
+Environment=RTP_CODEC=opus
+Environment=OPUS_BITRATE=48000
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Apply and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-janus-rtp-publisher.service
+```
+
+Verify effective environment and runtime codec:
+
+```bash
+sudo systemctl show pi-janus-rtp-publisher.service -p Environment
+ps -ef | grep -E 'pi-janus-rtp-publisher|ffmpeg -hide_banner' | grep -v grep
+```
+
+You should see ffmpeg using `libopus` and payload type `100`.
+
+### 🔍 No audio but packets in browser
+
+If YAHAML shows connected ICE/PC and packet counters rise but you hear silence:
+
+1. **Confirm raw capture is non-silent** (on Pi)
+
+```bash
+sudo systemctl stop pi-janus-rtp-publisher.service
+timeout 10 ffmpeg -hide_banner -loglevel info \
+  -f alsa -i hw:CARD=CODEC,DEV=0 -t 5 \
+  -af "pan=mono|c0=c0,astats=metadata=1:reset=1" -f null -
+sudo systemctl start pi-janus-rtp-publisher.service
+```
+
+If RMS is around e.g. `-24 dB`, radio input is present.
+
+2. **Confirm Janus room participants**
+
+```bash
+python3 - <<'PY'
+import json, urllib.request, time, random, string
+base='http://127.0.0.1:8088/janus'
+def tx(): return f"diag-{int(time.time()*1000)}-{''.join(random.choice(string.ascii_lowercase) for _ in range(5))}"
+def post(url,obj):
+    req=urllib.request.Request(url,data=json.dumps(obj).encode(),headers={'Content-Type':'application/json'})
+    with urllib.request.urlopen(req,timeout=5) as r: return json.loads(r.read().decode())
+c=post(base,{'janus':'create','transaction':tx()}); sid=c['data']['id']
+a=post(f'{base}/{sid}',{'janus':'attach','plugin':'janus.plugin.audiobridge','transaction':tx()}); hid=a['data']['id']
+p=post(f'{base}/{sid}/{hid}',{'janus':'message','body':{'request':'listparticipants','room':1234},'transaction':tx()})
+print(json.dumps(p.get('plugindata',{}).get('data',{}).get('participants',[]), indent=2))
+post(f'{base}/{sid}/{hid}',{'janus':'detach','transaction':tx()}); post(f'{base}/{sid}',{'janus':'destroy','transaction':tx()})
+PY
+```
+
+3. **Prefer Opus ingest**
+
+PCMU can work, but Opus (`RTP_CODEC=opus`) has been more reliable in our field setup.
+
+4. **Check browser mute/output path**
+
+- Unmute YAHAML radio control.
+- Confirm tab/site is allowed to autoplay audio.
+- Verify OS output device is correct.
+
 **No audio from Janus:**
-- Check ALSA device: `amixer -c 0`
-- Test recording: `arecord -D radio -f S16_LE -r 48000 test.wav`
+- Check ALSA device: `arecord -l`
+- Check active ingest process: `ps -ef | grep -E 'pi-janus-rtp-publisher|ffmpeg' | grep -v grep`
+- Test raw capture RMS (with publisher stopped):
+  `ffmpeg -f alsa -i hw:CARD=CODEC,DEV=0 -t 5 -af "astats=metadata=1:reset=1" -f null -`
 - Check Janus logs: `tail -f /var/log/janus.log`
 
 **WebRTC connection fails:**
@@ -275,3 +369,22 @@ curl -X POST http://rpi-ip:7088/admin \
 - Janus GitHub: https://github.com/meetecho/janus-gateway
 - AudioBridge Plugin: https://janus.conf.meetecho.com/docs/AudioBridge
 - WebRTC Best Practices: https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API
+
+## Optional: passwordless SSH for Pi maintenance
+
+To avoid repeated password prompts:
+
+```bash
+ssh-keygen -t ed25519 -C "yahaml-admin"
+ssh-copy-id nick@<rpi-ip>
+ssh nick@<rpi-ip>
+```
+
+If desired, use an SSH config alias:
+
+```sshconfig
+Host yahaml-pi
+  HostName <rpi-ip>
+  User nick
+  IdentitiesOnly yes
+```

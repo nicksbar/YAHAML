@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 
 interface VoiceRoom {
   id: string
@@ -32,7 +32,6 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isMuted, setIsMuted] = useState(false)
-  const [micActive, setMicActive] = useState(false)
   const [volume, setVolume] = useState(100)
   const [isPTT, setIsPTT] = useState(false)
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -40,13 +39,20 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map())
   const remoteAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const wsRef = useRef<WebSocket | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
 
-  const getAuthHeaders = (): Record<string, string> =>
-    sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}
+  type SignalMessage = {
+    from: string
+    type: 'offer' | 'answer' | 'ice-candidate'
+    data: unknown
+  }
+
+  const getAuthHeaders = useCallback(
+    (): Record<string, string> => (sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+    [sessionToken]
+  )
 
   // Fetch available rooms
-  const fetchRooms = async () => {
+  const fetchRooms = useCallback(async () => {
     try {
       setLoading(true)
       const response = await fetch('/api/voice-rooms', {
@@ -61,7 +67,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
     } finally {
       setLoading(false)
     }
-  }
+  }, [getAuthHeaders])
 
   // Create peer connection for a remote participant
   const createPeerConnection = (peerId: string): RTCPeerConnection => {
@@ -156,14 +162,15 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   }
 
   // Handle signaling messages
-  const handleSignalMessage = async (message: any) => {
+  const handleSignalMessage = async (message: SignalMessage) => {
     const { from, type, data } = message
 
     switch (type) {
       case 'offer':
         {
+          if (!data || typeof data !== 'object') break
           const pc = createPeerConnection(from)
-          await pc.setRemoteDescription(new RTCSessionDescription(data))
+          await pc.setRemoteDescription(new RTCSessionDescription(data as RTCSessionDescriptionInit))
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
           
@@ -186,18 +193,20 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
 
       case 'answer':
         {
+          if (!data || typeof data !== 'object') break
           const pc = peerConnectionsRef.current.get(from)
           if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data))
+            await pc.setRemoteDescription(new RTCSessionDescription(data as RTCSessionDescriptionInit))
           }
         }
         break
 
       case 'ice-candidate':
         {
+          if (!data || typeof data !== 'object') break
           const pc = peerConnectionsRef.current.get(from)
-          if (pc && data) {
-            await pc.addIceCandidate(new RTCIceCandidate(data))
+          if (pc) {
+            await pc.addIceCandidate(new RTCIceCandidate(data as RTCIceCandidateInit))
           }
         }
         break
@@ -238,7 +247,6 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
           video: false,
         })
         localStreamRef.current = stream
-        setMicActive(true)
       }
 
       // Call join endpoint
@@ -260,7 +268,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
           setError(null)
 
           // Setup WebSocket for signaling
-          setupWebSocket(roomId)
+          setupWebSocket()
 
           // Create offers for existing peers
           if (data.peers && data.peers.length > 0) {
@@ -278,13 +286,12 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop())
         localStreamRef.current = null
-        setMicActive(false)
       }
     }
   }
 
   // Setup WebSocket connection
-  const setupWebSocket = (roomId: string) => {
+  const setupWebSocket = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const wsUrl = `${protocol}://${window.location.host}/ws${sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : ''}`
     const ws = new WebSocket(wsUrl)
@@ -370,7 +377,6 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
 
         setActiveRoom(null)
         setParticipants([])
-        setMicActive(false)
         setIsMuted(false)
         await fetchRooms()
       }
@@ -426,12 +432,15 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
 
   // Cleanup on unmount
   useEffect(() => {
+    const peerConnections = peerConnectionsRef.current
+    const remoteAudioEls = remoteAudioElsRef.current
+
     return () => {
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop())
       }
-      peerConnectionsRef.current.forEach((pc) => pc.close())
-      remoteAudioElsRef.current.forEach((audio) => {
+      peerConnections.forEach((pc) => pc.close())
+      remoteAudioEls.forEach((audio) => {
         audio.pause()
         audio.srcObject = null
         audio.remove()
@@ -447,7 +456,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
     fetchRooms()
     const interval = setInterval(fetchRooms, 5000)
     return () => clearInterval(interval)
-  }, [sessionToken])
+  }, [sessionToken, fetchRooms])
 
   if (!sessionToken) {
     return <div className="voice-room-panel-empty">Sign in to use voice rooms</div>

@@ -1,16 +1,21 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: yahaml
       POSTGRES_PASSWORD: yahaml
       POSTGRES_DB: yahaml
     volumes:
       - yahaml_pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Intentionally not publishing 5432 by default.
+    # API connects to db over the internal Docker network.
+    # If you need external access, add: "<host-port>:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   api:
     build:
@@ -18,8 +23,10 @@ services:
       dockerfile: Dockerfile.api
       args:
         PRISMA_SCHEMA: ./prisma/schema.postgres.prisma
+    restart: unless-stopped
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -33,18 +40,19 @@ services:
       UDP_HOST: 0.0.0.0
       OAUTH_ENABLED: "false"
     ports:
-      - "3000:3000"
-      - "10000:10000"
-      - "2237:2237/udp"
+      - "${YAHAML_API_PORT:-3000}:3000"
+      - "${YAHAML_RELAY_PORT:-10000}:10000"
+      - "${YAHAML_UDP_PORT:-2237}:2237/udp"
 
   ui:
     build:
       context: ./ui
       dockerfile: Dockerfile
+    restart: unless-stopped
     depends_on:
       - api
     ports:
-      - "80:80"
+      - "${YAHAML_UI_PORT:-80}:80"
 
 volumes:
   yahaml_pgdata:

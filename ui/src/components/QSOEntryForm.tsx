@@ -56,13 +56,19 @@ interface QSOEntryFormProps {
   stations: Station[]
   stationId: string
   activeContest?: Contest | null
+  radioDefaults?: {
+    band?: string
+    mode?: string
+    frequencyMHz?: string
+    power?: number | string | null
+  }
   onSubmit: (qso: QSOEntry) => Promise<void>
   onBandModeSelected?: (payload: { stationId: string; band: string; mode: string }) => void
   loading?: boolean
 }
 
 const QUICK_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '70cm']
-const QUICK_MODES = ['CW', 'SSB', 'PHONE', 'DIGITAL', 'FT8', 'RTTY', 'AM', 'FM']
+const QUICK_MODES = ['LSB', 'USB', 'CW', 'CWR', 'AM', 'FM', 'PKTUSB', 'RTTY']
 
 function normalizeBandValue(value: string): string {
   const trimmed = value.trim()
@@ -90,7 +96,7 @@ function parseMaybeJson<T>(value: T | string | null | undefined): T | undefined 
   }
 }
 
-export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onBandModeSelected, loading }: QSOEntryFormProps) {
+export function QSOEntryForm({ stationId, activeContest, radioDefaults, onSubmit, onBandModeSelected, loading }: QSOEntryFormProps) {
   const [contactCallsign, setContactCallsign] = useState('')
   const [band, setBand] = useState('')
   const [mode, setMode] = useState('')
@@ -102,7 +108,6 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
   const [errors, setErrors] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
 
-  const selectedStation = stations.find((s) => s.id === stationId)
   const validationRules = parseMaybeJson<ValidationRules>(activeContest?.template?.validationRules)
   const requiredFieldConfig = parseMaybeJson<RequiredFieldConfig>(activeContest?.template?.requiredFields)
   const allowedBands = validationRules?.bands || QUICK_BANDS
@@ -189,6 +194,30 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
     return () => clearTimeout(timer)
   }, [stationId, band, mode, onBandModeSelected])
 
+  useEffect(() => {
+    if (!radioDefaults) return
+
+    const nextBand = radioDefaults.band?.trim() || ''
+    const nextMode = radioDefaults.mode?.trim().toUpperCase() || ''
+    const nextFrequency = radioDefaults.frequencyMHz?.trim() || ''
+    const nextPower = radioDefaults.power === null || radioDefaults.power === undefined
+      ? ''
+      : String(radioDefaults.power)
+
+    if (nextBand) {
+      setBand((prev) => (prev === nextBand ? prev : nextBand))
+    }
+    if (nextMode) {
+      setMode((prev) => (prev === nextMode ? prev : nextMode))
+    }
+    if (nextFrequency) {
+      setFrequency((prev) => (prev === nextFrequency ? prev : nextFrequency))
+    }
+    if (nextPower) {
+      setPower((prev) => (prev === nextPower ? prev : nextPower))
+    }
+  }, [radioDefaults])
+
   return (
     <form className="qso-entry-form" onSubmit={handleSubmit} data-testid="qso-entry-form">
       <div className="qso-form-header">
@@ -220,12 +249,13 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
       )}
 
       {/* Contact Information */}
-      <div className="form-row">
-        <div className="form-group flex-1">
+      <div className="form-row callsign-row">
+        <div className="form-group callsign-group">
           <label htmlFor="contact">Contact Callsign</label>
           <input
             id="contact"
             type="text"
+            className="callsign-input"
             value={contactCallsign}
             onChange={(e) => setContactCallsign(e.target.value)}
             placeholder="e.g., K5ABC"
@@ -272,24 +302,12 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
                 className={`quick-btn ${band === b ? 'active' : ''}`}
                 onClick={() => setBand(b)}
                 disabled={submitting}
+                data-testid={`band-quick-${String(b).toLowerCase().replace(/\s+/g, '-')}`}
               >
                 {b}
               </button>
             ))}
           </div>
-          <input
-            list="band-options"
-            value={band}
-            onChange={(e) => setBand(e.target.value)}
-            placeholder="Manual band (e.g., 20m, 20, 70cm)"
-            disabled={submitting}
-            data-testid="band-input"
-          />
-          <datalist id="band-options">
-            {allowedBands.map((b) => (
-              <option key={b} value={b} />
-            ))}
-          </datalist>
         </div>
 
         <div className="form-group">
@@ -302,24 +320,12 @@ export function QSOEntryForm({ stations, stationId, activeContest, onSubmit, onB
                 className={`quick-btn ${mode === m ? 'active' : ''}`}
                 onClick={() => setMode(m)}
                 disabled={submitting}
+                data-testid={`mode-quick-${String(m).toLowerCase().replace(/\s+/g, '-')}`}
               >
                 {m}
               </button>
             ))}
           </div>
-          <input
-            list="mode-options"
-            value={mode}
-            onChange={(e) => setMode(e.target.value.toUpperCase())}
-            placeholder="Manual mode (e.g., CW, SSB, FT8)"
-            disabled={submitting}
-            data-testid="mode-input"
-          />
-          <datalist id="mode-options">
-            {allowedModes.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
         </div>
       </div>
 

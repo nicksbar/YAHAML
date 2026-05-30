@@ -193,12 +193,12 @@ export class HamlibClient {
     const response = await this.sendCommand('m');
     if (!response.success || !response.data) return null;
     
+    // rigctld returns mode and bandwidth on separate lines (USB\n2700\n).
+    // If both arrive in one TCP segment, split handles it; otherwise only mode arrives here.
     const parts = response.data.split('\n');
-    if (parts.length < 2) return null;
-    
-    const mode = parts[0].trim();
-    const bandwidth = parseInt(parts[1].trim()) || 0;
-    
+    const mode = parts[0]?.trim();
+    if (!mode) return null;
+    const bandwidth = parseInt(parts[1]?.trim() || '0') || 0;
     return { mode, bandwidth };
   }
 
@@ -217,9 +217,18 @@ export class HamlibClient {
     const response = await this.sendCommand('l RFPOWER');
     if (!response.success || !response.data) return null;
     
-    // Response is a float 0.0-1.0, convert to percentage
+    // Response should be a float 0.0-1.0 (hamlib RFPOWER spec)
+    // Some rig backends return 0-100 (already a percentage) or raw milliwatts/watts.
+    // Normalize to 0-100% in all cases.
     const powerFraction = parseFloat(response.data);
-    return Math.round(powerFraction * 100);
+    if (!Number.isFinite(powerFraction) || powerFraction < 0) return null;
+    if (powerFraction <= 1.0) {
+      // Standard: 0.0-1.0 fraction → convert to percentage
+      return Math.round(powerFraction * 100);
+    }
+    // Value > 1: backend returned percentage directly or non-normalized value.
+    // Clamp to 0-100 to avoid displaying garbage (e.g., 360000 from mW return).
+    return Math.min(100, Math.round(powerFraction));
   }
 
   /**
@@ -290,13 +299,15 @@ export class HamlibClient {
     ptt: boolean | null;
     vfo: string | null;
   }> {
-    const [frequency, modeData, power, ptt, vfo] = await Promise.all([
-      this.getFrequency(),
-      this.getMode(),
-      this.getPower(),
-      this.getPtt(),
-      this.getVfo(),
-    ]);
+    // Commands must be awaited sequentially, not via Promise.all.
+    // rigctld's 'm' command returns two lines (mode + bandwidth). If commands are
+    // sent in parallel, the second line from 'm' is consumed by the next pending
+    // callback (getPower), corrupting the power reading.
+    const frequency = await this.getFrequency();
+    const modeData = await this.getMode();
+    const power = await this.getPower();
+    const ptt = await this.getPtt();
+    const vfo = await this.getVfo();
 
     return {
       frequency,
