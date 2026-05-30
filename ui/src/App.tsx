@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { ThemeProvider } from './context/ThemeContext'
@@ -149,12 +150,6 @@ const PHONE_MODE_OPTIONS = ['LSB', 'USB', 'AM', 'FM', 'WFM', 'DSB']
 const CW_MODE_OPTIONS = ['CW', 'CWR']
 const DIGITAL_MODE_OPTIONS = ['PKTLSB', 'PKTUSB', 'PKTFM', 'RTTY', 'RTTYR', 'FAX']
 const ADVANCED_MODE_OPTIONS = ['ECSSLSB', 'ECSSUSB', 'SAM', 'SAH', 'SAL', 'AMS']
-const RADIO_MODE_OPTIONS = [
-  ...PHONE_MODE_OPTIONS,
-  ...CW_MODE_OPTIONS,
-  ...DIGITAL_MODE_OPTIONS,
-  ...ADVANCED_MODE_OPTIONS,
-]
 const TUNE_STEP_OPTIONS = [10, 50, 100, 500, 1000]
 const OPERATOR_MODE_OPTIONS = ['LSB', 'USB', 'CW', 'CWR', 'AM', 'FM', 'PKTUSB', 'RTTY']
 const BAND_PRESETS = [
@@ -173,7 +168,7 @@ function App() {
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [contextLogs, setContextLogs] = useState<ContextLog[]>([])
-  const [qsoLogs, setQsoLogs] = useState<QsoLog[]>([])
+  const [, setQsoLogs] = useState<QsoLog[]>([])
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loading, setLoading] = useState(false)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -367,11 +362,6 @@ function App() {
       root.classList.add(`theme-${theme}`)
     }
   }, [theme])
-
-  const selectedStation = useMemo(
-    () => stations.find((station) => station.id === selectedStationId) || null,
-    [stations, selectedStationId],
-  )
 
   const sortedStations = useMemo(
     () => [...stations].sort((a, b) => a.callsign.localeCompare(b.callsign)),
@@ -1382,7 +1372,7 @@ function App() {
       } else {
         addError(`Callsign ${callsign} not found in HamDB`)
       }
-    } catch (error) {
+    } catch {
       addError('Failed to lookup callsign')
     } finally {
       setStationLookupLoading(false)
@@ -1488,7 +1478,7 @@ function App() {
         }
         addError(data.error || 'Failed to save station details')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to save station details')
     }
   }
@@ -1510,7 +1500,7 @@ function App() {
       } else {
         addError('Failed to update club association')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to update club association')
     }
   }
@@ -1532,7 +1522,7 @@ function App() {
       } else {
         addError('Failed to update contest')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to update contest')
     }
   }
@@ -1603,6 +1593,7 @@ function App() {
     fetchLocations()
     fetchAllStations()
     // fetchRadioAssignments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -1624,6 +1615,7 @@ function App() {
     if (sessionToken) {
       fetchAdminList()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken])
 
   useEffect(() => {
@@ -1644,6 +1636,7 @@ function App() {
         establishSession(station)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stations, selectedStationId, sessionToken])
 
   useEffect(() => {
@@ -1653,6 +1646,7 @@ function App() {
       // Don't fetch station details on auto-refresh - it resets the form
     }, 5000)
     return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh])
 
   useEffect(() => {
@@ -1661,6 +1655,7 @@ function App() {
       fetchScenarios()
       fetchForwarderConfig()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentView])
 
   useEffect(() => {
@@ -1674,6 +1669,7 @@ function App() {
     if (isAdmin) {
       fetchScenarios()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin])
 
   useEffect(() => {
@@ -1719,6 +1715,7 @@ function App() {
       return
     }
     fetchAssignedRadio()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveCallsign, sessionToken, selectedStationId])
 
   useEffect(() => {
@@ -1727,6 +1724,7 @@ function App() {
       fetchAssignedRadio()
     }, 5000)
     return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveCallsign, sessionToken])
 
   useEffect(() => {
@@ -1738,6 +1736,7 @@ function App() {
       }
     }, 1200)
     return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignedRadio?.radio?.id, assignedRadio?.radio?.isConnected])
 
   useEffect(() => {
@@ -1747,8 +1746,10 @@ function App() {
       return
     }
 
+    const assignedFrequency = assignedRadio.radio.frequency
+
     if (!globalControlBusy && !globalControlEditing.frequency) {
-      setGlobalFrequencyInput(formatFrequencyMHz(assignedRadioState?.frequency || assignedRadio.radio.frequency))
+      setGlobalFrequencyInput(formatFrequencyMHz(assignedRadioState?.frequency || assignedFrequency))
     }
 
     if (!globalControlBusy) {
@@ -1759,7 +1760,7 @@ function App() {
     }
 
   }, [
-    assignedRadio?.radio?.id,
+    assignedRadio?.radio,
     assignedRadioState?.frequency,
     assignedRadioState?.mode,
     globalControlBusy,
@@ -1795,16 +1796,6 @@ function App() {
     } finally {
       setGlobalControlBusy(false)
     }
-  }
-
-  const setAssignedFrequency = async () => {
-    if (!assignedRadio?.radio?.id) return
-    const hz = toFrequencyHz(globalFrequencyInput)
-    if (!hz) {
-      addError('Enter a valid frequency in MHz')
-      return
-    }
-    await setAssignedFrequencyByHz(hz)
   }
 
   const commitAssignedFrequencyInline = async () => {
@@ -2091,7 +2082,7 @@ function App() {
           const data = await response.json()
           addError(data.error || 'Failed to save special callsign')
         }
-      } catch (error) {
+      } catch {
         addError('Failed to save special callsign')
       }
     }
@@ -2109,7 +2100,7 @@ function App() {
           const data = await response.json()
           addError(data.error || 'Failed to delete special callsign')
         }
-      } catch (error) {
+      } catch {
         addError('Failed to delete special callsign')
       }
     }
@@ -4114,18 +4105,18 @@ function App() {
     lon = lon + 180
 
     // First letter
-    let letter1 = String.fromCharCode(65 + Math.floor(lon / 20))
-    let letter2 = String.fromCharCode(65 + Math.floor(lat / 10))
+    const letter1 = String.fromCharCode(65 + Math.floor(lon / 20))
+    const letter2 = String.fromCharCode(65 + Math.floor(lat / 10))
 
     // First number
-    let num1 = Math.floor((lon % 20) / 2)
-    let num2 = Math.floor((lat % 10) / 1)
+    const num1 = Math.floor((lon % 20) / 2)
+    const num2 = Math.floor((lat % 10) / 1)
 
     // Second letter
-    let sub_lon = ((lon % 20) - Math.floor((lon % 20) / 2) * 2) * 60 / 2
-    let sub_lat = ((lat % 10) - Math.floor((lat % 10) / 1) * 1) * 60 / 1
-    let letter3 = String.fromCharCode(97 + Math.floor(sub_lon / 5))
-    let letter4 = String.fromCharCode(97 + Math.floor(sub_lat / 2.5))
+    const sub_lon = ((lon % 20) - Math.floor((lon % 20) / 2) * 2) * 60 / 2
+    const sub_lat = ((lat % 10) - Math.floor((lat % 10) / 1) * 1) * 60 / 1
+    const letter3 = String.fromCharCode(97 + Math.floor(sub_lon / 5))
+    const letter4 = String.fromCharCode(97 + Math.floor(sub_lat / 2.5))
 
     return letter1 + letter2 + num1 + num2 + letter3 + letter4
   }
@@ -4263,7 +4254,7 @@ function App() {
         }
         addError(data.error || 'Failed to save location')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to save location')
     }
   }
@@ -4301,7 +4292,7 @@ function App() {
         }
         addError(data.error || 'Failed to update location')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to update location')
     }
   }
@@ -4327,7 +4318,7 @@ function App() {
         }
         addError(data.error || 'Failed to set default')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to set default location')
     }
   }
@@ -4366,7 +4357,7 @@ function App() {
         }
         addError(data.error || 'Failed to apply location')
       }
-    } catch (error) {
+    } catch {
       addError('Failed to apply location')
     }
   }

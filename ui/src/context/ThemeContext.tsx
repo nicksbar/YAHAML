@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
+import React, { createContext, useEffect, useState } from 'react'
 
 type Theme = 'light' | 'dark' | 'auto' | 'ham'
 
@@ -16,24 +16,21 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return (saved as Theme) || 'auto'
   })
 
-  const [isDark, setIsDark] = useState(false)
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const isDark = theme === 'auto' ? systemPrefersDark : theme === 'dark' || theme === 'ham'
 
   // Apply theme and track system preference
   useEffect(() => {
     localStorage.setItem('yahaml-theme', theme)
     const root = document.documentElement
+    root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
 
     if (theme === 'auto') {
-      root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
-      // Check system preference
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      setIsDark(prefersDark)
+      root.classList.add(systemPrefersDark ? 'theme-dark' : 'theme-light')
     } else {
-      root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
       root.classList.add(`theme-${theme}`)
-      setIsDark(theme === 'dark' || theme === 'ham')
     }
-  }, [theme])
+  }, [theme, systemPrefersDark])
 
   // Listen for system theme changes
   useEffect(() => {
@@ -41,7 +38,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (e: MediaQueryListEvent) => {
-      setIsDark(e.matches)
+      setSystemPrefersDark(e.matches)
     }
 
     mediaQuery.addEventListener('change', handleChange)
@@ -53,12 +50,4 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       {children}
     </ThemeContext.Provider>
   )
-}
-
-export const useTheme = (): ThemeContextType => {
-  const context = useContext(ThemeContext)
-  if (!context) {
-    throw new Error('useTheme must be used within ThemeProvider')
-  }
-  return context
 }

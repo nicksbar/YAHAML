@@ -96,7 +96,7 @@ function parseMaybeJson<T>(value: T | string | null | undefined): T | undefined 
   }
 }
 
-export function QSOEntryForm({ stations, stationId, activeContest, radioDefaults, onSubmit, onBandModeSelected, loading }: QSOEntryFormProps) {
+export function QSOEntryForm({ stationId, activeContest, radioDefaults, onSubmit, onBandModeSelected, loading }: QSOEntryFormProps) {
   const [contactCallsign, setContactCallsign] = useState('')
   const [band, setBand] = useState('')
   const [mode, setMode] = useState('')
@@ -108,7 +108,6 @@ export function QSOEntryForm({ stations, stationId, activeContest, radioDefaults
   const [errors, setErrors] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
 
-  const selectedStation = stations.find((s) => s.id === stationId)
   const validationRules = parseMaybeJson<ValidationRules>(activeContest?.template?.validationRules)
   const requiredFieldConfig = parseMaybeJson<RequiredFieldConfig>(activeContest?.template?.requiredFields)
   const allowedBands = validationRules?.bands || QUICK_BANDS
@@ -205,19 +204,19 @@ export function QSOEntryForm({ stations, stationId, activeContest, radioDefaults
       ? ''
       : String(radioDefaults.power)
 
-    if (nextBand && nextBand !== band) {
-      setBand(nextBand)
+    if (nextBand) {
+      setBand((prev) => (prev === nextBand ? prev : nextBand))
     }
-    if (nextMode && nextMode !== mode) {
-      setMode(nextMode)
+    if (nextMode) {
+      setMode((prev) => (prev === nextMode ? prev : nextMode))
     }
-    if (nextFrequency && nextFrequency !== frequency) {
-      setFrequency(nextFrequency)
+    if (nextFrequency) {
+      setFrequency((prev) => (prev === nextFrequency ? prev : nextFrequency))
     }
-    if (nextPower && nextPower !== power) {
-      setPower(nextPower)
+    if (nextPower) {
+      setPower((prev) => (prev === nextPower ? prev : nextPower))
     }
-  }, [radioDefaults?.band, radioDefaults?.mode, radioDefaults?.frequencyMHz, radioDefaults?.power])
+  }, [radioDefaults])
 
   return (
     <form className="qso-entry-form" onSubmit={handleSubmit} data-testid="qso-entry-form">

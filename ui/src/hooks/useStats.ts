@@ -43,8 +43,8 @@ export function useStats(contestId?: string) {
         const data = await response.json();
         setStats(data);
         setLoading(false);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch stats');
         setLoading(false);
       }
     };

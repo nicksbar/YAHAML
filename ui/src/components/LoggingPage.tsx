@@ -1,10 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import '../styles/LoggingPage.css'
-import { QSOEntryForm } from './QSOEntryForm'
+import { QSOEntryForm, type QSOEntry } from './QSOEntryForm'
 import { LiveQSOFeed } from './LiveQSOFeed'
 import { LogManagementPanel } from './LogManagementPanel'
-import { BandOccupancy } from './BandOccupancy'
-import { StatsPanel } from './StatsPanel'
 import { useLoggingContext } from '../hooks/useLoggingContext'
 import { useQSOSubmit } from '../hooks/useQSOSubmit'
 
@@ -15,15 +13,56 @@ interface LoggingPageProps {
 
 type LoggingTab = 'standard' | 'gota'
 
+type RadioInfo = {
+  id?: string
+  name?: string
+  host?: string
+  port?: number
+  isConnected?: boolean
+  audioSourceType?: string
+  janusRoomId?: string | number
+  janusStreamId?: string | number
+  httpStreamUrl?: string
+  frequency?: string | number | null
+  mode?: string | null
+  bandwidth?: number | null
+  power?: number | null
+  ptt?: boolean | null
+}
+
+type AssignedRadioInfo = {
+  id?: string
+  isActive?: boolean
+  radio?: RadioInfo
+}
+
+type RadioStateInfo = {
+  frequency?: string | number | null
+  mode?: string | null
+  bandwidth?: number | null
+  power?: number | null
+  ptt?: boolean | null
+  vfo?: string | null
+  isConnected?: boolean
+  lastError?: string | null
+}
+
+type JanusConnection = {
+  sessionId?: number
+  audio?: HTMLAudioElement
+  cleanup?: () => Promise<void>
+  [key: string]: unknown
+}
+
 export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const { contest, stations, loading, error } = useLoggingContext({ pollInterval: 5000 })
   const { submit, loading: submitting, error: submitError } = useQSOSubmit({
     contestId: contest?.id,
   })
   const [lastQsoId, setLastQsoId] = useState<string | null>(null)
-  const [assignedRadio, setAssignedRadio] = useState<any | null>(null)
-  const [radioState, setRadioState] = useState<any | null>(null)
-  const [radioError, setRadioError] = useState<string | null>(null)
+  const [assignedRadio, setAssignedRadio] = useState<AssignedRadioInfo | null>(null)
+  const [radioState, setRadioState] = useState<RadioStateInfo | null>(null)
+  const [, setRadioError] = useState<string | null>(null)
   const [radioAudioMuted, setRadioAudioMuted] = useState(() => localStorage.getItem('yahaml:radioAudioMuted') === 'true')
   const [radioAudioVolume, setRadioAudioVolume] = useState(() => {
     const raw = Number(localStorage.getItem('yahaml:radioAudioVolume') || '100')
@@ -31,8 +70,8 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     return Math.max(0, Math.min(100, Math.round(raw)))
   })
   const [radioAudioPtt, setRadioAudioPtt] = useState(() => localStorage.getItem('yahaml:radioAudioPtt') === 'true')
-  const [janusStatus, setJanusStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
-  const [janusTransportStats, setJanusTransportStats] = useState<{
+  const [, setJanusStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
+  const [, setJanusTransportStats] = useState<{
     iceState: string
     connectionState: string
     remoteAudioTracks: number
@@ -40,7 +79,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     packetsReceived: number
   } | null>(null)
   const radioAudioRef = useRef<HTMLAudioElement | null>(null)
-  const janusConnectionRef = useRef<any | null>(null)
+  const janusConnectionRef = useRef<JanusConnection | null>(null)
   const janusPollAbortRef = useRef<AbortController | null>(null)
   const janusUnlockPlaybackRef = useRef<(() => void) | null>(null)
   const syncingSharedAudioRef = useRef(false)
@@ -68,20 +107,19 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     noiseGate?: GainNode
     analyzer?: AnalyserNode
   }>({})
-  const [bassGain, setBassGain] = useState(0)
-  const [midGain, setMidGain] = useState(0)
-  const [trebleGain, setTrebleGain] = useState(0)
-  const [compressionEnabled, setCompressionEnabled] = useState(false)
-  const [noiseGateEnabled, setNoiseGateEnabled] = useState(false)
-  const [noiseGateThreshold, setNoiseGateThreshold] = useState(-50)
-  const [showAdvancedControls, setShowAdvancedControls] = useState(false)
-  const [keepAudioAlive, setKeepAudioAlive] = useState(
+  const [bassGain] = useState(0)
+  const [midGain] = useState(0)
+  const [trebleGain] = useState(0)
+  const [compressionEnabled] = useState(false)
+  const [noiseGateEnabled] = useState(false)
+  const [noiseGateThreshold] = useState(-50)
+  const [keepAudioAlive] = useState(
     localStorage.getItem('yahaml:keepAudioAlive') !== 'false' // default true
   )
   const [activeLoggingTab, setActiveLoggingTab] = useState<LoggingTab>('standard')
   const [gotaStationId, setGotaStationId] = useState(stationId)
   const [gotaOperatorCallsign, setGotaOperatorCallsign] = useState(localStorage.getItem('yahaml:callsign') || '')
-  const [gotaRadio, setGotaRadio] = useState<any | null>(null)
+  const [gotaRadio, setGotaRadio] = useState<RadioInfo | null>(null)
   const keepAudioAliveRef = useRef(keepAudioAlive)
   const lastPublishedBandModeRef = useRef<string | null>(null)
 
@@ -89,7 +127,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
   const audioDebugEnabled = localStorage.getItem('yahaml:audioDebug') === 'true'
 
-  const buildAssignmentSignature = (data: any) => {
+  const buildAssignmentSignature = (data: AssignedRadioInfo | null) => {
     const radio = data?.radio || {}
     return JSON.stringify({
       assignmentId: data?.id || null,
@@ -106,7 +144,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   const janusTxn = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
-  const janusPost = async (url: string, payload: Record<string, any>) => {
+  const janusPost = async (url: string, payload: Record<string, unknown>) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -128,7 +166,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const resolveJanusApiCandidates = (radio: any): string[] => {
+  const resolveJanusApiCandidates = (radio: RadioInfo): string[] => {
     const explicit = localStorage.getItem('yahaml:janusApiUrl')?.trim()
     const hostFromRadio = (radio?.host || '').trim()
     const browserHost = window.location.hostname
@@ -166,7 +204,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     throw lastError instanceof Error ? lastError : new Error('Unable to connect to Janus API')
   }
 
-  const setupJanusAudio = async (radio: any) => {
+  const setupJanusAudio = async (radio: RadioInfo) => {
     const configuredRoom = String(radio?.janusRoomId ?? '').trim()
     if (!configuredRoom) {
       setRadioError('Janus room ID is missing')
@@ -218,7 +256,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
         const rooms = listResp?.plugindata?.data?.list || []
         const normalizedRoom = configuredRoom.toLowerCase()
-        const matchedRoom = rooms.find((room: any) => {
+        const matchedRoom = rooms.find((room: { room?: string | number; description?: string }) => {
           const byId = String(room?.room || '').trim() === configuredRoom
           const desc = String(room?.description || '').trim().toLowerCase()
           const byDescription = desc === normalizedRoom || desc.includes(normalizedRoom)
@@ -228,12 +266,12 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         if (!matchedRoom?.room) {
           const availableRooms = rooms
             .slice(0, 8)
-            .map((room: any) => `${room?.room}:${room?.description || 'unnamed'}`)
+            .map((room: { room?: string | number; description?: string }) => `${room?.room}:${room?.description || 'unnamed'}`)
             .join(', ')
           throw new Error(
             availableRooms
-              ? `Configured room \"${configuredRoom}\" not found. Available: ${availableRooms}`
-              : `Configured room \"${configuredRoom}\" not found and Janus returned no rooms`
+              ? `Configured room "${configuredRoom}" not found. Available: ${availableRooms}`
+              : `Configured room "${configuredRoom}" not found and Janus returned no rooms`
           )
         }
 
@@ -340,7 +378,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
       const display = radio?.janusStreamId || localStorage.getItem('yahaml:callsign') || 'YAHAML'
 
-      const applyJanusAnswer = async (jsep: any) => {
+      const applyJanusAnswer = async (jsep: RTCSessionDescriptionInit | undefined) => {
         if (!jsep?.sdp || jsep?.type !== 'answer') return false
         const desc = new RTCSessionDescription({
           type: 'answer',
@@ -394,11 +432,11 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
           let bytesReceived = 0
           let packetsReceived = 0
           report.forEach((entry) => {
-            const type = (entry as any)?.type
-            const kind = (entry as any)?.kind
+            const type = entry.type
+            const kind = (entry as RTCInboundRtpStreamStats & { kind?: string })?.kind
             if (type === 'inbound-rtp' && kind === 'audio') {
-              bytesReceived += Number((entry as any)?.bytesReceived || 0)
-              packetsReceived += Number((entry as any)?.packetsReceived || 0)
+              bytesReceived += Number((entry as RTCInboundRtpStreamStats)?.bytesReceived || 0)
+              packetsReceived += Number((entry as RTCInboundRtpStreamStats)?.packetsReceived || 0)
             }
           })
 
@@ -478,14 +516,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
             if (event?.janus === 'hangup' || event?.janus === 'detached' || event?.janus === 'destroyed') {
               throw new Error('Janus session ended')
             }
-          } catch (error: any) {
+          } catch (error: unknown) {
             if (pollAbort.signal.aborted) break
-            if (/invalid session/i.test(String(error?.message || ''))) {
+            if (/invalid session/i.test(String(error instanceof Error ? error.message : ''))) {
               if (janusConnectionRef.current?.sessionId !== sessionId) {
                 break
               }
             }
-            setRadioError(error?.message || 'Janus polling error')
+            setRadioError(error instanceof Error ? error.message : 'Janus polling error')
             break
           }
         }
@@ -930,62 +968,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const togglePtt = async (radioId: string, enabled: boolean) => {
-    if (!token) return
-    try {
-      await fetch(`/api/radios/${radioId}/ptt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ enabled }),
-      })
-    } catch (err) {
-      setRadioError(err instanceof Error ? err.message : 'Failed to set PTT')
-    }
-  }
-
-  const toggleRadioAudioMute = () => {
-    setRadioAudioMuted(!radioAudioMuted)
-    if (radioAudioRef.current) {
-      radioAudioRef.current.muted = !radioAudioMuted
-    }
-    if (loopbackNodesRef.current.masterGain) {
-      loopbackNodesRef.current.masterGain.gain.value = radioAudioMuted ? (radioAudioVolume / 100) : 0
-    }
-  }
-
-  const toggleRadioAudioPtt = async () => {
-    if (!assignedRadio?.radio?.id) return
-    const newPttState = !radioAudioPtt
-    setRadioAudioPtt(newPttState)
-    
-    // For loopback mode, control the microphone gain
-    if (assignedRadio.radio.audioSourceType === 'loopback' && loopbackNodesRef.current.micGain) {
-      if (newPttState) {
-        // PTT pressed - enable mic
-        loopbackNodesRef.current.micGain.gain.value = 0.5
-        console.log('[AUDIO] PTT ON - mic enabled')
-      } else {
-        // PTT released - mute mic
-        loopbackNodesRef.current.micGain.gain.value = 0
-        console.log('[AUDIO] PTT OFF - mic muted')
-      }
-    }
-    
-    // Also notify radio backend
-    await togglePtt(assignedRadio.radio.id, newPttState)
-  }
-
-  const updateRadioAudioVolume = (newVolume: number) => {
-    const vol = Math.max(0, Math.min(100, newVolume))
-    setRadioAudioVolume(vol)
-    if (radioAudioRef.current) {
-      radioAudioRef.current.volume = vol / 100
-    }
-    if (loopbackNodesRef.current.masterGain && !radioAudioMuted) {
-      loopbackNodesRef.current.masterGain.gain.value = vol / 100
-    }
-  }
-
   // Setup audio stream for assigned radio
   const setupRadioAudio = () => {
     if (!assignedRadio?.radio) {
@@ -1133,6 +1115,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   useEffect(() => {
     fetchAssignedRadio()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, isActive])
 
   useEffect(() => {
@@ -1141,6 +1124,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       fetchAssignedRadio()
     }, 5000)
     return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, isActive])
 
   useEffect(() => {
@@ -1167,7 +1151,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     fetchGotaRadio()
   }, [gotaStationId])
 
-  // Setup/teardown radio audio when assigned radio changes
   useEffect(() => {
     console.log('[AUDIO] setup effect triggered:', {
       assignedRadioId: assignedRadio?.radio?.id,
@@ -1181,6 +1164,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     return () => {
       teardownRadioAudio()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignedRadio?.radio?.id, assignedRadio?.radio?.audioSourceType, assignedRadio?.radio?.httpStreamUrl, assignedRadio?.radio?.janusRoomId])
 
   useEffect(() => {
@@ -1325,9 +1309,9 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const validationRules = parseMaybeJson<any>(contest?.template?.validationRules)
+  const validationRules = parseMaybeJson<{ exchange?: { required?: string[]; sent?: string[]; received?: string[] } }>(contest?.template?.validationRules)
   const requiredFields = parseMaybeJson<Record<string, { required?: boolean }>>(contest?.template?.requiredFields)
-  const uiConfig = parseMaybeJson<any>(contest?.template?.uiConfig)
+  const uiConfig = parseMaybeJson<{ gota?: { enabled?: boolean }; logging?: { gotaEnabled?: boolean } }>(contest?.template?.uiConfig)
   const gotaEnabled = Boolean(uiConfig?.gota?.enabled || uiConfig?.logging?.gotaEnabled)
   const contestFieldKeys = Array.from(
     new Set([
@@ -1362,7 +1346,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     )
   }
 
-  const handleSubmit = async (qsoData: any) => {
+  const handleSubmit = async (qsoData: QSOEntry) => {
     const result = await submit({
       ...qsoData,
       contestId: contest?.id,
@@ -1378,7 +1362,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const handleGotaSubmit = async (qsoData: any) => {
+  const handleGotaSubmit = async (qsoData: QSOEntry) => {
     const result = await submit({
       ...qsoData,
       stationId: gotaStationId || stationId,

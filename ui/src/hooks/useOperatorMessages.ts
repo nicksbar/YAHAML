@@ -35,8 +35,8 @@ export function useOperatorMessages(contestId?: string) {
         setMessages(data);
         setUnreadCount(data.length); // All initial messages are "new"
         setLoading(false);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch messages');
         setLoading(false);
       }
     };

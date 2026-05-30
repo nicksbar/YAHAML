@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import '../styles/LogManagementPanel.css'
 
 type LogEntry = {
@@ -30,7 +30,7 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
   const [applying, setApplying] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
-  const loadEntries = async () => {
+  const loadEntries = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -48,11 +48,11 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
     } finally {
       setLoading(false)
     }
-  }
+  }, [contestId, stationId])
 
   useEffect(() => {
     loadEntries()
-  }, [contestId, stationId])
+  }, [loadEntries])
 
   const filteredEntries = useMemo(() => {
     const callsignNeedle = callsignFilter.trim().toUpperCase()
@@ -99,7 +99,7 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
       return
     }
 
-    const patch: Record<string, any> = {}
+    const patch: Record<string, string | number> = {}
     if (bulkBand.trim()) patch.band = bulkBand.trim()
     if (bulkMode.trim()) patch.mode = bulkMode.trim().toUpperCase()
     if (bulkPower.trim()) patch.power = Number(bulkPower)
@@ -206,7 +206,6 @@ export function LogManagementPanel({ stationId, contestId }: LogManagementPanelP
         <span>Export:</span>
         {contestId ? (
           <>
-            <a className="btn secondary" href={adifExportUrl}>ADIF</a>
             <a className="btn secondary" data-testid="log-mgmt-export-adif" href={adifExportUrl}>ADIF</a>
             <a className="btn secondary" data-testid="log-mgmt-export-cabrillo" href={cabrilloExportUrl}>Cabrillo</a>
           </>
