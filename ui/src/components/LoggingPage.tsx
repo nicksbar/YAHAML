@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import '../styles/LoggingPage.css'
 import { QSOEntryForm } from './QSOEntryForm'
 import { LiveQSOFeed } from './LiveQSOFeed'
+import { LogManagementPanel } from './LogManagementPanel'
 import { BandOccupancy } from './BandOccupancy'
 import { StatsPanel } from './StatsPanel'
 import { useLoggingContext } from '../hooks/useLoggingContext'
@@ -1600,6 +1601,9 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
           {/* Live QSO Feed */}
           <LiveQSOFeed contestId={contest?.id} contestFieldKeys={contestFieldKeys} maxEntries={15} />
+
+          {/* Bulk log management and export tools */}
+          <LogManagementPanel stationId={activeLoggingTab === 'gota' ? (gotaStationId || stationId) : stationId} contestId={contest?.id} />
         </div>
       </div>
 

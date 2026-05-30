@@ -1,0 +1,85 @@
+.log-management-panel {
+  margin-top: var(--space-md);
+}
+
+.log-mgmt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.log-mgmt-header h3 {
+  margin: 0;
+}
+
+.log-mgmt-hint {
+  margin: 0.35rem 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.log-mgmt-filters,
+.log-mgmt-bulk,
+.log-mgmt-actions,
+.log-mgmt-export {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.65rem;
+}
+
+.log-mgmt-filters input,
+.log-mgmt-bulk input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--surface-muted);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.selection-count,
+.log-mgmt-muted {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.log-mgmt-status {
+  color: var(--success, #22c55e);
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.log-mgmt-error {
+  color: var(--danger, #ef4444);
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.log-mgmt-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--surface-muted);
+  border-radius: 8px;
+}
+
+.log-mgmt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.log-mgmt-table th,
+.log-mgmt-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--surface-muted);
+  text-align: left;
+}
+
+.log-mgmt-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-elevated);
+  z-index: 1;
+}
