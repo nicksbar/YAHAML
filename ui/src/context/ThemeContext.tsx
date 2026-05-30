@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 
-type Theme = 'light' | 'dark' | 'auto'
+type Theme = 'light' | 'dark' | 'auto' | 'ham'
 
 interface ThemeContextType {
   theme: Theme
@@ -24,14 +24,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const root = document.documentElement
 
     if (theme === 'auto') {
-      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
       // Check system preference
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
       setIsDark(prefersDark)
     } else {
-      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
       root.classList.add(`theme-${theme}`)
-      setIsDark(theme === 'dark')
+      setIsDark(theme === 'dark' || theme === 'ham')
     }
   }, [theme])
 

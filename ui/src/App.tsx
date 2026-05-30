@@ -320,7 +320,7 @@ function App() {
   const [stationElevation, setStationElevation] = useState('')
   const [locationDetecting, setLocationDetecting] = useState(false)
   
-  const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(() => {
+  const [theme, setTheme] = useState<'light' | 'dark' | 'auto' | 'ham'>(() => {
     const saved = localStorage.getItem('yahaml-theme')
     return (saved as any) || 'auto'
   })
@@ -361,9 +361,9 @@ function App() {
     localStorage.setItem('yahaml-theme', theme)
     const root = document.documentElement
     if (theme === 'auto') {
-      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
     } else {
-      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.remove('theme-light', 'theme-dark', 'theme-ham')
       root.classList.add(`theme-${theme}`)
     }
   }, [theme])
@@ -5341,6 +5341,13 @@ function App() {
               title="Dark Mode"
             >
               🌙
+            </button>
+            <button
+              className={`theme-btn ${theme === 'ham' ? 'active' : ''}`}
+              onClick={() => setTheme('ham')}
+              title="HAM Console Mode"
+            >
+              📻
             </button>
           </div>
           
