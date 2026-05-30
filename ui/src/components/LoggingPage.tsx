@@ -24,11 +24,28 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const [radioState, setRadioState] = useState<any | null>(null)
   const [radioError, setRadioError] = useState<string | null>(null)
   const [ws, setWs] = useState<WebSocket | null>(null)
-  const [radioAudioMuted, setRadioAudioMuted] = useState(false)
-  const [radioAudioVolume, setRadioAudioVolume] = useState(100)
-  const [radioAudioPtt, setRadioAudioPtt] = useState(false)
+  const [radioAudioMuted, setRadioAudioMuted] = useState(() => localStorage.getItem('yahaml:radioAudioMuted') === 'true')
+  const [radioAudioVolume, setRadioAudioVolume] = useState(() => {
+    const raw = Number(localStorage.getItem('yahaml:radioAudioVolume') || '100')
+    if (!Number.isFinite(raw)) return 100
+    return Math.max(0, Math.min(100, Math.round(raw)))
+  })
+  const [radioAudioPtt, setRadioAudioPtt] = useState(() => localStorage.getItem('yahaml:radioAudioPtt') === 'true')
+  const [janusStatus, setJanusStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
+  const [janusTransportStats, setJanusTransportStats] = useState<{
+    iceState: string
+    connectionState: string
+    remoteAudioTracks: number
+    bytesReceived: number
+    packetsReceived: number
+  } | null>(null)
   const radioAudioRef = useRef<HTMLAudioElement | null>(null)
   const janusConnectionRef = useRef<any | null>(null)
+  const janusPollAbortRef = useRef<AbortController | null>(null)
+  const janusUnlockPlaybackRef = useRef<(() => void) | null>(null)
+  const syncingSharedAudioRef = useRef(false)
+  const assignmentFetchInFlightRef = useRef(false)
+  const lastAssignmentSignatureRef = useRef<string>('')
   const audioContextRef = useRef<AudioContext | null>(null)
   const loopbackNodesRef = useRef<{
     whiteNoise?: AudioBufferSourceNode
@@ -67,6 +84,482 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   const token = localStorage.getItem('yahaml:sessionToken')
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+  const audioDebugEnabled = localStorage.getItem('yahaml:audioDebug') === 'true'
+
+  const buildAssignmentSignature = (data: any) => {
+    const radio = data?.radio || {}
+    return JSON.stringify({
+      assignmentId: data?.id || null,
+      assignmentActive: Boolean(data?.isActive),
+      radioId: radio?.id || null,
+      source: radio?.audioSourceType || null,
+      room: radio?.janusRoomId || null,
+      stream: radio?.janusStreamId || null,
+      http: radio?.httpStreamUrl || null,
+      host: radio?.host || null,
+      connected: radio?.isConnected ?? null,
+    })
+  }
+
+  const janusTxn = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+  const janusPost = async (url: string, payload: Record<string, any>) => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      throw new Error(`Janus HTTP ${response.status}`)
+    }
+    return response.json()
+  }
+
+  const resolveJanusApiCandidates = (radio: any): string[] => {
+    const explicit = localStorage.getItem('yahaml:janusApiUrl')?.trim()
+    const hostFromRadio = (radio?.host || '').trim()
+    const browserHost = window.location.hostname
+    const hostCandidates = [
+      explicit || '',
+      hostFromRadio ? `http://${hostFromRadio}:8088/janus` : '',
+      `http://${browserHost}:8088/janus`,
+      `https://${browserHost}:8089/janus`,
+    ].filter(Boolean)
+
+    return Array.from(new Set(hostCandidates))
+  }
+
+  const createJanusSession = async (candidates: string[]) => {
+    let lastError: unknown = null
+    for (const baseUrl of candidates) {
+      try {
+        console.log('[JANUS] Trying endpoint:', baseUrl)
+        const createResp = await janusPost(baseUrl, {
+          janus: 'create',
+          transaction: janusTxn(),
+        })
+        if (createResp?.janus === 'success' && createResp?.data?.id) {
+          console.log('[JANUS] Session created:', { baseUrl, sessionId: createResp.data.id })
+          return {
+            baseUrl,
+            sessionId: Number(createResp.data.id),
+          }
+        }
+      } catch (error) {
+        lastError = error
+        console.warn('[JANUS] Endpoint failed:', baseUrl, error)
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Unable to connect to Janus API')
+  }
+
+  const setupJanusAudio = async (radio: any) => {
+    const configuredRoom = String(radio?.janusRoomId ?? '').trim()
+    if (!configuredRoom) {
+      setRadioError('Janus room ID is missing')
+      setJanusStatus('error')
+      return
+    }
+
+    const candidates = resolveJanusApiCandidates(radio)
+    if (!candidates.length) {
+      setRadioError('No Janus API endpoint candidates available')
+      setJanusStatus('error')
+      return
+    }
+
+    setJanusStatus('connecting')
+    console.log('[JANUS] Starting AudioBridge setup', {
+      configuredRoom,
+      streamId: radio?.janusStreamId,
+      candidates,
+    })
+
+    let sessionId = 0
+    let handleId = 0
+    let baseUrl = ''
+
+    try {
+      const session = await createJanusSession(candidates)
+      sessionId = session.sessionId
+      baseUrl = session.baseUrl
+
+      const attachResp = await janusPost(`${baseUrl}/${sessionId}`, {
+        janus: 'attach',
+        plugin: 'janus.plugin.audiobridge',
+        transaction: janusTxn(),
+      })
+      if (attachResp?.janus !== 'success' || !attachResp?.data?.id) {
+        throw new Error('Failed to attach Janus AudioBridge plugin')
+      }
+
+      handleId = Number(attachResp.data.id)
+
+      let roomId = Number(configuredRoom)
+      if (!Number.isFinite(roomId) || roomId <= 0) {
+        const listResp = await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+          janus: 'message',
+          body: { request: 'list' },
+          transaction: janusTxn(),
+        })
+
+        const rooms = listResp?.plugindata?.data?.list || []
+        const normalizedRoom = configuredRoom.toLowerCase()
+        const matchedRoom = rooms.find((room: any) => {
+          const byId = String(room?.room || '').trim() === configuredRoom
+          const desc = String(room?.description || '').trim().toLowerCase()
+          const byDescription = desc === normalizedRoom || desc.includes(normalizedRoom)
+          return byId || byDescription
+        })
+
+        if (!matchedRoom?.room) {
+          const availableRooms = rooms
+            .slice(0, 8)
+            .map((room: any) => `${room?.room}:${room?.description || 'unnamed'}`)
+            .join(', ')
+          throw new Error(
+            availableRooms
+              ? `Configured room \"${configuredRoom}\" not found. Available: ${availableRooms}`
+              : `Configured room \"${configuredRoom}\" not found and Janus returned no rooms`
+          )
+        }
+
+        roomId = Number(matchedRoom.room)
+        console.log('[JANUS] Resolved room identifier', {
+          configuredRoom,
+          resolvedRoomId: roomId,
+          description: matchedRoom.description,
+        })
+      }
+
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      })
+
+      pc.oniceconnectionstatechange = () => {
+        console.log('[JANUS] ICE connection state:', pc.iceConnectionState)
+      }
+
+      pc.onconnectionstatechange = () => {
+        console.log('[JANUS] PeerConnection state:', pc.connectionState)
+      }
+
+      let janusHandleActive = true
+
+      pc.onicecandidate = (event) => {
+        if (!janusHandleActive) return
+        const payload = event.candidate
+          ? { janus: 'trickle', candidate: event.candidate, transaction: janusTxn() }
+          : { janus: 'trickle', candidate: { completed: true }, transaction: janusTxn() }
+
+        janusPost(`${baseUrl}/${sessionId}/${handleId}`, payload).catch(() => {
+          // best-effort trickle
+        })
+      }
+
+      const remoteStream = new MediaStream()
+      pc.ontrack = (event) => {
+        event.streams.forEach((stream) => {
+          stream.getAudioTracks().forEach((track) => remoteStream.addTrack(track))
+        })
+      }
+
+      pc.addTransceiver('audio', { direction: 'recvonly' })
+
+      const audio = new Audio()
+      audio.autoplay = true
+      audio.setAttribute('playsinline', 'true')
+      audio.volume = radioAudioVolume / 100
+      audio.muted = radioAudioMuted
+      audio.srcObject = remoteStream
+      radioAudioRef.current = audio
+
+      const clearUnlockPlayback = () => {
+        if (janusUnlockPlaybackRef.current) {
+          janusUnlockPlaybackRef.current()
+          janusUnlockPlaybackRef.current = null
+        }
+      }
+
+      const registerUnlockPlayback = () => {
+        clearUnlockPlayback()
+        const unlock = () => {
+          audio.play().catch(() => {
+            // ignore repeated failures; we'll keep the click/key listeners until next attempt
+          })
+        }
+        const onUserInteraction = () => {
+          unlock()
+        }
+        window.addEventListener('pointerdown', onUserInteraction)
+        window.addEventListener('keydown', onUserInteraction)
+        window.addEventListener('touchstart', onUserInteraction)
+        janusUnlockPlaybackRef.current = () => {
+          window.removeEventListener('pointerdown', onUserInteraction)
+          window.removeEventListener('keydown', onUserInteraction)
+          window.removeEventListener('touchstart', onUserInteraction)
+        }
+      }
+
+      const attemptPlayback = async () => {
+        try {
+          await audio.play()
+          clearUnlockPlayback()
+          setRadioError(null)
+          setJanusStatus('connected')
+        } catch {
+          registerUnlockPlayback()
+          setRadioError('Janus connected. Click anywhere then unmute to start playback.')
+        }
+      }
+
+      let playbackAttemptedOnTrack = false
+      remoteStream.addEventListener('addtrack', () => {
+        if (playbackAttemptedOnTrack) return
+        playbackAttemptedOnTrack = true
+        attemptPlayback().catch(() => {
+          // no-op
+        })
+      })
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: true })
+      await pc.setLocalDescription(offer)
+
+      const display = radio?.janusStreamId || localStorage.getItem('yahaml:callsign') || 'YAHAML'
+
+      const applyJanusAnswer = async (jsep: any) => {
+        if (!jsep?.sdp || jsep?.type !== 'answer') return false
+        const desc = new RTCSessionDescription({
+          type: 'answer',
+          sdp: jsep.sdp,
+        })
+        if (!pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(desc)
+          await attemptPlayback()
+          return true
+        }
+        return false
+      }
+
+      // Follow Janus AudioBridge demo flow: join first, then configure with SDP.
+      const joinResp = await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+        janus: 'message',
+        body: {
+          request: 'join',
+          room: roomId,
+          display,
+          muted: true,
+        },
+        transaction: janusTxn(),
+      })
+
+      if (joinResp?.janus === 'error') {
+        throw new Error(String(joinResp?.error?.reason || 'Janus join failed'))
+      }
+
+      const configureResp = await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+        janus: 'message',
+        body: {
+          request: 'configure',
+          muted: true,
+        },
+        jsep: {
+          type: offer.type,
+          sdp: offer.sdp,
+        },
+        transaction: janusTxn(),
+      })
+
+      const configureAppliedAnswer = await applyJanusAnswer(configureResp?.jsep)
+      if (!configureAppliedAnswer) {
+        console.log('[JANUS] Configure acknowledged; awaiting SDP answer via long-poll event')
+      }
+
+      const statsTimer = setInterval(async () => {
+        try {
+          const report = await pc.getStats()
+          let bytesReceived = 0
+          let packetsReceived = 0
+          report.forEach((entry) => {
+            const type = (entry as any)?.type
+            const kind = (entry as any)?.kind
+            if (type === 'inbound-rtp' && kind === 'audio') {
+              bytesReceived += Number((entry as any)?.bytesReceived || 0)
+              packetsReceived += Number((entry as any)?.packetsReceived || 0)
+            }
+          })
+
+          setJanusTransportStats({
+            iceState: pc.iceConnectionState,
+            connectionState: pc.connectionState,
+            remoteAudioTracks: remoteStream.getAudioTracks().length,
+            bytesReceived,
+            packetsReceived,
+          })
+        } catch {
+          // ignore stats races while closing
+        }
+      }, 2000)
+
+      let keepAliveTimer: ReturnType<typeof setInterval> | null = setInterval(async () => {
+        try {
+          await janusPost(`${baseUrl}/${sessionId}`, {
+            janus: 'keepalive',
+            transaction: janusTxn(),
+          })
+        } catch {
+          // best-effort keepalive
+        }
+      }, 25000)
+
+      const pollAbort = new AbortController()
+      janusPollAbortRef.current = pollAbort
+
+      const pollLoop = async () => {
+        while (!pollAbort.signal.aborted) {
+          try {
+            const rid = Date.now()
+            const response = await fetch(`${baseUrl}/${sessionId}?rid=${rid}&maxev=1`, {
+              signal: pollAbort.signal,
+            })
+            if (!response.ok) {
+              throw new Error(`Janus long-poll HTTP ${response.status}`)
+            }
+
+            const event = await response.json()
+            if (event?.janus === 'error') {
+              const reason = String(event?.error?.reason || 'Janus error')
+              if (/invalid session/i.test(reason)) {
+                // Stale/teardown race in dev or during rapid reconnect; do not surface as a hard error.
+                if (pollAbort.signal.aborted || janusConnectionRef.current?.sessionId !== sessionId) {
+                  break
+                }
+                setJanusStatus('connecting')
+                setRadioError('Re-establishing Janus session…')
+                break
+              }
+              throw new Error(reason)
+            }
+
+            if (event?.janus === 'event' && event?.sender === handleId && event?.jsep?.type === 'answer' && event?.jsep?.sdp) {
+              await applyJanusAnswer(event.jsep)
+            }
+
+            if (event?.janus === 'trickle' && event?.sender === handleId) {
+              const candidate = event?.candidate
+              if (candidate?.completed) {
+                try {
+                  await pc.addIceCandidate(null)
+                } catch {
+                  // ignore completion race
+                }
+              } else if (candidate?.candidate) {
+                try {
+                  await pc.addIceCandidate(candidate)
+                } catch (error) {
+                  console.warn('[JANUS] Failed to apply remote ICE candidate', error)
+                }
+              }
+            }
+
+            if (event?.janus === 'hangup' || event?.janus === 'detached' || event?.janus === 'destroyed') {
+              throw new Error('Janus session ended')
+            }
+          } catch (error: any) {
+            if (pollAbort.signal.aborted) break
+            if (/invalid session/i.test(String(error?.message || ''))) {
+              if (janusConnectionRef.current?.sessionId !== sessionId) {
+                break
+              }
+            }
+            setRadioError(error?.message || 'Janus polling error')
+            break
+          }
+        }
+      }
+
+      pollLoop()
+
+      janusConnectionRef.current = {
+        baseUrl,
+        sessionId,
+        handleId,
+        pc,
+        audio,
+        pollAbort,
+        cleanup: async () => {
+          janusHandleActive = false
+          clearInterval(statsTimer)
+          clearUnlockPlayback()
+          try {
+            pollAbort.abort()
+          } catch {
+            // ignore
+          }
+
+          if (keepAliveTimer) {
+            clearInterval(keepAliveTimer)
+            keepAliveTimer = null
+          }
+
+          try {
+            pc.getSenders().forEach((sender) => sender.track?.stop())
+            pc.getReceivers().forEach((receiver) => receiver.track?.stop())
+            pc.close()
+          } catch {
+            // ignore
+          }
+
+          try {
+            await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+              janus: 'detach',
+              transaction: janusTxn(),
+            })
+          } catch {
+            // ignore
+          }
+
+          try {
+            await janusPost(`${baseUrl}/${sessionId}`, {
+              janus: 'destroy',
+              transaction: janusTxn(),
+            })
+          } catch {
+            // ignore
+          }
+        },
+      }
+
+      setRadioError(null)
+      setJanusStatus('connecting')
+      console.log('Janus audio connected', { baseUrl, sessionId, roomId })
+    } catch (error) {
+      console.error('Failed to setup Janus audio:', error)
+      setRadioError(error instanceof Error ? `Janus connect failed: ${error.message}` : 'Failed to connect Janus audio')
+      setJanusStatus('error')
+
+      if (handleId && sessionId && baseUrl) {
+        try {
+          await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+            janus: 'detach',
+            transaction: janusTxn(),
+          })
+        } catch {
+          // ignore
+        }
+      }
+      if (sessionId && baseUrl) {
+        try {
+          await janusPost(`${baseUrl}/${sessionId}`, {
+            janus: 'destroy',
+            transaction: janusTxn(),
+          })
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
 
   const formatFrequencyMHz = (freq?: string | null) => {
     if (!freq) return '---.---'
@@ -320,15 +813,43 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   }
 
   const fetchAssignedRadio = async () => {
-    if (!token) return
+    if (!token) {
+      if (audioDebugEnabled) {
+        console.warn('[AUDIO] No session token; skipping assigned-radio fetch')
+      }
+      return
+    }
+
+    if (assignmentFetchInFlightRef.current) {
+      if (audioDebugEnabled) {
+        console.log('[AUDIO] Assigned radio fetch skipped (request already in-flight)')
+      }
+      return
+    }
+
+    assignmentFetchInFlightRef.current = true
+
     try {
+      if (audioDebugEnabled) {
+        console.log('[AUDIO] Fetching assigned radio...')
+      }
       const response = await fetch('/api/radio-assignments/me', { headers: authHeaders })
       if (response.ok) {
         const data = await response.json()
-        setAssignedRadio(data)
+        const signature = buildAssignmentSignature(data)
+        const hasChanged = signature !== lastAssignmentSignatureRef.current
+
+        if (hasChanged) {
+          if (audioDebugEnabled) {
+            console.log('[AUDIO] Assigned radio changed:', data)
+          }
+          lastAssignmentSignatureRef.current = signature
+          setAssignedRadio(data)
+        }
+
         setRadioError(null)
-        // Update with latest state from radio (if available)
-        if (data?.radio?.id) {
+        // Update initial snapshot from assigned radio only when assignment config changes.
+        if (hasChanged && data?.radio?.id) {
           setRadioState({
             frequency: data.radio.frequency,
             mode: data.radio.mode,
@@ -339,10 +860,18 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         }
       } else {
         const data = await response.json().catch(() => ({}))
+        if (audioDebugEnabled) {
+          console.warn('[AUDIO] Assigned radio fetch failed:', response.status, data)
+        }
         setRadioError(data.error || 'Failed to load radio assignment')
       }
     } catch (err) {
+      if (audioDebugEnabled) {
+        console.error('[AUDIO] Assigned radio fetch exception:', err)
+      }
       setRadioError(err instanceof Error ? err.message : 'Failed to load radio assignment')
+    } finally {
+      assignmentFetchInFlightRef.current = false
     }
   }
 
@@ -404,17 +933,29 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   // Setup audio stream for assigned radio
   const setupRadioAudio = () => {
-    if (!assignedRadio?.radio) return
+    if (!assignedRadio?.radio) {
+      console.warn('[AUDIO] setupRadioAudio skipped: no assigned radio')
+      return
+    }
 
     const radio = assignedRadio.radio
+    console.log('[AUDIO] setupRadioAudio start:', {
+      radioId: radio.id,
+      audioSourceType: radio.audioSourceType,
+      janusRoomId: radio.janusRoomId,
+      janusStreamId: radio.janusStreamId,
+      httpStreamUrl: radio.httpStreamUrl,
+    })
     
     // Clean up existing audio
     teardownRadioAudio()
 
     if (radio.audioSourceType === 'loopback') {
+      setJanusStatus('idle')
       // Loopback mode - static + CW + mic echo
       setupLoopbackAudio()
     } else if (radio.audioSourceType === 'http-stream' && radio.httpStreamUrl) {
+      setJanusStatus('idle')
       // HTTP stream - simple audio element
       const audio = new Audio(radio.httpStreamUrl)
       audio.volume = radioAudioVolume / 100
@@ -428,16 +969,20 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         setRadioError('Failed to play audio stream. Click to enable.')
       })
     } else if (radio.audioSourceType === 'janus' && radio.janusRoomId) {
-      // Janus Gateway - would need Janus client library
-      console.log('Janus audio source configured:', { room: radio.janusRoomId, stream: radio.janusStreamId })
-      // TODO: Implement Janus client connection
-      // This would involve connecting to Janus WebRTC gateway
-      // and subscribing to the audiobridge room/stream
+      setupJanusAudio(radio)
+    } else {
+      console.warn('[AUDIO] No playable source configured for assigned radio')
+      setJanusStatus('idle')
     }
   }
 
   // Teardown audio stream
   const teardownRadioAudio = () => {
+    setJanusTransportStats(null)
+    if (janusUnlockPlaybackRef.current) {
+      janusUnlockPlaybackRef.current()
+      janusUnlockPlaybackRef.current = null
+    }
     teardownLoopbackAudio()
     if (radioAudioRef.current) {
       radioAudioRef.current.pause()
@@ -445,7 +990,26 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       radioAudioRef.current = null
     }
     if (janusConnectionRef.current) {
-      // TODO: Cleanup Janus connection
+      try {
+        janusPollAbortRef.current?.abort()
+      } catch {
+        // ignore
+      }
+      janusPollAbortRef.current = null
+      const connection = janusConnectionRef.current
+      if (connection.audio) {
+        try {
+          connection.audio.pause()
+          connection.audio.srcObject = null
+        } catch {
+          // ignore
+        }
+      }
+      if (connection.cleanup) {
+        connection.cleanup().catch(() => {
+          // ignore cleanup errors
+        })
+      }
       janusConnectionRef.current = null
     }
   }
@@ -454,6 +1018,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   useEffect(() => {
     if (!token) return
 
+    let isDisposing = false
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const wsUrl = `${protocol}://${window.location.host}/ws`
     const websocket = new WebSocket(wsUrl)
@@ -489,6 +1054,9 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
 
     websocket.onerror = (error) => {
+      if (isDisposing || websocket.readyState === WebSocket.CLOSING || websocket.readyState === WebSocket.CLOSED) {
+        return
+      }
       console.error('WebSocket error:', error)
     }
 
@@ -499,7 +1067,8 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     setWs(websocket)
 
     return () => {
-      if (websocket.readyState === WebSocket.OPEN) {
+      isDisposing = true
+      if (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING) {
         websocket.close()
       }
     }
@@ -507,7 +1076,15 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   useEffect(() => {
     fetchAssignedRadio()
-  }, [token])
+  }, [token, isActive])
+
+  useEffect(() => {
+    if (!token || !isActive) return
+    const timer = setInterval(() => {
+      fetchAssignedRadio()
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [token, isActive])
 
   useEffect(() => {
     if (stationId && !gotaStationId) {
@@ -535,6 +1112,12 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   // Setup/teardown radio audio when assigned radio changes
   useEffect(() => {
+    console.log('[AUDIO] setup effect triggered:', {
+      assignedRadioId: assignedRadio?.radio?.id,
+      source: assignedRadio?.radio?.audioSourceType,
+      janusRoomId: assignedRadio?.radio?.janusRoomId,
+      isActive,
+    })
     if (assignedRadio?.radio?.audioSourceType) {
       setupRadioAudio()
     }
@@ -543,6 +1126,48 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }, [assignedRadio?.radio?.id, assignedRadio?.radio?.audioSourceType, assignedRadio?.radio?.httpStreamUrl, assignedRadio?.radio?.janusRoomId])
 
+  useEffect(() => {
+    const onSharedAudioSettings = (event: Event) => {
+      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number; ptt?: boolean }>
+      if (customEvent.detail?.source !== 'app') return
+
+      const nextMuted = Boolean(customEvent.detail?.muted)
+      const nextPtt = Boolean(customEvent.detail?.ptt)
+      const nextVolume = Number(customEvent.detail?.volume)
+      syncingSharedAudioRef.current = true
+
+      setRadioAudioMuted((prev) => (prev === nextMuted ? prev : nextMuted))
+      setRadioAudioPtt((prev) => (prev === nextPtt ? prev : nextPtt))
+      if (Number.isFinite(nextVolume)) {
+        const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
+        setRadioAudioVolume((prev) => (prev === safeVolume ? prev : safeVolume))
+      }
+    }
+
+    window.addEventListener('yahaml:radioAudioSettings', onSharedAudioSettings as EventListener)
+    return () => {
+      window.removeEventListener('yahaml:radioAudioSettings', onSharedAudioSettings as EventListener)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (syncingSharedAudioRef.current) {
+      syncingSharedAudioRef.current = false
+      return
+    }
+    localStorage.setItem('yahaml:radioAudioMuted', String(radioAudioMuted))
+    localStorage.setItem('yahaml:radioAudioVolume', String(radioAudioVolume))
+    localStorage.setItem('yahaml:radioAudioPtt', String(radioAudioPtt))
+    window.dispatchEvent(new CustomEvent('yahaml:radioAudioSettings', {
+      detail: {
+        source: 'logging',
+        muted: radioAudioMuted,
+        volume: radioAudioVolume,
+        ptt: radioAudioPtt,
+      },
+    }))
+  }, [radioAudioMuted, radioAudioVolume, radioAudioPtt])
+
   // Update audio volume/mute when controls change
   useEffect(() => {
     if (radioAudioRef.current) {
@@ -550,6 +1175,11 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       radioAudioRef.current.muted = radioAudioMuted
     }
   }, [radioAudioVolume, radioAudioMuted])
+
+  useEffect(() => {
+    if (radioState?.ptt === null || radioState?.ptt === undefined) return
+    setRadioAudioPtt(Boolean(radioState.ptt))
+  }, [radioState?.ptt])
 
   // Update EQ when bass/mid/treble change
   useEffect(() => {

@@ -286,6 +286,13 @@ function App() {
   const [globalFrequencyInput, setGlobalFrequencyInput] = useState('')
   const [globalModeInput, setGlobalModeInput] = useState('USB')
   const [globalControlBusy, setGlobalControlBusy] = useState(false)
+  const [radioAudioMuted, setRadioAudioMuted] = useState(() => localStorage.getItem('yahaml:radioAudioMuted') === 'true')
+  const [radioAudioVolume, setRadioAudioVolume] = useState(() => {
+    const raw = Number(localStorage.getItem('yahaml:radioAudioVolume') || '100')
+    if (!Number.isFinite(raw)) return 100
+    return Math.max(0, Math.min(100, Math.round(raw)))
+  })
+  const [radioAudioPtt, setRadioAudioPtt] = useState(() => localStorage.getItem('yahaml:radioAudioPtt') === 'true')
   const [globalTuneStepHz, setGlobalTuneStepHz] = useState(100)
   const [globalOpsPicker, setGlobalOpsPicker] = useState<'band' | 'mode' | 'step' | null>(null)
   const [radioStateSource, setRadioStateSource] = useState<'idle' | 'ws' | 'poll'>('idle')
@@ -294,6 +301,7 @@ function App() {
     frequency: false,
   })
   const lastRadioStateUpdateAtRef = useRef<number>(0)
+  const syncingSharedAudioRef = useRef(false)
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -375,6 +383,16 @@ function App() {
     return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
+  const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 8000) => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
   const formatFrequencyMHz = (frequency?: string | null) => {
     if (!frequency) return '---.---'
     const hz = parseInt(frequency, 10)
@@ -400,6 +418,14 @@ function App() {
     const p = Number(power)
     if (!Number.isFinite(p) || p < 0 || p > 100) return null
     return `${Math.round(p)}%`
+  }
+
+  const formatAudioSourceLabel = (audioSourceType?: string | null) => {
+    if (!audioSourceType) return 'Audio Off'
+    if (audioSourceType === 'janus') return 'Janus Audio'
+    if (audioSourceType === 'http-stream') return 'HTTP Audio'
+    if (audioSourceType === 'loopback') return 'Loopback Audio'
+    return 'Audio Off'
   }
 
   const formatBandwidthLabel = (bandwidth?: number | null) => {
@@ -479,6 +505,54 @@ function App() {
       },
     }))
   }
+
+  const publishSharedAudioSettings = (next: { muted: boolean; volume: number; ptt: boolean }, source: 'app' | 'logging') => {
+    const safeVolume = Math.max(0, Math.min(100, Math.round(next.volume)))
+    localStorage.setItem('yahaml:radioAudioMuted', String(Boolean(next.muted)))
+    localStorage.setItem('yahaml:radioAudioVolume', String(safeVolume))
+    localStorage.setItem('yahaml:radioAudioPtt', String(Boolean(next.ptt)))
+    window.dispatchEvent(new CustomEvent('yahaml:radioAudioSettings', {
+      detail: {
+        source,
+        muted: Boolean(next.muted),
+        volume: safeVolume,
+        ptt: Boolean(next.ptt),
+      },
+    }))
+  }
+
+  useEffect(() => {
+    const onSharedAudioSettings = (event: Event) => {
+      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number; ptt?: boolean }>
+      if (customEvent.detail?.source !== 'logging') return
+
+      const nextMuted = Boolean(customEvent.detail?.muted)
+      const nextPtt = Boolean(customEvent.detail?.ptt)
+      const nextVolume = Number(customEvent.detail?.volume)
+
+      syncingSharedAudioRef.current = true
+
+      setRadioAudioMuted((prev) => (prev === nextMuted ? prev : nextMuted))
+      setRadioAudioPtt((prev) => (prev === nextPtt ? prev : nextPtt))
+      if (Number.isFinite(nextVolume)) {
+        const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
+        setRadioAudioVolume((prev) => (prev === safeVolume ? prev : safeVolume))
+      }
+    }
+
+    window.addEventListener('yahaml:radioAudioSettings', onSharedAudioSettings as EventListener)
+    return () => {
+      window.removeEventListener('yahaml:radioAudioSettings', onSharedAudioSettings as EventListener)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (syncingSharedAudioRef.current) {
+      syncingSharedAudioRef.current = false
+      return
+    }
+    publishSharedAudioSettings({ muted: radioAudioMuted, volume: radioAudioVolume, ptt: radioAudioPtt }, 'app')
+  }, [radioAudioMuted, radioAudioVolume, radioAudioPtt])
 
   const refreshRadioState = async (radioId: string) => {
     try {
@@ -1465,6 +1539,7 @@ function App() {
 
   useEffect(() => {
     // Connect to WebSocket for real-time updates
+    let isDisposing = false
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
 
@@ -1501,11 +1576,17 @@ function App() {
     }
     
     ws.onerror = (error) => {
+      if (isDisposing || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        return
+      }
       console.error('WebSocket error:', error)
     }
     
     return () => {
-      ws.close()
+      isDisposing = true
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close()
+      }
     }
   }, [])
 
@@ -1621,6 +1702,7 @@ function App() {
   const callsignDisplay = currentCallsign || 'Not set'
   const hasActiveCallsign = currentCallsign.trim().length > 0
   const assignedRadioState = assignedRadio?.radio ? getRadioState(assignedRadio.radio as RadioConnection) : null
+  const assignedAudioSourceLabel = formatAudioSourceLabel(assignedRadio?.radio?.audioSourceType)
   const assignedBandwidthLabel = formatBandwidthLabel(
     assignedRadioState?.bandwidth ?? assignedRadio?.radio?.bandwidth ?? null,
   )
@@ -1693,7 +1775,7 @@ function App() {
 
     try {
       setGlobalControlBusy(true)
-      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/frequency`, {
+      const response = await fetchWithTimeout(`/api/radios/${assignedRadio.radio.id}/frequency`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ frequencyHz: hz }),
@@ -1705,7 +1787,11 @@ function App() {
       setGlobalControlEditing((prev) => ({ ...prev, frequency: false }))
       await refreshRadioState(assignedRadio.radio.id)
     } catch (error) {
-      addError(error instanceof Error ? error.message : 'Failed to set frequency')
+      if (error instanceof Error && error.name === 'AbortError') {
+        addError('Frequency request timed out. Radio may be busy; try again.')
+      } else {
+        addError(error instanceof Error ? error.message : 'Failed to set frequency')
+      }
     } finally {
       setGlobalControlBusy(false)
     }
@@ -1760,7 +1846,7 @@ function App() {
     const radioBandwidth = Number(assignedRadioState?.bandwidth ?? assignedRadio.radio.bandwidth ?? 3000)
     try {
       setGlobalControlBusy(true)
-      const response = await fetch(`/api/radios/${radioId}/mode`, {
+      const response = await fetchWithTimeout(`/api/radios/${radioId}/mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
@@ -1784,7 +1870,11 @@ function App() {
 
       await refreshRadioState(radioId)
     } catch (error) {
-      addError(error instanceof Error ? error.message : 'Failed to set mode')
+      if (error instanceof Error && error.name === 'AbortError') {
+        addError('Mode request timed out. Radio may be busy; try again.')
+      } else {
+        addError(error instanceof Error ? error.message : 'Failed to set mode')
+      }
     } finally {
       setGlobalControlBusy(false)
     }
@@ -1795,7 +1885,7 @@ function App() {
     try {
       setGlobalControlBusy(true)
       const enabled = !assignedRadioState?.ptt
-      const response = await fetch(`/api/radios/${assignedRadio.radio.id}/ptt`, {
+      const response = await fetchWithTimeout(`/api/radios/${assignedRadio.radio.id}/ptt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ enabled }),
@@ -1804,13 +1894,32 @@ function App() {
         const data = await response.json().catch(() => ({}))
         throw new Error(data?.error || 'Failed to toggle PTT')
       }
+      setRadioAudioPtt(Boolean(enabled))
       await refreshRadioState(assignedRadio.radio.id)
     } catch (error) {
-      addError(error instanceof Error ? error.message : 'Failed to toggle PTT')
+      if (error instanceof Error && error.name === 'AbortError') {
+        addError('PTT request timed out. Radio may be busy; try again.')
+      } else {
+        addError(error instanceof Error ? error.message : 'Failed to toggle PTT')
+      }
     } finally {
       setGlobalControlBusy(false)
     }
   }
+
+  const toggleAssignedAudioMute = () => {
+    setRadioAudioMuted((prev) => !prev)
+  }
+
+  const setAssignedAudioVolume = (nextVolume: number) => {
+    const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
+    setRadioAudioVolume(safeVolume)
+  }
+
+  useEffect(() => {
+    if (assignedRadioState?.ptt === null || assignedRadioState?.ptt === undefined) return
+    setRadioAudioPtt(Boolean(assignedRadioState.ptt))
+  }, [assignedRadioState?.ptt])
 
   useEffect(() => {
     if (effectiveView === 'logging') return
@@ -3123,6 +3232,8 @@ function App() {
                 const assignment = radio.assignments?.find(a => a.isActive)
                 const state = getRadioState(radio)
                 const inputs = getControlInputs(radio)
+                const isAssignedRadio = assignedRadio?.radio?.id === radio.id
+                const audioSourceLabel = formatAudioSourceLabel(radio.audioSourceType)
                 return (
                   <div key={radio.id} className="radio-card">
                     <div className="radio-header">
@@ -3196,6 +3307,8 @@ function App() {
                             <span>{state.mode || '---'}</span>
                             {formatBandwidthLabel(state.bandwidth) ? <span>{formatBandwidthLabel(state.bandwidth)}</span> : null}
                             {formatPowerLabel(state.power) ? <span>{formatPowerLabel(state.power)}</span> : null}
+                            <span>{audioSourceLabel}</span>
+                            {isAssignedRadio ? <span>{radioAudioMuted ? 'Muted' : `Vol ${radioAudioVolume}%`}</span> : null}
                             <span>{state.vfo || 'VFO?'}</span>
                             <span>{state.ptt ? 'PTT' : 'RX'}</span>
                             <button
@@ -3460,6 +3573,32 @@ function App() {
                           </div>
 
                           <div className="rig-control">
+                            <label>Audio Monitor</label>
+                            <div className="rig-audio-row">
+                              <span className="pill">{audioSourceLabel}</span>
+                              <button
+                                className="btn secondary"
+                                disabled={!isAssignedRadio}
+                                onClick={toggleAssignedAudioMute}
+                                title={isAssignedRadio ? 'Toggle monitor mute' : 'Assign this radio to control monitor audio'}
+                              >
+                                {radioAudioMuted ? 'Unmute' : 'Mute'}
+                              </button>
+                            </div>
+                            <div className="rig-slider">
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                value={radioAudioVolume}
+                                disabled={!isAssignedRadio}
+                                onChange={(e) => setAssignedAudioVolume(Number(e.target.value || 0))}
+                              />
+                              <span>{radioAudioVolume}%</span>
+                            </div>
+                          </div>
+
+                          <div className="rig-control">
                             <label>VFO</label>
                             <div className="quick-select">
                               {['VFOA', 'VFOB', 'VFO'].map((vfo) => (
@@ -3516,39 +3655,26 @@ function App() {
                       <div className="form-grid">
                         <div className="field">
                           <label>Source Type</label>
-                          <div className="quick-select">
-                            {[
-                              { value: 'none', label: 'No Audio' },
-                              { value: 'janus', label: 'Janus' },
-                              { value: 'http-stream', label: 'HTTP Stream' },
-                              { value: 'loopback', label: 'Loopback' },
-                            ].map((option) => {
-                              const isActive = (radio.audioSourceType || 'none') === option.value
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  className={`quick-btn ${isActive ? 'active' : ''}`}
-                                  onClick={async () => {
-                                    try {
-                                      await fetch(`/api/radios/${radio.id}`, {
-                                        method: 'PUT',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                          audioSourceType: option.value === 'none' ? null : option.value,
-                                        }),
-                                      })
-                                      await fetchRadios()
-                                    } catch (error) {
-                                      console.error('Failed to update audio source:', error)
-                                    }
-                                  }}
-                                >
-                                  {option.label}
-                                </button>
-                              )
-                            })}
-                          </div>
+                          <select
+                            value={radio.audioSourceType || 'none'}
+                            onChange={async (e) => {
+                              try {
+                                await fetch(`/api/radios/${radio.id}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                  body: JSON.stringify({ audioSourceType: e.target.value === 'none' ? null : e.target.value }),
+                                })
+                                await fetchRadios()
+                              } catch (error) {
+                                console.error('Failed to update audio source:', error)
+                              }
+                            }}
+                          >
+                            <option value="none">No Audio</option>
+                            <option value="janus">Janus Gateway</option>
+                            <option value="http-stream">HTTP Stream</option>
+                            <option value="loopback">Loopback (Test/Demo)</option>
+                          </select>
                         </div>
                         {radio.audioSourceType === 'janus' && (
                           <>
@@ -3560,7 +3686,7 @@ function App() {
                                   try {
                                     await fetch(`/api/radios/${radio.id}`, {
                                       method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                                       body: JSON.stringify({ janusRoomId: e.target.value }),
                                     })
                                     await fetchRadios()
@@ -3579,7 +3705,7 @@ function App() {
                                   try {
                                     await fetch(`/api/radios/${radio.id}`, {
                                       method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
+                                      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                                       body: JSON.stringify({ janusStreamId: e.target.value }),
                                     })
                                     await fetchRadios()
@@ -3610,30 +3736,145 @@ function App() {
                                   className="btn secondary"
                                   onClick={async () => {
                                     try {
-                                      const response = await fetch('/api/voice-rooms', {
-                                        headers: { ...getAuthHeaders() },
+                                      const janusTxn = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+                                      const janusPost = async (url: string, payload: Record<string, any>) => {
+                                        const response = await fetch(url, {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify(payload),
+                                        })
+                                        if (!response.ok) throw new Error(`Janus HTTP ${response.status}`)
+                                        return response.json()
+                                      }
+
+                                      const explicit = localStorage.getItem('yahaml:janusApiUrl')?.trim()
+                                      const hostFromRadio = (radio.host || '').trim()
+                                      const browserHost = window.location.hostname
+                                      const candidates = Array.from(new Set([
+                                        explicit || '',
+                                        hostFromRadio ? `http://${hostFromRadio}:8088/janus` : '',
+                                        `http://${browserHost}:8088/janus`,
+                                        `https://${browserHost}:8089/janus`,
+                                      ].filter(Boolean)))
+
+                                      let baseUrl = ''
+                                      let sessionId = 0
+                                      let handleId = 0
+                                      let list: any[] = []
+                                      let lastError: any = null
+
+                                      for (const candidate of candidates) {
+                                        try {
+                                          const createResp = await janusPost(candidate, {
+                                            janus: 'create',
+                                            transaction: janusTxn(),
+                                          })
+                                          if (createResp?.janus !== 'success' || !createResp?.data?.id) {
+                                            throw new Error('Failed to create Janus session')
+                                          }
+
+                                          baseUrl = candidate
+                                          sessionId = Number(createResp.data.id)
+
+                                          const attachResp = await janusPost(`${baseUrl}/${sessionId}`, {
+                                            janus: 'attach',
+                                            plugin: 'janus.plugin.audiobridge',
+                                            transaction: janusTxn(),
+                                          })
+                                          if (attachResp?.janus !== 'success' || !attachResp?.data?.id) {
+                                            throw new Error('Failed to attach AudioBridge plugin')
+                                          }
+                                          handleId = Number(attachResp.data.id)
+
+                                          const listResp = await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+                                            janus: 'message',
+                                            body: { request: 'list' },
+                                            transaction: janusTxn(),
+                                          })
+
+                                          list = listResp?.plugindata?.data?.list || []
+                                          if (!Array.isArray(list)) list = []
+                                          break
+                                        } catch (error) {
+                                          lastError = error
+                                          baseUrl = ''
+                                          sessionId = 0
+                                          handleId = 0
+                                        }
+                                      }
+
+                                      if (!baseUrl) {
+                                        throw new Error(lastError?.message || 'Unable to reach Janus API endpoints')
+                                      }
+
+                                      if (!list.length) {
+                                        addError('Janus reachable, but AudioBridge returned no rooms')
+                                        return
+                                      }
+
+                                      const normalizedCurrent = String(radio.janusRoomId || '').trim().toLowerCase()
+                                      const selectedRoom = list.find((room: any) => {
+                                        const byId = String(room?.room || '').trim() === String(radio.janusRoomId || '').trim()
+                                        const desc = String(room?.description || '').trim().toLowerCase()
+                                        const byDesc = normalizedCurrent ? (desc === normalizedCurrent || desc.includes(normalizedCurrent)) : false
+                                        return byId || byDesc
+                                      }) ?? list[0]
+
+                                      const selectedRoomId = String(selectedRoom?.room || '').trim()
+                                      if (!selectedRoomId) {
+                                        addError('Discovered Janus rooms, but no valid numeric room ID found')
+                                        return
+                                      }
+
+                                      const streamSeed = (radio.janusStreamId || radio.name || `radio-${radio.id.slice(0, 8)}`).toString()
+                                      const suggestedStreamId = streamSeed
+                                        .trim()
+                                        .toLowerCase()
+                                        .replace(/[^a-z0-9_-]+/g, '-')
+                                        .replace(/^-+|-+$/g, '')
+                                        || `radio-${radio.id.slice(0, 8)}`
+
+                                      const updateResponse = await fetch(`/api/radios/${radio.id}`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                        body: JSON.stringify({
+                                          audioSourceType: 'janus',
+                                          janusRoomId: selectedRoomId,
+                                          janusStreamId: suggestedStreamId,
+                                        }),
                                       })
-                                      if (!response.ok) {
-                                        const data = await response.json().catch(() => ({}))
-                                        addError(data.error || 'Unable to discover voice rooms')
+
+                                      if (!updateResponse.ok) {
+                                        const data = await updateResponse.json().catch(() => ({}))
+                                        addError(data.error || 'Discovered room, but failed to apply Janus settings')
                                         return
                                       }
-                                      const rooms = await response.json()
-                                      if (!Array.isArray(rooms) || rooms.length === 0) {
-                                        addError('No voice rooms found to map for Janus yet')
-                                        return
+
+                                      try {
+                                        if (handleId && sessionId && baseUrl) {
+                                          await janusPost(`${baseUrl}/${sessionId}/${handleId}`, {
+                                            janus: 'detach',
+                                            transaction: janusTxn(),
+                                          })
+                                        }
+                                        if (sessionId && baseUrl) {
+                                          await janusPost(`${baseUrl}/${sessionId}`, {
+                                            janus: 'destroy',
+                                            transaction: janusTxn(),
+                                          })
+                                        }
+                                      } catch {
+                                        // best-effort cleanup
                                       }
-                                      const preview = rooms
-                                        .slice(0, 3)
-                                        .map((r: any) => r.id || r.name || 'room')
-                                        .join(', ')
-                                      addSuccess(`Discovered voice rooms: ${preview}`)
+
+                                      await fetchRadios()
+                                      addSuccess(`Janus mapped to room ${selectedRoomId}${selectedRoom?.description ? ` (${selectedRoom.description})` : ''}, stream ${suggestedStreamId}`)
                                     } catch (error) {
                                       addError(error instanceof Error ? error.message : 'Failed to discover Janus options')
                                     }
                                   }}
                                 >
-                                  Discover Janus Options
+                                  Discover Janus Rooms
                                 </button>
                               </div>
                             </div>
@@ -3648,7 +3889,7 @@ function App() {
                                 try {
                                   await fetch(`/api/radios/${radio.id}`, {
                                     method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json' },
+                                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                                     body: JSON.stringify({ httpStreamUrl: e.target.value }),
                                   })
                                   await fetchRadios()
@@ -5194,6 +5435,8 @@ function App() {
                     {formatPowerLabel(assignedRadioState?.power) ? (
                       <span className="pill">{formatPowerLabel(assignedRadioState?.power)} PWR</span>
                     ) : null}
+                    <span className="pill">{assignedAudioSourceLabel}</span>
+                    <span className="pill">{radioAudioMuted ? 'Muted' : `Vol ${radioAudioVolume}%`}</span>
                     <span className={`pill ${assignedRadio.radio.isConnected ? 'success' : 'error'}`}>
                       {assignedRadio.radio.isConnected ? 'Connected' : 'Disconnected'}
                     </span>
@@ -5299,11 +5542,31 @@ function App() {
                   </div>
                   <div className="global-summary-actions">
                     <button
+                      className="btn small secondary"
+                      onClick={toggleAssignedAudioMute}
+                      disabled={globalControlBusy}
+                    >
+                      {radioAudioMuted ? 'Unmute' : 'Mute'}
+                    </button>
+                    <div className="global-audio-inline" aria-label="Audio monitor volume">
+                      <span className="global-audio-inline-label">Vol</span>
+                      <input
+                        className="global-audio-slider"
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={radioAudioVolume}
+                        onChange={(e) => setAssignedAudioVolume(Number(e.target.value || 0))}
+                        disabled={globalControlBusy}
+                      />
+                      <span className="global-audio-inline-value">{radioAudioVolume}%</span>
+                    </div>
+                    <button
                       className={`btn small ${assignedRadioState?.ptt ? 'danger' : 'primary'}`}
                       onClick={toggleAssignedPtt}
                       disabled={globalControlBusy}
                     >
-                      {assignedRadioState?.ptt ? 'TX' : 'RX'}
+                      {assignedRadioState?.ptt ? 'PTT ON' : 'PTT OFF'}
                     </button>
                     <button className="btn small secondary" onClick={() => handleViewChange('rig')}>
                       Open Rig

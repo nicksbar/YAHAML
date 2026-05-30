@@ -145,6 +145,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
 
   useEffect(() => {
     let isMounted = true
+    let isDisposing = false
 
     const fetchQSOs = async () => {
       try {
@@ -214,10 +215,18 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
       }
     }
 
+    ws.onerror = () => {
+      if (isDisposing || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        return
+      }
+      // Avoid noisy console spam from Vite/React strict-mode mount/unmount cycles.
+    }
+
     // Refresh every 5 seconds
     const timer = setInterval(fetchQSOs, 5000)
     return () => {
       isMounted = false
+      isDisposing = true
       clearInterval(timer)
       if (ws.readyState === WebSocket.OPEN && contestId) {
         ws.send(
@@ -227,7 +236,9 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
           })
         )
       }
-      ws.close()
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close()
+      }
     }
   }, [maxEntries, contestId])
 

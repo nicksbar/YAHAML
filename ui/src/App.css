@@ -640,6 +640,23 @@ main {
   gap: 6px;
 }
 
+.global-audio-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 150px;
+}
+
+.global-audio-inline-label,
+.global-audio-inline-value {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.global-audio-slider {
+  width: 82px;
+}
+
 .global-ops-summary strong {
   color: var(--text-primary);
 }
@@ -2122,6 +2139,13 @@ main {
 
 .rig-ptt-row {
   display: flex;
+}
+
+.rig-audio-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
 }
 
 /* Radio Audio Configuration */

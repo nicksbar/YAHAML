@@ -142,10 +142,10 @@ Located in the **📻 Assigned Radio** panel on the LoggingPage sidebar:
 - All sources mixed through master gain node
 
 ### Janus Gateway
-- Connects to Janus WebRTC audiobridge
-- Subscribes to specified room and stream
-- Receives low-latency Opus audio
-- **Note**: Full Janus client implementation pending (placeholder in code)
+- Connects to Janus AudioBridge via Janus HTTP/WebSocket API
+- Subscribes to specified room and stream identifier
+- Handles SDP answer and ICE candidate exchange for browser playback
+- Receives low-latency mixed room audio in the operator browser
 
 ## Audio Source Setup Examples
 
