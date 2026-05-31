@@ -5,6 +5,7 @@ import { ThemeProvider } from './context/ThemeContext'
 import { BandOccupancy } from './components/BandOccupancy'
 import { MessageCenter } from './components/MessageCenter'
 import { QSOMap } from './components/QSOMap'
+import { OpsMap } from './components/OpsMap'
 import { StatsPanel } from './components/StatsPanel'
 import { DebugPanel } from './components/DebugPanel'
 import { LoggingPage } from './components/LoggingPage'
@@ -137,7 +138,7 @@ const storageKey = 'yahaml:callsign'
 const sessionTokenKey = 'yahaml:sessionToken'
 const browserIdKey = 'yahaml:browserId'
 
-type ViewType = 'dashboard' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
+type ViewType = 'dashboard' | 'opsmap' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
 
 type N3fjpForwarderConfig = {
   enabled: boolean
@@ -174,7 +175,7 @@ function App() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [error, setError] = useState<string | null>(null)
   const [globalMessages, setGlobalMessages] = useState<Array<{ text: string; type: 'error' | 'success' }>>([])
-  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [autoRefresh, setAutoRefresh] = useState(false)
   const [callsignInput, setCallsignInput] = useState(
     localStorage.getItem(storageKey) || '',
   )
@@ -295,6 +296,8 @@ function App() {
   const [globalControlEditing, setGlobalControlEditing] = useState({
     frequency: false,
   })
+  const selectedStationIdRef = useRef<string | null>(selectedStationId)
+  const sessionTokenRef = useRef<string>(sessionToken)
   const lastRadioStateUpdateAtRef = useRef<number>(0)
   const syncingSharedAudioRef = useRef(false)
   const [specialClubId, setSpecialClubId] = useState('')
@@ -362,6 +365,14 @@ function App() {
       root.classList.add(`theme-${theme}`)
     }
   }, [theme])
+
+  useEffect(() => {
+    selectedStationIdRef.current = selectedStationId
+  }, [selectedStationId])
+
+  useEffect(() => {
+    sessionTokenRef.current = sessionToken
+  }, [sessionToken])
 
   const sortedStations = useMemo(
     () => [...stations].sort((a, b) => a.callsign.localeCompare(b.callsign)),
@@ -611,6 +622,7 @@ function App() {
 
   const clearSession = () => {
     localStorage.removeItem(sessionTokenKey)
+    sessionTokenRef.current = ''
     setSessionToken('')
   }
 
@@ -853,7 +865,7 @@ function App() {
       const storedToken = localStorage.getItem(sessionTokenKey)
       
       // Restore session if we have both callsign and token (and haven't already selected a station)
-      if (!selectedStationId && storedCallsign && storedToken && !sessionToken) {
+      if (!selectedStationIdRef.current && storedCallsign && storedToken && !sessionTokenRef.current) {
         const matched = data.find((station) => station.callsign === storedCallsign)
         if (matched) {
           console.log('[SESSION] Restoring session for', storedCallsign)
@@ -865,6 +877,8 @@ function App() {
             if (validateResponse.ok) {
               console.log('[SESSION] Session restored successfully')
               // Use the existing valid token instead of creating a new session
+              sessionTokenRef.current = storedToken
+              selectedStationIdRef.current = matched.id
               setSessionToken(storedToken)
               setCallsignInput(storedCallsign)
               setSelectedStationId(matched.id)
@@ -1651,7 +1665,6 @@ function App() {
       // Don't fetch station details on auto-refresh - it resets the form
     }, 5000)
     return () => clearInterval(interval)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh])
 
   useEffect(() => {
@@ -2003,6 +2016,24 @@ function App() {
         <div className="dashboard-row">
           <QSOMap contestId={contest?.id} className="flex-1" height="500px" />
           <StatsPanel contestId={contest?.id} className="flex-1" />
+        </div>
+      </div>
+    )
+  }
+
+  function renderOpsMapView() {
+    return (
+      <div className="view-container">
+        <div className="view-header">
+          <h1>Ops Map</h1>
+          <p className="view-description">
+            Live contest contact mapping with template-driven region targets, mode-aware coverage, and priority chase tracking.
+          </p>
+        </div>
+        <div className="view-content">
+          <section className="panel">
+            <OpsMap contestId={contest?.id} />
+          </section>
         </div>
       </div>
     )
@@ -5229,6 +5260,14 @@ function App() {
               Dashboard
             </button>
             <button
+              className={`nav-btn ${effectiveView === 'opsmap' ? 'active' : ''}`}
+              onClick={() => handleViewChange('opsmap')}
+              disabled={!hasActiveCallsign}
+              data-testid="nav-ops-map"
+            >
+              Ops Map
+            </button>
+            <button
               className={`nav-btn ${effectiveView === 'club' ? 'active' : ''}`}
               onClick={() => handleViewChange('club')}
               disabled={!hasActiveCallsign}
@@ -5405,6 +5444,7 @@ function App() {
           </div>
         )}
         {effectiveView === 'dashboard' && renderDashboard()}
+        {effectiveView === 'opsmap' && renderOpsMapView()}
         {effectiveView === 'club' && renderClubView()}
         {effectiveView === 'contests' && renderContestsView()}
         {effectiveView === 'station' && renderStationView()}

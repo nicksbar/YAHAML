@@ -3683,6 +3683,308 @@ app.get('/api/qso-contacts', async (req, res) => {
   }
 });
 
+// Ops map analytics (template-aware region coverage)
+app.get('/api/map/ops', async (req, res) => {
+  try {
+    const {
+      contestId,
+      timeWindow = 'last-6h',
+      band,
+      mode,
+      stationId,
+      regionType,
+    } = req.query;
+
+    const now = new Date();
+    const sinceTime = new Date();
+
+    switch (String(timeWindow)) {
+      case 'last-30min':
+        sinceTime.setMinutes(sinceTime.getMinutes() - 30);
+        break;
+      case 'last-1h':
+        sinceTime.setHours(sinceTime.getHours() - 1);
+        break;
+      case 'last-24h':
+        sinceTime.setDate(sinceTime.getDate() - 1);
+        break;
+      case 'contest':
+      case 'all':
+        sinceTime.setFullYear(1970, 0, 1);
+        break;
+      case 'last-6h':
+      default:
+        sinceTime.setHours(sinceTime.getHours() - 6);
+        break;
+    }
+
+    const normalizedBand = typeof band === 'string' && band.trim() ? band.trim().toUpperCase() : undefined;
+    const normalizedMode = typeof mode === 'string' && mode.trim() ? mode.trim().toUpperCase() : undefined;
+    const normalizedStationId = typeof stationId === 'string' && stationId.trim() ? stationId.trim() : undefined;
+
+    const contacts = await prisma.qSOContact.findMany({
+      where: {
+        contestId: typeof contestId === 'string' && contestId ? contestId : undefined,
+        stationId: normalizedStationId,
+        band: normalizedBand,
+        mode: normalizedMode,
+        qsoDateTime: {
+          gte: sinceTime,
+          lte: now,
+        },
+      },
+      orderBy: { qsoDateTime: 'desc' },
+      take: 1000,
+    });
+
+    const fallbackLogs = contacts.length
+      ? []
+      : await prisma.logEntry.findMany({
+          where: {
+            contestId: typeof contestId === 'string' && contestId ? contestId : undefined,
+            stationId: normalizedStationId,
+            band: normalizedBand,
+            mode: normalizedMode,
+            qsoDate: {
+              gte: sinceTime,
+              lte: now,
+            },
+            merge_status: { not: 'duplicate_of' },
+          },
+          orderBy: { qsoDate: 'desc' },
+          take: 1000,
+        });
+
+    const contactRows = contacts.length
+      ? contacts.map((contact) => ({
+          id: contact.id,
+          stationId: contact.stationId,
+          contestId: contact.contestId,
+          callsign: contact.callsign,
+          band: contact.band,
+          mode: contact.mode,
+          state: contact.state,
+          grid: contact.grid,
+          latitude: contact.latitude,
+          longitude: contact.longitude,
+          qsoDateTime: contact.qsoDateTime,
+          source: contact.source,
+        }))
+      : fallbackLogs.map((log) => ({
+          id: log.id,
+          stationId: log.stationId,
+          contestId: log.contestId,
+          callsign: log.callsign,
+          band: log.band,
+          mode: log.mode,
+          state: log.state,
+          grid: log.grid,
+          latitude: null,
+          longitude: null,
+          qsoDateTime: log.qsoDate,
+          source: log.source,
+        }));
+
+    const contestTargetId = typeof contestId === 'string' && contestId
+      ? contestId
+      : null;
+
+    const contestRecord = contestTargetId
+      ? await prisma.contest.findUnique({
+          where: { id: contestTargetId },
+          include: { template: true },
+        })
+      : await prisma.contest.findFirst({
+          where: { isActive: true },
+          include: { template: true },
+        });
+
+    const uiConfig = safeParseJson<Record<string, unknown>>(contestRecord?.template?.uiConfig) || {};
+    const mapConfig = safeParseJson<Record<string, unknown>>((uiConfig as Record<string, unknown>)?.map) || {};
+    const templateRegionType = typeof mapConfig.regionType === 'string' ? mapConfig.regionType : undefined;
+    const resolvedRegionType = typeof regionType === 'string' && regionType
+      ? regionType
+      : (templateRegionType || 'state');
+
+    const getRegionKey = (row: {
+      state?: string | null;
+      grid?: string | null;
+    }): string | null => {
+      if (resolvedRegionType === 'grid4') {
+        const grid = (row.grid || '').trim().toUpperCase();
+        return grid.length >= 4 ? grid.slice(0, 4) : null;
+      }
+      if (resolvedRegionType === 'grid6') {
+        const grid = (row.grid || '').trim().toUpperCase();
+        return grid.length >= 6 ? grid.slice(0, 6) : null;
+      }
+      const stateValue = (row.state || '').trim().toUpperCase();
+      return stateValue || null;
+    };
+
+    type HighlightRegion = {
+      region: string;
+      label?: string;
+      color?: string;
+      modes?: string[];
+      notes?: string;
+    };
+
+    const templateHighlights = Array.isArray((mapConfig as Record<string, unknown>)?.highlightRegions)
+      ? ((mapConfig as Record<string, unknown>).highlightRegions as unknown[])
+          .map((entry): HighlightRegion | null => {
+            if (!entry || typeof entry !== 'object') return null;
+            const obj = entry as Record<string, unknown>;
+            const region = typeof obj.region === 'string' ? obj.region.trim().toUpperCase() : '';
+            if (!region) return null;
+            return {
+              region,
+              label: typeof obj.label === 'string' ? obj.label : undefined,
+              color: typeof obj.color === 'string' ? obj.color : undefined,
+              modes: Array.isArray(obj.modes)
+                ? obj.modes
+                    .map((m) => (typeof m === 'string' ? normalizeModeForScoring(m.trim().toUpperCase()) : ''))
+                    .filter(Boolean)
+                : undefined,
+              notes: typeof obj.notes === 'string' ? obj.notes : undefined,
+            };
+          })
+          .filter((entry): entry is HighlightRegion => Boolean(entry))
+      : [];
+
+    const regionMap = new Map<string, {
+      region: string;
+      count: number;
+      uniqueCalls: Set<string>;
+      byMode: Record<string, number>;
+      byBand: Record<string, number>;
+      firstSeen: Date | null;
+      lastSeen: Date | null;
+    }>();
+
+    for (const row of contactRows) {
+      const region = getRegionKey({ state: row.state, grid: row.grid });
+      if (!region) continue;
+
+      if (!regionMap.has(region)) {
+        regionMap.set(region, {
+          region,
+          count: 0,
+          uniqueCalls: new Set<string>(),
+          byMode: {},
+          byBand: {},
+          firstSeen: null,
+          lastSeen: null,
+        });
+      }
+
+      const bucket = regionMap.get(region)!;
+      bucket.count += 1;
+      bucket.uniqueCalls.add((row.callsign || '').toUpperCase());
+
+      const modeKey = normalizeModeForScoring((row.mode || '').toUpperCase()) || 'UNKNOWN';
+      const bandKey = (row.band || '').toUpperCase() || 'UNKNOWN';
+      bucket.byMode[modeKey] = (bucket.byMode[modeKey] || 0) + 1;
+      bucket.byBand[bandKey] = (bucket.byBand[bandKey] || 0) + 1;
+
+      const seenAt = new Date(row.qsoDateTime);
+      if (!bucket.firstSeen || seenAt < bucket.firstSeen) bucket.firstSeen = seenAt;
+      if (!bucket.lastSeen || seenAt > bucket.lastSeen) bucket.lastSeen = seenAt;
+    }
+
+    const highlightMap = new Map<string, HighlightRegion>();
+    templateHighlights.forEach((highlight) => highlightMap.set(highlight.region, highlight));
+
+    const regionStats = Array.from(regionMap.values())
+      .map((bucket) => {
+        const highlight = highlightMap.get(bucket.region);
+        const workedModes = Object.keys(bucket.byMode);
+        const requiredModes = highlight?.modes || [];
+        const modeCoverage = requiredModes.length
+          ? requiredModes.filter((m) => workedModes.includes(m)).length / requiredModes.length
+          : workedModes.length > 0
+            ? 1
+            : 0;
+
+        return {
+          region: bucket.region,
+          count: bucket.count,
+          uniqueCalls: bucket.uniqueCalls.size,
+          byMode: bucket.byMode,
+          byBand: bucket.byBand,
+          firstSeen: bucket.firstSeen,
+          lastSeen: bucket.lastSeen,
+          isHighlighted: Boolean(highlight),
+          highlightLabel: highlight?.label || null,
+          highlightColor: highlight?.color || null,
+          highlightModes: highlight?.modes || [],
+          highlightNotes: highlight?.notes || null,
+          modeCoverage,
+        };
+      })
+      .sort((a, b) => b.count - a.count || a.region.localeCompare(b.region));
+
+    const highlightedStatus = templateHighlights.map((highlight) => {
+      const worked = regionMap.get(highlight.region);
+      const workedModes = worked ? Object.keys(worked.byMode) : [];
+      const requiredModes = highlight.modes || [];
+      const missingModes = requiredModes.filter((m) => !workedModes.includes(m));
+
+      return {
+        region: highlight.region,
+        label: highlight.label || null,
+        color: highlight.color || null,
+        notes: highlight.notes || null,
+        requiredModes,
+        worked: Boolean(worked),
+        workedCount: worked?.count || 0,
+        workedModes,
+        missingModes,
+        completed: Boolean(worked) && missingModes.length === 0,
+      };
+    });
+
+    const uniqueCalls = new Set(contactRows.map((row) => (row.callsign || '').toUpperCase()).filter(Boolean));
+    const uniqueBands = new Set(contactRows.map((row) => (row.band || '').toUpperCase()).filter(Boolean));
+    const uniqueModes = new Set(contactRows.map((row) => (row.mode || '').toUpperCase()).filter(Boolean));
+
+    const response = {
+      filters: {
+        contestId: contestTargetId,
+        timeWindow: String(timeWindow),
+        band: normalizedBand || null,
+        mode: normalizedMode || null,
+        stationId: normalizedStationId || null,
+        regionType: resolvedRegionType,
+      },
+      templateMapConfig: {
+        enabled: Object.keys(mapConfig).length > 0,
+        regionType: resolvedRegionType,
+        title: typeof mapConfig.title === 'string' ? mapConfig.title : null,
+        subtitle: typeof mapConfig.subtitle === 'string' ? mapConfig.subtitle : null,
+        objective: typeof mapConfig.objective === 'string' ? mapConfig.objective : null,
+        highlightsDefined: templateHighlights.length,
+      },
+      summary: {
+        totalContacts: contactRows.length,
+        uniqueCalls: uniqueCalls.size,
+        uniqueBands: uniqueBands.size,
+        uniqueModes: uniqueModes.size,
+        regionsWorked: regionMap.size,
+        highlightedRegionsWorked: highlightedStatus.filter((item) => item.worked).length,
+        highlightedRegionsCompleted: highlightedStatus.filter((item) => item.completed).length,
+      },
+      contacts: contactRows,
+      regionStats,
+      highlightedStatus,
+    };
+
+    return res.json(response);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to build ops map data' });
+  }
+});
+
 // Operator messages
 app.get('/api/operator-messages', async (req, res) => {
   try {
