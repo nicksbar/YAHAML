@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import '../styles/CWDecoder.css'
 import type { DecodedMessage, DigitalMode } from '../audio/types';
 import { globalModemManager } from '../audio/modem-manager'
@@ -11,6 +11,17 @@ interface ToneAnalysis {
   quality: number
   bandwidthHz: number
   recommendedBandwidthHz: number
+}
+
+type CWDecoderRuntimeModem = {
+  setConfig: (config: { wpm?: number; toneFrequency?: number; toneBandwidth?: number }) => void
+  getEstimatedWpm?: () => number
+  getTimingConfidence?: () => number
+  reset?: () => void
+}
+
+type WindowWithWebkitAudioContext = Window & {
+  webkitAudioContext?: typeof AudioContext
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
@@ -167,7 +178,13 @@ export const CWDecoder: React.FC<CWDecoderProps> = ({
 
     // Create AudioContext if needed
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const AudioContextCtor =
+        window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext
+      if (!AudioContextCtor) {
+        console.error('[CWDecoder] AudioContext API is unavailable in this browser')
+        return
+      }
+      audioContextRef.current = new AudioContextCtor()
     }
     const audioContext = audioContextRef.current
 
@@ -258,7 +275,7 @@ export const CWDecoder: React.FC<CWDecoderProps> = ({
     const updateDisplay = () => {
       const state = globalModemManager.getState()
       const recent = state.recentMessages.slice(0, 1)
-      const cwModem = globalModemManager.getModem('CW') as any
+      const cwModem = globalModemManager.getModem('CW') as CWDecoderRuntimeModem | undefined
       const liveEstimatedWpm = typeof cwModem?.getEstimatedWpm === 'function'
         ? clamp(Math.round(cwModem.getEstimatedWpm()), 5, 70)
         : null
@@ -311,6 +328,13 @@ export const CWDecoder: React.FC<CWDecoderProps> = ({
         if (callsignMatch && onCallsignDetected) {
           onCallsignDetected(callsignMatch[1], msg.confidence)
         }
+
+        if (onExchangeDetected) {
+          const parts = msg.text.trim().split(/\s+/)
+          if (parts.length > 1) {
+            onExchangeDetected(parts.slice(1).join(' '))
+          }
+        }
       }
 
       setRecentMessages(state.recentMessages)
@@ -319,7 +343,7 @@ export const CWDecoder: React.FC<CWDecoderProps> = ({
 
     const interval = setInterval(updateDisplay, 100)
     return () => clearInterval(interval)
-  }, [onCallsignDetected])
+  }, [onCallsignDetected, onExchangeDetected])
 
   const handleModeChange = (mode: DigitalMode) => {
     globalModemManager.setActiveMode(mode)

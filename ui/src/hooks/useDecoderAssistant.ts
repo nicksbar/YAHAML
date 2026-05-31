@@ -2,8 +2,7 @@
  * Hook for integrating CW decoder into logging forms
  */
 
-import { useState, useCallback, useEffect } from 'react'
-import { globalModemManager } from '../audio/modem-manager'
+import { useState, useCallback } from 'react'
 
 interface DecoderAssistant {
   detectedCallsign: string | null
@@ -16,18 +15,6 @@ export const useDecoderAssistant = (): DecoderAssistant => {
   const [detectedCallsign, setDetectedCallsign] = useState<string | null>(null)
   const [detectedExchange, setDetectedExchange] = useState<string | null>(null)
   const [decoderConfidence, setDecoderConfidence] = useState<number>(0)
-
-  const handleCallsignDetected = useCallback((callsign: string, confidence: number) => {
-    if (confidence > 0.6) {
-      // Only set if confidence is reasonably high
-      setDetectedCallsign(callsign)
-      setDecoderConfidence(confidence)
-    }
-  }, [])
-
-  const handleExchangeDetected = useCallback((exchange: string) => {
-    setDetectedExchange(exchange)
-  }, [])
 
   const clearDetections = useCallback(() => {
     setDetectedCallsign(null)
@@ -51,6 +38,9 @@ export const parseContestExchange = (
   decodedText: string,
   contestType: string
 ): { callsign: string; exchange: string } | null => {
+  const normalizedContestType = contestType.trim().toUpperCase()
+  if (!normalizedContestType) return null
+
   // Simple parser - extend based on specific contest rules
   // Example: "W5A 559 AR" -> { callsign: "W5A", exchange: "559 AR" }
 

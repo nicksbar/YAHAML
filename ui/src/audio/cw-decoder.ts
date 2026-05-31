@@ -249,7 +249,6 @@ export class CWDecoder extends BaseModem {
     const dahDuration = ditDuration * 3
     const symbolSpace = ditDuration
     const charSpace = ditDuration * 3
-    const wordSpace = ditDuration * 7
 
     let totalSamples = 0
     const morse = text
