@@ -63,7 +63,7 @@ interface QSOEntryFormProps {
     power?: number | string | null
   }
   onSubmit: (qso: QSOEntry) => Promise<void>
-  onBandModeSelected?: (payload: { stationId: string; band: string; mode: string }) => void
+  onBandModeSelected?: (payload: { stationId: string; band: string; mode: string; changed: 'band' | 'mode' }) => void
   loading?: boolean
 }
 
@@ -185,16 +185,6 @@ export function QSOEntryForm({ stationId, activeContest, radioDefaults, onSubmit
   }
 
   useEffect(() => {
-    if (!stationId || !band || !mode || !onBandModeSelected) return
-
-    const timer = setTimeout(() => {
-      onBandModeSelected({ stationId, band: band.trim(), mode: mode.trim().toUpperCase() })
-    }, 200)
-
-    return () => clearTimeout(timer)
-  }, [stationId, band, mode, onBandModeSelected])
-
-  useEffect(() => {
     if (!radioDefaults) return
 
     const nextBand = radioDefaults.band?.trim() || ''
@@ -300,7 +290,17 @@ export function QSOEntryForm({ stationId, activeContest, radioDefaults, onSubmit
                 key={b}
                 type="button"
                 className={`quick-btn ${band === b ? 'active' : ''}`}
-                onClick={() => setBand(b)}
+                onClick={() => {
+                  setBand(b)
+                  if (stationId && mode && onBandModeSelected) {
+                    onBandModeSelected({
+                      stationId,
+                      band: b.trim(),
+                      mode: mode.trim().toUpperCase(),
+                      changed: 'band',
+                    })
+                  }
+                }}
                 disabled={submitting}
                 data-testid={`band-quick-${String(b).toLowerCase().replace(/\s+/g, '-')}`}
               >
@@ -318,7 +318,17 @@ export function QSOEntryForm({ stationId, activeContest, radioDefaults, onSubmit
                 key={m}
                 type="button"
                 className={`quick-btn ${mode === m ? 'active' : ''}`}
-                onClick={() => setMode(m)}
+                onClick={() => {
+                  setMode(m)
+                  if (stationId && band && onBandModeSelected) {
+                    onBandModeSelected({
+                      stationId,
+                      band: band.trim(),
+                      mode: m.trim().toUpperCase(),
+                      changed: 'mode',
+                    })
+                  }
+                }}
                 disabled={submitting}
                 data-testid={`mode-quick-${String(m).toLowerCase().replace(/\s+/g, '-')}`}
               >
