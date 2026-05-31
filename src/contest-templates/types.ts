@@ -57,6 +57,19 @@ export interface UIConfig {
     widgets: string[];
     stats: string[];
   };
+  map?: {
+    title?: string;
+    subtitle?: string;
+    objective?: string;
+    regionType?: 'state' | 'grid4' | 'grid6';
+    highlightRegions?: Array<{
+      region: string;
+      label?: string;
+      color?: string;
+      modes?: string[];
+      notes?: string;
+    }>;
+  };
   helpUrl?: string;
   [key: string]: any;
 }

@@ -161,6 +161,18 @@ export const ARRL_FIELD_DAY: ContestTemplate = {
       widgets: ['qso-count', 'multipliers', 'bonuses', 'power-multiplier'],
       stats: ['totalQsos', 'totalPoints', 'sectionsWorked', 'estimatedScore'],
     },
+    map: {
+      title: 'ARRL Field Day Ops Map',
+      subtitle: 'Track worked sections and chase high-value targets by mode',
+      objective: 'Work all ARRL sections; prioritize high-value targets on CW and Digital.',
+      regionType: 'state',
+      highlightRegions: [
+        { region: 'AK', label: 'Alaska', color: '#a855f7', modes: ['CW', 'DIGITAL'], notes: 'Long-haul / high-value FD target' },
+        { region: 'HI', label: 'Hawaii', color: '#14b8a6', modes: ['CW', 'DIGITAL'], notes: 'Rare section for many clubs' },
+        { region: 'PR', label: 'Puerto Rico', color: '#f97316', modes: ['PHONE', 'DIGITAL'] },
+        { region: 'VI', label: 'US Virgin Islands', color: '#ef4444', modes: ['CW'] },
+      ],
+    },
     helpUrl: 'http://www.arrl.org/field-day',
   },
   isActive: true,
