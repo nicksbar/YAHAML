@@ -30,9 +30,51 @@
 
 /* Layout */
 .logging-layout {
-  display: block;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-md);
   width: 100%;
   margin: 0 auto;
+}
+
+.logging-sidebar {
+  display: none;
+}
+
+@media (max-width: 1400px) {
+  .logging-layout {
+    grid-template-columns: 1fr;
+  }
+  
+  .logging-sidebar {
+    grid-column: 1;
+    position: static;
+    max-height: none;
+  }
+}
+
+.logging-inline-decoder {
+  border: 1px solid var(--border);
+}
+
+.logging-inline-decoder h3 {
+  margin: 0 0 var(--space-xs) 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.logging-inline-decoder .cw-decoder {
+  min-width: 0;
+  padding: 0.65rem;
+  gap: 0.65rem;
+}
+
+.logging-inline-decoder .decoder-header h3 {
+  font-size: 0.85rem;
+}
+
+.logging-inline-decoder .decoder-history {
+  display: none;
 }
 
 .logging-tabs {

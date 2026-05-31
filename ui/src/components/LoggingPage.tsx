@@ -3,6 +3,7 @@ import '../styles/LoggingPage.css'
 import { QSOEntryForm, type QSOEntry } from './QSOEntryForm'
 import { LiveQSOFeed } from './LiveQSOFeed'
 import { LogManagementPanel } from './LogManagementPanel'
+import { CWDecoder } from './CWDecoder'
 import { useLoggingContext } from '../hooks/useLoggingContext'
 import { useQSOSubmit } from '../hooks/useQSOSubmit'
 
@@ -117,6 +118,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     localStorage.getItem('yahaml:keepAudioAlive') !== 'false' // default true
   )
   const [activeLoggingTab, setActiveLoggingTab] = useState<LoggingTab>('standard')
+  const [remoteAudioStream, setRemoteAudioStream] = useState<MediaStream | undefined>(undefined)
   const [gotaStationId, setGotaStationId] = useState(stationId)
   const [gotaOperatorCallsign, setGotaOperatorCallsign] = useState(localStorage.getItem('yahaml:callsign') || '')
   const [gotaRadio, setGotaRadio] = useState<RadioInfo | null>(null)
@@ -313,6 +315,8 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
         event.streams.forEach((stream) => {
           stream.getAudioTracks().forEach((track) => remoteStream.addTrack(track))
         })
+        // Update state so CWDecoder can access the stream
+        setRemoteAudioStream(remoteStream)
       }
 
       pc.addTransceiver('audio', { direction: 'recvonly' })
@@ -1393,7 +1397,17 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     return trimmed.toUpperCase()
   }
 
-  const applyBandModeToAssignedRadio = async ({ stationId: selectedStationId, band, mode }: { stationId: string; band: string; mode: string }) => {
+  const applyBandModeToAssignedRadio = async ({
+    stationId: selectedStationId,
+    band,
+    mode,
+    changed,
+  }: {
+    stationId: string
+    band: string
+    mode: string
+    changed: 'band' | 'mode'
+  }) => {
     if (!token || selectedStationId !== stationId || !assignedRadio?.radio?.id || !assignedRadio?.radio?.isConnected) return
 
     const normalizedBand = band.trim().toLowerCase()
@@ -1413,7 +1427,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       const targetBand = targetFrequencyHz ? frequencyToBand(targetFrequencyHz).toLowerCase() : ''
       const currentMode = String(radioState?.mode || '').toUpperCase()
 
-      if (targetFrequencyHz && targetBand && targetBand !== currentBand) {
+      if (changed === 'band' && targetFrequencyHz && targetBand && targetBand !== currentBand) {
         const frequencyResponse = await fetchWithTimeout(`/api/radios/${radioId}/frequency`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders },
@@ -1450,7 +1464,16 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const publishBandModeSelection = async ({ stationId: selectedStationId, band, mode }: { stationId: string; band: string; mode: string }) => {
+  const publishBandModeSelection = async ({
+    stationId: selectedStationId,
+    band,
+    mode,
+  }: {
+    stationId: string
+    band: string
+    mode: string
+    changed: 'band' | 'mode'
+  }) => {
     if (!token || !selectedStationId || !band || !mode) return
 
     const normalizedBand = normalizeBandForOccupancy(band)
@@ -1485,10 +1508,29 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const handleBandModeSelected = async (payload: { stationId: string; band: string; mode: string }) => {
+  const handleBandModeSelected = async (payload: { stationId: string; band: string; mode: string; changed: 'band' | 'mode' }) => {
     await publishBandModeSelection(payload)
     await applyBandModeToAssignedRadio(payload)
   }
+
+  const activeMode = String(radioState?.mode || '').trim().toUpperCase()
+  const cwAndDigitalModes = new Set([
+    'CW',
+    'CWR',
+    'DIGITAL',
+    'FT8',
+    'FT4',
+    'RTTY',
+    'PSK31',
+    'MFSK',
+    'OLIVIA',
+    'DOMINOEX',
+    'MT63',
+    'FSK',
+    'PKTUSB',
+    'DATA',
+  ])
+  const showCompactDecoder = activeMode ? cwAndDigitalModes.has(activeMode) : false
 
   return (
     <div className="logging-page" data-testid="logging-page">
@@ -1578,6 +1620,12 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
               onBandModeSelected={handleBandModeSelected}
               loading={submitting}
             />
+          )}
+
+          {showCompactDecoder && (
+            <section className="logging-inline-decoder panel compact" data-testid="logging-inline-decoder">
+              <CWDecoder audioStream={remoteAudioStream} compact />
+            </section>
           )}
 
           {/* Live QSO Feed */}
