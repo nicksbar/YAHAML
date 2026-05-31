@@ -632,6 +632,10 @@ model Session {
   
   // Client tracking for rig locking
   browserId   String?  // Browser session ID for rig locking
+
+  // Session source identification
+  sourceType  String   @default("web")  // web | n3fjp | mobile | api | other
+  sourceInfo  String?  // Additional source details (e.g., browser, N3FJP version)
   
   // Relations
   station     Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)

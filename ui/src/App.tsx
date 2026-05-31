@@ -598,7 +598,12 @@ function App() {
   const getBrowserId = () => {
     let id = localStorage.getItem(browserIdKey)
     if (!id) {
-      id = crypto.randomUUID()
+      const randomUuid = globalThis.crypto?.randomUUID?.bind(globalThis.crypto)
+      if (randomUuid) {
+        id = randomUuid()
+      } else {
+        id = `yahaml-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+      }
       localStorage.setItem(browserIdKey, id)
     }
     return id

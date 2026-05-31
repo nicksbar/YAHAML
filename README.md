@@ -93,7 +93,7 @@ npm run dev:all
 docker compose up -d --build
 ```
 
-- UI (root): http://localhost
+- UI: http://localhost:8080
 - API: http://localhost:3000
 - SQLite data: `./data/yahaml.db`
 
