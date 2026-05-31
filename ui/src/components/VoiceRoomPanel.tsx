@@ -454,7 +454,8 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   useEffect(() => {
     if (!sessionToken) return
     fetchRooms()
-    const interval = setInterval(fetchRooms, 5000)
+    // Only poll every 30 seconds to avoid excessive page re-renders
+    const interval = setInterval(fetchRooms, 30000)
     return () => clearInterval(interval)
   }, [sessionToken, fetchRooms])
 

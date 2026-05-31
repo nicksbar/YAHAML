@@ -115,6 +115,11 @@ export const OpsMap: React.FC<OpsMapProps> = ({ contestId }) => {
   const [data, setData] = useState<OpsMapResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const handleManualRefresh = () => {
+    setRefreshKey(k => k + 1)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -147,12 +152,10 @@ export const OpsMap: React.FC<OpsMapProps> = ({ contestId }) => {
     }
 
     run()
-    const timer = window.setInterval(run, 5000)
     return () => {
       cancelled = true
-      window.clearInterval(timer)
     }
-  }, [contestId, timeWindow, regionType, bandFilter, modeFilter])
+  }, [contestId, timeWindow, regionType, bandFilter, modeFilter, refreshKey])
 
   const bandOptions = useMemo(() => {
     const set = new Set((data?.contacts || []).map((c) => (c.band || '').toUpperCase()).filter(Boolean))
@@ -232,6 +235,15 @@ export const OpsMap: React.FC<OpsMapProps> = ({ contestId }) => {
             ))}
           </select>
         </label>
+
+        <button 
+          className="ops-map-refresh-btn" 
+          onClick={handleManualRefresh}
+          disabled={loading}
+          title="Manually refresh ops map data"
+        >
+          🔄 {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
 
       {loading ? (
