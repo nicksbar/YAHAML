@@ -52,7 +52,7 @@ services:
     depends_on:
       - api
     ports:
-      - "${YAHAML_UI_PORT:-80}:80"
+      - "${YAHAML_UI_PORT:-8080}:80"
 
 volumes:
   yahaml_pgdata:
