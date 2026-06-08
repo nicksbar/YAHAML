@@ -55,7 +55,9 @@ function mapSession(session: {
  * Generate a secure session token
  */
 export function generateSessionToken(): string {
-  return randomBytes(24).toString('base64url').slice(0, 32);
+  // Generate 32-character alphanumeric token (22 bytes needed for 32 hex chars)
+  const bytes = randomBytes(22);
+  return bytes.toString('hex').slice(0, 32);
 }
 
 /**
