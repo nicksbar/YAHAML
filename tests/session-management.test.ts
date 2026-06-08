@@ -14,6 +14,7 @@ import {
   extendSession,
   getSessionByToken,
   getStaleSessions,
+  generateSessionToken,
 } from '../src/session-management';
 import prisma from '../src/db';
 
@@ -29,14 +30,12 @@ describe('Session Management', () => {
 
   describe('generateSessionToken', () => {
     it('should generate a 32-character token', () => {
-      const { generateSessionToken } = require('../src/session-management');
       const token = generateSessionToken();
       expect(token).toHaveLength(32);
       expect(token).toMatch(/^[A-Za-z0-9]+$/);
     });
 
     it('should generate unique tokens', () => {
-      const { generateSessionToken } = require('../src/session-management');
       const token1 = generateSessionToken();
       const token2 = generateSessionToken();
       expect(token1).not.toEqual(token2);
