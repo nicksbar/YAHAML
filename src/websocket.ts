@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import type { Server as HTTPServer } from 'http';
-import prisma from './db';
+import { validateSession } from './session-management';
 
 // WebSocket message types
 export interface WSMessage {
@@ -187,22 +187,13 @@ class WebSocketManager {
     const client = this.clients.get(ws);
     if (!client) return;
 
-    const session = await prisma.session.findUnique({ where: { token } });
-    if (!session) return;
+    const result = await validateSession(token);
+    if (!result.valid) {
+      console.warn(`[WebSocket] Session validation failed: ${result.reason}`);
+      return;
+    }
 
-    const now = new Date();
-    if (now > session.expiresAt) return;
-
-    const inactiveMs = now.getTime() - session.lastActivity.getTime();
-    const inactiveMin = inactiveMs / (1000 * 60);
-    if (inactiveMin > 20) return;
-
-    await prisma.session.update({
-      where: { id: session.id },
-      data: { lastActivity: now },
-    });
-
-    client.userId = session.stationId;
+    client.userId = result.session?.stationId;
   }
 
   private send(ws: WebSocket, message: WSMessage) {
