@@ -111,8 +111,8 @@ jobs:
         run: |
           BRANCH_NAME="${{ github.head_ref }}"
           
-          # Check if branch follows naming convention: feature/*, bugfix/*, hotfix/*, docs/*, refactor/*
-          if [[ ! "$BRANCH_NAME" =~ ^(feature|bugfix|hotfix|docs|refactor)/.+ ]]; then
+          # Check if branch follows naming convention: feature/*, bugfix/*, hotfix/*, docs/*, refactor/*, dependabot/*
+          if [[ ! "$BRANCH_NAME" =~ ^(feature|bugfix|hotfix|docs|refactor|dependabot)/.+ ]]; then
             echo "❌ Branch name must follow the pattern: <type>/<description>"
             echo ""
             echo "Valid types:"
@@ -121,6 +121,7 @@ jobs:
             echo "  - hotfix/    : Urgent fixes"
             echo "  - docs/      : Documentation changes"
             echo "  - refactor/  : Code refactoring"
+            echo "  - dependabot/: Dependabot PRs"
             echo ""
             echo "Example: feature/add-session-tracking"
             echo ""
