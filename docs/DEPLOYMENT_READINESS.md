@@ -44,9 +44,10 @@ YAHAML has been updated to work in any deployment environment, not just localhos
 
 ### 4. Documentation
 
-**Created `DEPLOYMENT.md`:**
-- Comprehensive deployment guide
-- Docker deployment with docker-compose
+**Deployment guides available now:**
+- [deployment-complete.md](deployment-complete.md) - Comprehensive deployment guide
+- [deployment-quick-ref.md](deployment-quick-ref.md) - Fast command reference
+- Docker deployment with `docker-compose`
 - VPS/Cloud server deployment with PM2
 - Cloud platform deployment (Heroku, Railway, Render)
 - Network configuration (firewall, port forwarding)
@@ -61,7 +62,7 @@ YAHAML has been updated to work in any deployment environment, not just localhos
 ### Development (Current)
 All services bind to `0.0.0.0` but display as `localhost` for convenience:
 - **API**: http://localhost:3000
-- **Relay**: localhost:10001
+- **Relay**: localhost:10000
 - **UDP**: localhost:2237
 
 The frontend uses Vite's proxy to forward `/api` requests to the backend.
@@ -88,14 +89,14 @@ Services use platform-assigned ports and hosts. Set environment variables in pla
 ### Before (Localhost Only)
 ```
 API:   127.0.0.1:3000 (localhost only)
-Relay: 0.0.0.0:10001 (all interfaces)
+Relay: 0.0.0.0:10000 (all interfaces)
 UDP:   0.0.0.0:2237 (all interfaces)
 ```
 
 ### After (Configurable)
 ```
 API:   0.0.0.0:3000 (all interfaces, configurable)
-Relay: 0.0.0.0:10001 (all interfaces, configurable)
+Relay: 0.0.0.0:10000 (all interfaces, configurable)
 UDP:   0.0.0.0:2237 (all interfaces, configurable)
 ```
 
@@ -110,7 +111,7 @@ ip addr show | grep 'inet 192'
 curl http://192.168.x.x:3000/health
 
 # Test from N3FJP on another machine
-# Set N3FJP relay to: 192.168.x.x:10001
+# Set N3FJP relay to: 192.168.x.x:10000
 ```
 
 ### 2. Docker Test
@@ -119,7 +120,7 @@ curl http://192.168.x.x:3000/health
 docker build -t yahaml .
 
 # Run container
-docker run -p 3000:3000 -p 10001:10001 -p 2237:2237/udp yahaml
+docker run -p 3000:3000 -p 10000:10000 -p 2237:2237/udp yahaml
 
 # Access from host
 curl http://localhost:3000/health
@@ -147,7 +148,7 @@ npm start
 | `HOST` | 0.0.0.0 | API server bind address |
 | `PORT` | 3000 | API server port |
 | `RELAY_HOST` | 0.0.0.0 | Relay server bind address |
-| `RELAY_PORT` | 10001 | N3FJP relay port |
+| `RELAY_PORT` | 10000 | N3FJP relay port |
 | `UDP_HOST` | 0.0.0.0 | UDP listener bind address |
 | `UDP_PORT` | 2237 | UDP listener port |
 | `UDP_TARGETS` | (empty) | Forward UDP to other hosts |
@@ -167,7 +168,7 @@ When deploying to remote server:
 1. Get server IP or domain
 2. Update N3FJP relay settings:
    - **Host**: `your-server-ip` or `your-domain.com`
-   - **Port**: `10001`
+   - **Port**: `10000`
 3. Test connection
 
 ### Update UDP Clients
@@ -180,7 +181,7 @@ Point UDP logging software to:
 ### Firewall Configuration
 When deploying, ensure firewall allows:
 - **TCP 3000** - API/Web access
-- **TCP 10001** - N3FJP relay
+- **TCP 10000** - N3FJP relay
 - **UDP 2237** - UDP logging
 
 ### SSL/TLS
@@ -212,15 +213,15 @@ This limits access to local machine only.
 3. **Choose deployment method** - Docker, VPS, or cloud platform
 4. **Configure DNS** - Point domain to server
 5. **Set up SSL** - Enable HTTPS
-6. **Deploy** - Follow DEPLOYMENT.md guide
+6. **Deploy** - Follow `deployment-complete.md` or `deployment-quick-ref.md`
 7. **Monitor** - Check logs and performance
 
 ## Support Files
 
-- **DEPLOYMENT.md** - Complete deployment guide
-- **.env.example** - Environment variable template
-- **docker-compose.yml** - (To be created) Docker deployment config
-- **Dockerfile** - (To be created) Container build instructions
+- **deployment-complete.md** - Complete deployment guide
+- **deployment-quick-ref.md** - Quick command reference
+- **docker-compose.yml** - Docker deployment config
+- **Dockerfile.api** and `ui/Dockerfile` - Container build instructions
 
 ## Verification
 
@@ -229,4 +230,4 @@ This limits access to local machine only.
 ✅ Frontend uses relative URLs (deployment-agnostic)
 ✅ Services endpoint returns dynamic host-based URLs
 ✅ Documentation complete
-✅ No breaking changes to existing functionality
+✅ Deployment paths match the current repo layout and default ports

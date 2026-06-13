@@ -38,7 +38,7 @@ docker-compose up -d
 HOST=0.0.0.0              # Bind to all interfaces
 PORT=3000                 # API port
 RELAY_HOST=0.0.0.0        # N3FJP relay bind
-RELAY_PORT=10001          # N3FJP relay port
+RELAY_PORT=10000          # N3FJP relay port
 UDP_HOST=0.0.0.0          # UDP listener bind
 UDP_PORT=2237             # UDP listener port
 DATABASE_URL="file:./yahaml.db"
@@ -55,7 +55,7 @@ OAUTH_ENABLED=false       # Authentication
 | Port | Protocol | Service | Required |
 |------|----------|---------|----------|
 | 3000 | TCP | API/Web | Yes |
-| 10001 | TCP | N3FJP Relay | Yes |
+| 10000 | TCP | N3FJP Relay | Yes |
 | 2237 | UDP | UDP Listener | Yes |
 
 ## 🐳 Docker Compose
@@ -67,7 +67,7 @@ services:
     build: .
     ports:
       - "3000:3000"
-      - "10001:10001"
+      - "10000:10000"
       - "2237:2237/udp"
     environment:
       - NODE_ENV=production
@@ -84,7 +84,7 @@ volumes:
 
 ```bash
 sudo ufw allow 3000/tcp   # API
-sudo ufw allow 10001/tcp  # Relay
+sudo ufw allow 10000/tcp  # Relay
 sudo ufw allow 2237/udp   # UDP
 sudo ufw enable
 ```
@@ -116,7 +116,7 @@ sudo certbot --nginx -d your-domain.com
 
 Point N3FJP to your server:
 - **Host**: `your-server-ip` or `your-domain.com`
-- **Port**: `10001`
+- **Port**: `10000`
 - **Protocol**: TCP
 - **Encoding**: UTF-16LE
 
@@ -212,7 +212,7 @@ docker-compose restart
 
 ## 📚 Full Documentation
 
-See `DEPLOYMENT.md` for comprehensive deployment guide.
+See `deployment-complete.md` for the comprehensive deployment guide.
 
 ## 🆘 Quick Help
 
@@ -249,4 +249,4 @@ See `DEPLOYMENT.md` for comprehensive deployment guide.
 
 ---
 
-**Need Help?** Check logs first, then review DEPLOYMENT.md
+**Need Help?** Check logs first, then review `deployment-complete.md`

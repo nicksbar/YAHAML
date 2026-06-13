@@ -7,7 +7,7 @@
 **Terminal 1 - Start N3FJP Server:**
 ```bash
 cd /home/nick/YAHAML
-python3 scripts/n3fjp_server_stub.py
+npm run dev:api
 ```
 
 **Terminal 2 - Start MITM Relay:**
@@ -43,8 +43,8 @@ This shows:
 
 Expected output:
 ```
-[INFO] Starting N3FJP test server on port 1000...
-[Server] Listening on port 1000
+[INFO] Starting API server for relay testing...
+[Server] Listening on port 3000
 ```
 
 ### Step 3: Start Relay
@@ -136,7 +136,7 @@ This shows:
    ```bash
    lsof -i :1000
    ```
-   Should show `n3fjp_server_stub.py` listening.
+   Should show the API server listening.
 
 2. **Relay running?**
    ```bash
@@ -316,7 +316,7 @@ echo "GETCONTESTNUMBER" | xxd -p
 | `scripts/n3fjp_mitm_relay.ts` | MITM relay implementation |
 | `scripts/analyze_n3fjp_log.ts` | Log analyzer tool |
 | `scripts/n3fjp_test_setup.sh` | Test setup orchestration |
-| `scripts/n3fjp_server_stub.py` | Test N3FJP server |
+| `npm run dev:api` | Test API server for relay scenarios |
 | `captures/` | Captured logs directory |
 | `docs/n3fjp_protocol_debugging.md` | Quick reference guide |
 

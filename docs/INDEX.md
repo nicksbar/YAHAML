@@ -16,7 +16,7 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 - **[decisions.md](decisions.md)** - Key architectural decisions and rationale
 
 ## Development
-- **[testing.md](testing.md)** - Unit, API, and E2E testing patterns (213 tests passing)
+- **[testing.md](testing.md)** - Unit, API, and E2E testing patterns
 - **[testing-architecture.md](testing-architecture.md)** - Test infrastructure and utilities
 - **[code-recommendations.md](code-recommendations.md)** - Code style and patterns
 - **[LOGGING_BEST_PRACTICES.md](LOGGING_BEST_PRACTICES.md)** - Context logging patterns
@@ -71,11 +71,11 @@ See [n3fjp_testing_guide.md](n3fjp_testing_guide.md) or [n3fjp_protocol_debuggin
 See [CONTRIBUTING.md](../CONTRIBUTING.md) in the root directory.
 
 ### What's the current status?
-- **Phase 5.1 Complete** (Feb 1, 2026): Contest templates system with 19 templates and self-managed calendar
-- **Real-time Updates** (Feb 1, 2026): WebSocket with auto-reconnect, live band occupancy, live event logs
-- **Test Suite**: 213 tests passing across all components
-- **Backend**: REST API, N3FJP relay, contest validation, export (ADIF/Cabrillo)
-- **Frontend**: React dashboard with Vite dev proxy, responsive UI, live updates
+- Contest templates, scheduling, and calendar support are implemented
+- Real-time updates are active across WebSocket, band occupancy, and live logs
+- Backend includes REST API, N3FJP relay, contest validation, export, and radio control
+- Frontend includes the React dashboard, logging workflows, and responsive UI
+- Verify the current test status with `npm test` and `npm run test:browser`
 
 ## Contact & Support
 
@@ -87,6 +87,6 @@ For issues or questions:
 
 ---
 
-**Last Updated:** February 1, 2026  
-**Test Status:** 213 tests passing ✅  
-**Build Status:** Ready for deployment
+**Last Reviewed:** June 7, 2026  
+**Test Status:** See `npm test` and `npm run test:browser`  
+**Build Status:** Ready for local, Docker, and host deployments

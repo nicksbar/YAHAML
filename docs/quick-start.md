@@ -1,26 +1,23 @@
-# Quick Start: N3FJP Protocol Integration
+# Quick Start: N3FJP Protocol Notes
 
 ## What We Know
-The N3FJP Field Day logging application uses a **TCP protocol** on port 10000 that sends/receives tagged XML-like messages in **UTF-16LE encoding**. We've reverse-engineered 7 complete message types covering station updates, network control, chat, and log entry submission.
+The N3FJP relay path in this codebase uses a **TCP protocol** on port 10000 by default and sends/receives tagged XML-like messages in **UTF-16LE encoding**. The current implementation and documentation cover the message types and relay behavior needed for validation and interoperability work.
 
 ## Key Files
-- **Server Stub**: [scripts/n3fjp_server_stub.py](../../scripts/n3fjp_server_stub.py) - Working TCP server that can:
-  - Accept N3FJP clients and maintain connections
-  - Parse all 7 message types
-  - Send appropriate responses (ACKs, station lists, greetings)
-  - Log entries to file for analysis
-
+- **Relay Implementation**: [src/relay.ts](../../src/relay.ts) - Current relay server and forwarding logic
+- **API Orchestration**: [src/index.ts](../../src/index.ts) - Starts the API, relay, and UDP services
+- **Integration Tests**: [tests/relay.e2e.test.ts](../../tests/relay.e2e.test.ts) - Relay behavior coverage
 - **Protocol Docs**: [docs/protocol-summary.md](protocol-summary.md) - Complete reference with all message formats
+
 - **Log Model**: [docs/canonical-log-model.md](canonical-log-model.md) - QSO (contact) record field mappings
 
-## Running the Stub
+## Running the App
 ```bash
 cd /home/nick/YAHAML
-source .venv/bin/activate
-python scripts/n3fjp_server_stub.py --host 127.0.0.1 --port 10000 --log captures/messages.log
+npm run dev:all
 ```
 
-Then point N3FJP Field Day to connect to `127.0.0.1:10000`.
+Then point your client or integration target to `127.0.0.1:10000`.
 
 ## Message Type Quick Reference
 
@@ -35,14 +32,14 @@ Then point N3FJP Field Day to connect to `127.0.0.1:10000`.
 | **SCLK** | Client→Server | Sync clock timestamp |
 
 ## What's Next
-1. **Multi-client testing** - Run stub with multiple N3FJP instances to verify relay behavior
+1. **Multi-client testing** - Validate relay behavior with more than one client
 2. **Long-duration stability** - Leave connections running 60+ minutes to verify no dropouts
-3. **Canonical model** - Build Python dataclass for QSO record from XML fields
-4. **UDP adapters** - Create converters for N1MM+/DXLab/WaveLog log formats
-5. **Service deployment** - Move from stub to microservices (API, UDP bridge, rig control)
+3. **Canonical model** - Keep the QSO mapping aligned with `src/export.ts` and Prisma models
+4. **UDP adapters** - Continue interoperability work for external logging tools
+5. **Service deployment** - Use Docker or host deployment paths in `docs/deployment-complete.md`
 
 ## Captured Sample
-From a test session on 2026-01-31:
+From a test session documented in the protocol notes:
 ```
 Client connected: W1AW (Field Day contest)
   Band: 15m, Mode: SSB (PH)
@@ -51,16 +48,13 @@ Client connected: W1AW (Field Day contest)
   QSO Details: DXCC 291 (USA), CQ Zone 05, ITU Zone 08
 ```
 
-Log files saved in [captures/](../../captures/) directory.
+Use the test suites and protocol notes to compare expected versus actual behavior.
 
 ## Debugging
-Enable logging with `--log` flag, then:
+Use the relay and API terminal output, then:
 ```bash
-tail -100 captures/messages.log
-# or for just transactions:
-grep "TRANSACTION" captures/messages.log
-# or check parsed format:
-python scripts/parse_n3fjp_log.py < captures/messages.log
+npm test -- tests/relay.e2e.test.ts --runInBand
+npm test -- tests/websocket.test.ts --runInBand
 ```
 
 ## Architecture Vision
@@ -89,15 +83,14 @@ python scripts/parse_n3fjp_log.py < captures/messages.log
 
 ## Next Command Sequence (Once You Test More)
 ```
-# 1. Run stub in background
-python scripts/n3fjp_server_stub.py --port 10000 --log captures/new_test.log &
+# 1. Start the app
+npm run dev:all
 
-# 2. Launch N3FJP multiple times (or simulate multiple clients)
-# ... use N3FJP UI to send messages, change bands, log QSOs ...
+# 2. Launch your client or simulate multiple clients
+# ... use your logging client to send messages, change bands, log QSOs ...
 
-# 3. Check what was captured
-tail -50 captures/new_test.log
+# 3. Check the terminal output and browser devtools
 
-# 4. If you see new message types, update protocol-summary.md and canonical model
-# 5. Once stable, build the UDP bridge adapters
+# 4. If you see new behaviors, update protocol-summary.md and canonical model
+# 5. Once stable, continue interoperability adapters
 ```

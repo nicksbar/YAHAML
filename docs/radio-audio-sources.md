@@ -17,7 +17,8 @@ Each radio connection can have an optional audio source configured. When an oper
 - Best for real-time operation
 - Requires Janus Gateway running on Raspberry Pi or server
 - Configuration fields:
-  - **Janus Room ID**: Audiobridge room number (e.g., `1234`)
+  - **Janus Room ID**: WebRTC room identifier (e.g., `1234`)
+  - **Janus Stream ID**: Stream/participant identifier (e.g., `1`)
   - **Janus Stream ID**: Participant/stream identifier (e.g., `radio1`)
 
 ### 3. **HTTP Stream**
@@ -155,8 +156,8 @@ See [janus-setup.md](./janus-setup.md) for complete Janus installation guide.
 
 **Quick ALSA → Janus configuration:**
 1. Install Janus on Raspberry Pi
-2. Configure audiobridge plugin with room
-3. Use `gst-launch` or `ffmpeg` to stream ALSA audio to Janus room
+2. Configure Janus to receive RTP from ALSA (see janus-setup.md)
+3. Use `gst-launch` or `ffmpeg` to stream ALSA audio to Janus WebRTC room
 4. Configure radio with Janus room ID and stream ID
 
 ### Setting up HTTP Stream with ffmpeg
