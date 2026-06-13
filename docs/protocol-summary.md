@@ -219,4 +219,4 @@ Implementation summary of TCP-based multi-station networking protocol used by Wi
 ## References
 - [Canonical Log Model](canonical-log-model.md)
 - [N3FJP Protocol Details](protocols-n3fjp.md)
-- [Server Stub Implementation](../scripts/n3fjp_server_stub.py)
+- [Current Relay Implementation](../src/relay.ts)

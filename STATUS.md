@@ -1,24 +1,24 @@
 # YAHAML Project Status
 
-**Last Updated:** February 1, 2026  
-**Current Phase:** Phase 5.2 - Multi-Source Ingest Validation
+**Last Reviewed:** June 7, 2026  
+**Current Focus:** Full-stack logging, contesting, and relay validation
 
 ## Executive Summary
 
-✅ **System is production-ready** with:
-- 213 tests passing (17 test suites)
+✅ **System is feature-complete for the current codebase** with:
 - Real-time WebSocket updates with auto-reconnect
 - 19 contest templates with dynamic scheduling
 - N3FJP relay, UDP listener, RESTful API
+- Hamlib rig control, radio assignments, and voice rooms
 - React dashboard with responsive UI design system
-- Complete documentation and deployment guides
+- ADIF, Cabrillo, and reverse-log export endpoints
 
 ## Phase Completion Status
 
-### ✅ Phase 5.1: Contest Templates & Calendar (COMPLETE - Feb 1, 2026)
+### ✅ Contest Templates & Calendar
 
 **Major Achievements:**
-- Refactored contest templates into modular 14-file structure
+- Refactored contest templates into modular TypeScript files
 - Implemented intelligent scheduler with relative date rules
   - "4th weekend of June" → Field Day
   - "Last weekend of January" → Winter Field Day
@@ -26,7 +26,6 @@
 - Built `/api/contests/upcoming` endpoint with filtering
 - Created self-managed calendar UI
 - Added 19 real contest templates (ARRL, POTA, SOTA, VHF, etc.)
-- All tests passing (213 tests)
 
 **Technical Details:**
 - Database: 19 ContestTemplate records with schedule JSON
@@ -34,7 +33,7 @@
 - Frontend: Calendar view with filters and countdown timers
 - Testing: 11 dedicated scheduler tests + integration tests
 
-### 🔄 Phase 5.2: Multi-Source Ingest Validation (IN PROGRESS)
+### 🔄 Multi-Source Ingest Validation
 
 **Objectives:**
 - Validate upstream sources: WSJT-X, Fldigi, Hamlib, N3FJP
@@ -49,7 +48,7 @@
 - [ ] N3FJP protocol validation framework
 - [ ] Multi-source deduplication logic
 
-### 📋 Phase 5.3+: Future Phases
+### 📋 Future Phases
 
 **Planned (Not Yet Started):**
 - Export and import (ADIF, Cabrillo)
@@ -64,21 +63,18 @@
 
 **Fully Implemented:**
 - ✅ Express REST API (port 3000)
-- ✅ N3FJP TCP relay (port 10001)
+- ✅ N3FJP TCP relay (default port 10000)
 - ✅ UDP listener (port 2237)
 - ✅ WebSocket real-time updates
 - ✅ SQLite database with Prisma ORM
 - ✅ Contest template system
 - ✅ Contest validation rules
-- ✅ Export (ADIF, Cabrillo)
-- ✅ Comprehensive logging
+- ✅ Export (ADIF, Cabrillo, reverse-log)
+- ✅ Radio control, voice rooms, and operator messaging
 
-**Test Coverage:** 213 tests passing
-- 17 test suites
-- All API endpoints validated
-- Relay protocol verified
-- Database schema tested
-- Integration tests passing
+**Test Coverage:**
+- Unit, API, relay, websocket, export, and browser coverage
+- Automated validation across the API, database, and real-time layers
 
 ### Frontend (React + Vite)
 
@@ -94,7 +90,7 @@
 
 **Real-Time Features:**
 - Live band occupancy updates (no refresh needed)
-- Event log streaming (120+ entries displayed)
+- Event log streaming
 - Auto-reconnect with exponential backoff
 - Full-page refresh on connection loss
 
@@ -103,7 +99,7 @@
 **Schema Status:**
 - ✅ Station model
 - ✅ BandOccupancy (single entry per station)
-- ✅ QSOLog (contact records)
+- ✅ LogEntry (contact records)
 - ✅ ContextLog (event audit trail)
 - ✅ ContestTemplate (19 templates with scheduling)
 - ✅ Contest (active contests)
@@ -116,17 +112,17 @@
 
 ## Known Issues & Status
 
-### Fixed Issues (Feb 1, 2026)
+### Fixed Issues
 - ✅ Event logs not displaying → CSS flex-shrink fix
 - ✅ No auto-reconnect → Exponential backoff added
 - ✅ Duplicate band occupancy → Delete old on new change
 - ✅ Dashboard not updating live → WebSocket proxy configured
 - ✅ localhost:5173 loop-back → Proxy detection added
-- ✅ Jest warnings → Tests passing with acceptable cleanup state
+- ✅ Jest warnings → Cleanup tracked with regression coverage in place
 
 ### Open Items
-- [ ] Jest open handles warning (non-blocking, acceptable)
-- [ ] Optional: vite-proxy logging verbosity (for cleanup)
+- [ ] Review Jest open handles warnings during full integration runs
+- [ ] Optional: reduce Vite proxy logging verbosity
 
 ### Known Limitations
 - N3FJP relay requires UTF-16LE encoding (non-standard)
@@ -139,7 +135,7 @@
 - ✅ npm run dev:all (API + Relay + Frontend)
 - ✅ Vite dev proxy (port 5173 → port 3000)
 - ✅ Real-time updates working
-- ✅ All tests passing
+- ✅ API, relay, and browser workflows available locally
 
 **Production Ready:**
 - ✅ Docker deployment (provided)
@@ -159,10 +155,10 @@
 |-----------|--------|-------|
 | API Response Time | <50ms | Express.js with SQLite |
 | WebSocket Latency | <100ms | Real-time updates |
-| Event Log Display | 120+ entries | Smooth scrolling |
+| Event Log Display | Live feed | Smooth scrolling |
 | Band Occupancy Update | <500ms | From relay to UI |
-| Test Suite Duration | 19.7s | 213 tests passing |
-| Build Time | <30s | Vite frontend, TypeScript |
+| Test Suite | Mixed unit/integration/browser | Verify with `npm test` and `npm run test:browser` |
+| Build Time | Fast local builds | Vite frontend, TypeScript |
 | Database | <100MB | Contest + test data |
 
 ## Documentation Status
@@ -220,7 +216,7 @@ See [docs/DEPLOYMENT_READINESS.md](docs/DEPLOYMENT_READINESS.md) for security de
 
 ## Testing & Quality Assurance
 
-**Test Results:** ✅ 213/213 tests passing
+**Test Results:** Validate with `npm test` and `npm run test:browser`
 
 **Test Categories:**
 - Unit tests (pure functions)
@@ -239,7 +235,7 @@ See [docs/DEPLOYMENT_READINESS.md](docs/DEPLOYMENT_READINESS.md) for security de
 - TypeScript strict mode enabled
 - ESLint configured
 - Jest code coverage tracking
-- Automated test on every change
+- Automated test runs available for local and CI validation
 
 ## Development Workflow
 
