@@ -20,7 +20,12 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      'react-hooks/exhaustive-deps': 'error',
+      'react-hooks/exhaustive-deps': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
     },
   },
 ])

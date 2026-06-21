@@ -42,6 +42,12 @@ export function useBandOccupancy(contestId?: string) {
   useEffect(() => {
     fetchOccupancy();
 
+    // Periodic refresh ensures stale occupancy naturally disappears
+    // even when no fresh band/mode WebSocket events are emitted.
+    const refreshInterval = setInterval(() => {
+      fetchOccupancy();
+    }, 60_000);
+
     // Connect to WebSocket with auto-reconnect
     let ws: WebSocket | null = null;
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -114,6 +120,7 @@ export function useBandOccupancy(contestId?: string) {
     connectWebSocket();
 
     return () => {
+      clearInterval(refreshInterval);
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(

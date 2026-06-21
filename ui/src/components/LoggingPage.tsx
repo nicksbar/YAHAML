@@ -1119,7 +1119,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   useEffect(() => {
     fetchAssignedRadio()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, isActive])
 
   useEffect(() => {
@@ -1128,7 +1127,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       fetchAssignedRadio()
     }, 5000)
     return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, isActive])
 
   useEffect(() => {
@@ -1168,7 +1166,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     return () => {
       teardownRadioAudio()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignedRadio?.radio?.id, assignedRadio?.radio?.audioSourceType, assignedRadio?.radio?.httpStreamUrl, assignedRadio?.radio?.janusRoomId])
 
   useEffect(() => {
