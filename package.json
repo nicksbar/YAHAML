@@ -24,6 +24,7 @@
     "test:browser:headed": "playwright test --headed",
     "test:browser:local": "PLAYWRIGHT_USE_EXISTING_SERVER=true PLAYWRIGHT_API_PORT=3000 PLAYWRIGHT_UI_PORT=5173 playwright test",
     "test:full": "npm test -- --runInBand && npm run test:browser",
+    "cw:agent": "ts-node src/agent/cw/cli.ts",
     "relay": "ts-node scripts/n3fjp_mitm_relay.ts",
     "relay:default": "ts-node scripts/n3fjp_mitm_relay.ts 2000 localhost 1000",
     "lint": "eslint src --ext .ts --max-warnings 0 && npm --prefix ui run lint"

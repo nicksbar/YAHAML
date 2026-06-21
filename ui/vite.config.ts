@@ -13,6 +13,9 @@ console.log('[vite-proxy] wsTarget=', wsTarget)
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: process.env.VITE_HOST || '0.0.0.0',
+    port: Number(process.env.VITE_PORT || 5173),
+    strictPort: true,
     proxy: {
       // Proxy API calls to backend in development
       // In production, set VITE_API_URL environment variable
@@ -20,12 +23,8 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: true,
       },
-      '/auth': {
-        target: apiTarget,
-        changeOrigin: true,
-      },
       '/ws': {
-        target: wsTarget,
+        target: wsTarget || apiTarget,
         ws: true,
         changeOrigin: true,
       },
