@@ -20,7 +20,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:e2e": "jest --testPathPattern=e2e",
-    "test:browser": "playwright test",
+    "test:browser": "PLAYWRIGHT_USE_EXISTING_SERVER=false playwright test",
     "test:browser:headed": "playwright test --headed",
     "test:browser:local": "PLAYWRIGHT_USE_EXISTING_SERVER=true PLAYWRIGHT_API_PORT=3000 PLAYWRIGHT_UI_PORT=5173 playwright test",
     "test:full": "npm test -- --runInBand && npm run test:browser",
@@ -40,27 +40,27 @@
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "cors": "^2.8.6",
-    "dotenv": "^16.6.1",
-    "express": "^4.22.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "ws": "^8.21.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
     "@types/cors": "^2.8.19",
-    "@types/express": "^4.17.25",
-    "@types/jest": "^29.5.14",
-    "@types/node": "^20.19.43",
-    "@types/supertest": "^6.0.3",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.0.0",
+    "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
-    "@typescript-eslint/eslint-plugin": "^6.21.0",
-    "@typescript-eslint/parser": "^6.21.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "concurrently": "^9.2.3",
-    "eslint": "^8.57.1",
-    "jest": "^29.7.0",
+    "eslint": "^10.5.0",
+    "jest": "^30.4.2",
     "prisma": "^5.22.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.11",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

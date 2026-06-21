@@ -513,7 +513,8 @@ export function startRelayServer(port: number = 10000, host: string = '0.0.0.0')
       .catch(() => {});
     
     socket.on('data', (data) => {
-      handleClientData(clientId, data);
+      const payload = typeof data === 'string' ? Buffer.from(data) : data;
+      handleClientData(clientId, payload);
     });
     
     socket.on('end', () => {

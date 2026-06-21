@@ -12,6 +12,8 @@ function baseConfig(): CwAgentConfig {
     yahamlWsUrl: 'ws://localhost:3000/ws',
     browserId: 'cw-agent-test',
     stationCallsign: 'W1AW',
+    useClubCallsign: true,
+    useSpecialEventCallsign: true,
     sentExchange: { class: '2A', section: 'CT' },
     txArmState: 'DRY_RUN',
     maxTxMessageLength: 80,

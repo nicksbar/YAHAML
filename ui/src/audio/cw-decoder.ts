@@ -295,14 +295,13 @@ export class CWDecoder extends BaseModem {
     const w = (2 * Math.PI * k) / buffer.length
     const coeff = 2 * Math.cos(w)
 
-    let s0 = 0,
-      s1 = 0,
-      s2 = 0
+    let s1 = 0
+    let s2 = 0
 
     for (let i = 0; i < buffer.length; i++) {
-      s0 = buffer[i] + coeff * s1 - s2
+      const sample = buffer[i] + coeff * s1 - s2
       s2 = s1
-      s1 = s0
+      s1 = sample
     }
 
     const power = s1 * s1 + s2 * s2 - coeff * s1 * s2

@@ -25,7 +25,7 @@ export default defineConfig({
     ? undefined
     : [
         {
-          command: 'rm -f data/yahaml-playwright.db data/yahaml-playwright.db-journal && npm run db:push && npm run dev:api',
+          command: 'mkdir -p data && rm -f data/yahaml-playwright.db data/yahaml-playwright.db-journal && npm run db:push && npm run dev:api',
           url: `http://127.0.0.1:${apiPort}/health`,
           reuseExistingServer: false,
           timeout: 180_000,
@@ -33,6 +33,7 @@ export default defineConfig({
             DATABASE_URL: databaseUrl,
             PORT: String(apiPort),
             HOST: '127.0.0.1',
+            ADMIN_CALLSIGNS: '',
             RELAY_PORT: '11000',
             RELAY_HOST: '127.0.0.1',
             UDP_PORT: '3237',

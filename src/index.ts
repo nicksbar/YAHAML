@@ -47,6 +47,7 @@ const udpPort = process.env.UDP_PORT || 2237;
 const udpHost = process.env.UDP_HOST || '0.0.0.0';
 const udpTargets = parseUdpTargets(process.env.UDP_TARGETS);
 const oauthEnabled = process.env.OAUTH_ENABLED === 'true';
+const BAND_OCCUPANCY_STALE_MS = 5 * 60 * 1000;
 
 function buildDedupeKey(input: {
   stationCall: string;
@@ -119,6 +120,11 @@ function parseJsonField(value: unknown) {
   } catch {
     return value;
   }
+}
+
+function paramAsString(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] || '';
+  return value || '';
 }
 
 function normalizeContestTemplate(template: any | null) {
@@ -606,13 +612,14 @@ app.get('/api/stations', async (req, res) => {
 
 app.get('/api/stations/:id', async (req, res) => {
   try {
+    const stationParam = paramAsString(req.params.id);
     // Support both ID and callsign lookups
-    const isId = /^[a-z0-9]+$/.test(req.params.id) && req.params.id.length > 10;
-    console.log(`Fetching station: id="${req.params.id}", isId=${isId}`);
+    const isId = /^[a-z0-9]+$/.test(stationParam) && stationParam.length > 10;
+    console.log(`Fetching station: id="${stationParam}", isId=${isId}`);
     const station = await prisma.station.findUnique({
       where: isId 
-        ? { id: req.params.id }
-        : { callsign: req.params.id.toUpperCase() },
+        ? { id: stationParam }
+        : { callsign: stationParam.toUpperCase() },
       include: {
         location: true,
         bandActivities: true,
@@ -675,7 +682,8 @@ app.post('/api/stations', async (req, res) => {
 
 app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const validation = await validateCallsign(req.params.callsign);
+    const callsignParam = paramAsString(req.params.callsign);
+    const validation = await validateCallsign(callsignParam);
     if (!validation.valid) {
       return res.status(400).json({
         error: 'Invalid callsign',
@@ -684,7 +692,7 @@ app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, a
     }
 
     const existingStation = await prisma.station.findUnique({
-      where: { callsign: req.params.callsign },
+      where: { callsign: callsignParam },
     });
 
     if (!existingStation) {
@@ -714,7 +722,7 @@ app.patch('/api/stations/:callsign', authMiddleware as express.RequestHandler, a
       contestId
     } = req.body;
     const station = await prisma.station.update({
-      where: { callsign: req.params.callsign },
+      where: { callsign: callsignParam },
       data: {
         name,
         class: stationClass,
@@ -1026,7 +1034,7 @@ app.post('/api/qso-logs', authMiddleware as express.RequestHandler, async (req: 
 
 const handlePatchQsoLog = async (req: AuthRequest, res: express.Response) => {
   try {
-    const { id } = req.params;
+    const id = paramAsString(req.params.id);
     const existing = await prisma.logEntry.findUnique({ where: { id } });
 
     if (!existing) {
@@ -1551,7 +1559,6 @@ app.get('/api/debug/all-logs', async (req, res) => {
   }
 });
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.post('/api/context-logs', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
     const stationId = req.body?.stationId || req.session?.stationId;
@@ -2185,7 +2192,7 @@ app.post(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const { id } = req.params;
+      const id = paramAsString(req.params.id);
 
       // Verify contest exists
       const contest = await prisma.contest.findUnique({
@@ -2424,7 +2431,7 @@ app.get('/api/admin/stations', authMiddleware as express.RequestHandler, require
 // Delete a station (admin only)
 app.delete('/api/admin/stations/:id', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = paramAsString(req.params.id);
     
     // Prevent deleting currently logged-in station
     if (id === req.session?.stationId) {
@@ -2443,7 +2450,7 @@ app.delete('/api/admin/stations/:id', authMiddleware as express.RequestHandler, 
 // Clear sessions for a station (admin only)
 app.post('/api/admin/stations/:id/clear-sessions', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = paramAsString(req.params.id);
     
     await prisma.session.deleteMany({ where: { stationId: id } });
     return res.json({ success: true });
@@ -2464,7 +2471,7 @@ app.post(
   requireAdmin,
   async (req: AuthRequest, res) => {
     try {
-      const { scenarioId } = req.params;
+      const scenarioId = paramAsString(req.params.scenarioId);
       const scenario = scenarios[scenarioId];
 
       if (!scenario) {
@@ -2664,7 +2671,7 @@ app.post(
         // Get station-to-club mapping for clubId assignment
         const stationClubMap = new Map<string, string>();
         for (const [clubCallsign, clubId] of clubMap.entries()) {
-          const clubData = scenario.data.clubs?.find(c => c.callsign === clubCallsign);
+          const clubData = scenario.data.clubs?.find((c: { callsign: string; operatorCallsigns: string[] }) => c.callsign === clubCallsign);
           if (clubData) {
             for (const operatorCall of clubData.operatorCallsigns) {
               stationClubMap.set(operatorCall, clubId);
@@ -2905,8 +2912,9 @@ app.get('/api/radios', async (_req, res) => {
 // Get single radio connection
 app.get('/api/radios/:id', async (req, res) => {
   try {
+    const radioId = paramAsString(req.params.id);
     const radio = await prisma.radioConnection.findUnique({
-      where: { id: req.params.id },
+      where: { id: radioId },
       include: {
         assignments: {
           include: {
@@ -2963,6 +2971,7 @@ app.post('/api/radios', async (req, res) => {
 // Update radio connection
 app.put('/api/radios/:id', async (req, res) => {
   try {
+    const radioId = paramAsString(req.params.id);
     const { name, host, port, pollInterval, isEnabled, connectionType, audioSourceType, janusRoomId, janusStreamId, httpStreamUrl } = req.body;
     const normalizedType = connectionType === 'mock' ? 'mock' : connectionType === 'hamlib' ? 'hamlib' : undefined;
     
@@ -2985,7 +2994,7 @@ app.put('/api/radios/:id', async (req, res) => {
     }
 
     const radio = await prisma.radioConnection.update({
-      where: { id: req.params.id },
+      where: { id: radioId },
       data: updateData,
     });
     
@@ -3008,17 +3017,18 @@ app.put('/api/radios/:id', async (req, res) => {
 // Delete radio connection
 app.delete('/api/radios/:id', async (req, res) => {
   try {
+    const radioId = paramAsString(req.params.id);
     // Stop radio if running
-    await radioManager.stopRadio(req.params.id);
+    await radioManager.stopRadio(radioId);
     
     // Delete assignments first
     await prisma.radioAssignment.deleteMany({
-      where: { radioId: req.params.id },
+      where: { radioId },
     });
     
     // Delete radio
     await prisma.radioConnection.delete({
-      where: { id: req.params.id },
+      where: { id: radioId },
     });
     
     return res.json({ success: true });
@@ -3089,14 +3099,15 @@ app.post('/api/radios/test-connection', async (req, res) => {
 // Start/connect radio
 app.post('/api/radios/:id/start', async (req, res) => {
   try {
-    const success = await radioManager.startRadio(req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const success = await radioManager.startRadio(radioId);
     
     if (!success) {
       return res.status(500).json({ error: 'Failed to connect to radio' });
     }
     
     const radio = await prisma.radioConnection.findUnique({
-      where: { id: req.params.id },
+      where: { id: radioId },
     });
     
     return res.json(radio);
@@ -3108,9 +3119,10 @@ app.post('/api/radios/:id/start', async (req, res) => {
 // Stop/disconnect radio
 app.post('/api/radios/:id/stop', async (req, res) => {
   try {
-    await radioManager.stopRadio(req.params.id);
+    const radioId = paramAsString(req.params.id);
+    await radioManager.stopRadio(radioId);
     const radio = await prisma.radioConnection.findUnique({
-      where: { id: req.params.id },
+      where: { id: radioId },
     });
     return res.json(radio);
   } catch (error: any) {
@@ -3121,12 +3133,13 @@ app.post('/api/radios/:id/stop', async (req, res) => {
 // Test radio connection (existing radio)
 app.post('/api/radios/:id/test', async (req, res) => {
   try {
-    let client = radioManager.getClient(req.params.id);
+    const radioId = paramAsString(req.params.id);
+    let client = radioManager.getClient(radioId);
     let tempClient: any = null;
 
     if (!client) {
       const radio = await prisma.radioConnection.findUnique({
-        where: { id: req.params.id },
+        where: { id: radioId },
       });
 
       if (!radio) {
@@ -3162,7 +3175,7 @@ app.post('/api/radios/:id/test', async (req, res) => {
     const info = await client.getInfo();
 
     await prisma.radioConnection.update({
-      where: { id: req.params.id },
+      where: { id: radioId },
       data: {
         frequency: state.frequency,
         mode: state.mode,
@@ -3225,10 +3238,11 @@ async function getOrStartRadioClient(radioId: string) {
 
 app.get('/api/radios/:id/state', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3242,7 +3256,8 @@ app.get('/api/radios/:id/state', authMiddleware as express.RequestHandler, async
 
 app.post('/api/radios/:id/frequency', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
     const frequencyHz = req.body?.frequencyHz ?? req.body?.frequency;
@@ -3250,7 +3265,7 @@ app.post('/api/radios/:id/frequency', authMiddleware as express.RequestHandler, 
       return res.status(400).json({ error: 'frequencyHz is required' });
     }
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3264,7 +3279,8 @@ app.post('/api/radios/:id/frequency', authMiddleware as express.RequestHandler, 
 
 app.post('/api/radios/:id/mode', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
     const mode = req.body?.mode;
@@ -3273,7 +3289,7 @@ app.post('/api/radios/:id/mode', authMiddleware as express.RequestHandler, async
       return res.status(400).json({ error: 'mode and bandwidth are required' });
     }
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3292,7 +3308,8 @@ app.post('/api/radios/:id/mode', authMiddleware as express.RequestHandler, async
 
 app.post('/api/radios/:id/power', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
     const { power } = req.body;
@@ -3300,7 +3317,7 @@ app.post('/api/radios/:id/power', authMiddleware as express.RequestHandler, asyn
       return res.status(400).json({ error: 'power is required' });
     }
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3314,7 +3331,8 @@ app.post('/api/radios/:id/power', authMiddleware as express.RequestHandler, asyn
 
 app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
     const { enabled } = req.body;
@@ -3322,7 +3340,7 @@ app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async 
       return res.status(400).json({ error: 'enabled is required' });
     }
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3334,7 +3352,7 @@ app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async 
       try {
         const state = await client.getState();
         const updated = await prisma.radioConnection.update({
-          where: { id: req.params.id },
+          where: { id: radioId },
           data: {
             frequency: state.frequency,
             mode: state.mode,
@@ -3344,7 +3362,7 @@ app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async 
           },
         });
         wsManager.broadcast('radio', 'radioStateUpdate', {
-          radioId: req.params.id,
+          radioId,
           state: updated,
         });
       } catch (error) {
@@ -3360,7 +3378,8 @@ app.post('/api/radios/:id/ptt', authMiddleware as express.RequestHandler, async 
 
 app.post('/api/radios/:id/vfo', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
     const { vfo } = req.body;
@@ -3368,7 +3387,7 @@ app.post('/api/radios/:id/vfo', authMiddleware as express.RequestHandler, async 
       return res.status(400).json({ error: 'vfo is required' });
     }
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3382,7 +3401,8 @@ app.post('/api/radios/:id/vfo', authMiddleware as express.RequestHandler, async 
 
 app.post('/api/radios/:id/raw', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const assignment = await assertRadioControlAccess(req, res, req.params.id);
+    const radioId = paramAsString(req.params.id);
+    const assignment = await assertRadioControlAccess(req, res, radioId);
     if (!assignment) return;
 
     const { command } = req.body;
@@ -3390,7 +3410,7 @@ app.post('/api/radios/:id/raw', authMiddleware as express.RequestHandler, async 
       return res.status(400).json({ error: 'command is required' });
     }
 
-    const client = await getOrStartRadioClient(req.params.id);
+    const client = await getOrStartRadioClient(radioId);
     if (!client) {
       return res.status(400).json({ error: 'Radio not connected and auto-connect failed. Start it first.' });
     }
@@ -3505,8 +3525,9 @@ app.post('/api/radio-assignments', authMiddleware as express.RequestHandler, asy
 // Unassign radio from station (frees up rig when not in use)
 app.post('/api/radio-assignments/:id/unassign', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const assignmentId = paramAsString(req.params.id);
     const assignment = await prisma.radioAssignment.findUnique({
-      where: { id: req.params.id },
+      where: { id: assignmentId },
       include: { station: true }
     });
     
@@ -3520,7 +3541,7 @@ app.post('/api/radio-assignments/:id/unassign', authMiddleware as express.Reques
     }
     
     const updated = await prisma.radioAssignment.update({
-      where: { id: req.params.id },
+      where: { id: assignmentId },
       data: {
         isActive: false,
         unassignedAt: new Date(),
@@ -3543,9 +3564,10 @@ app.post('/api/radio-assignments/:id/unassign', authMiddleware as express.Reques
 // Get station's current radio
 app.get('/api/stations/:id/radio', async (req, res) => {
   try {
+    const stationId = paramAsString(req.params.id);
     const assignment = await prisma.radioAssignment.findFirst({
       where: {
-        stationId: req.params.id,
+        stationId,
         isActive: true,
       },
       include: {
@@ -3567,10 +3589,25 @@ app.get('/api/stations/:id/radio', async (req, res) => {
 app.get('/api/band-occupancy', async (req, res) => {
   try {
     const { contestId } = req.query;
+    const staleThreshold = new Date(Date.now() - BAND_OCCUPANCY_STALE_MS);
+
+    // Opportunistic cleanup of stale occupancy to prevent stale data accumulation
+    await prisma.bandOccupancy.deleteMany({
+      where: {
+        lastSeen: {
+          lt: staleThreshold,
+        },
+      },
+    });
     
     const occupancy = await prisma.bandOccupancy.groupBy({
       by: ['band', 'mode'],
-      where: contestId ? { contestId: String(contestId) } : undefined,
+      where: {
+        contestId: contestId ? String(contestId) : undefined,
+        lastSeen: {
+          gte: staleThreshold,
+        },
+      },
       _count: {
         stationId: true,
       },
@@ -3584,6 +3621,9 @@ app.get('/api/band-occupancy', async (req, res) => {
             band: entry.band,
             mode: entry.mode,
             contestId: contestId ? String(contestId) : undefined,
+            lastSeen: {
+              gte: staleThreshold,
+            },
           },
           include: {
             station: true,
@@ -4218,7 +4258,8 @@ app.get('/api/voice-rooms', authMiddleware as express.RequestHandler, async (_re
 
 app.get('/api/voice-rooms/:roomId', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
-    const room = voiceRoomManager.getRoom(req.params.roomId);
+    const roomId = paramAsString(req.params.roomId);
+    const room = voiceRoomManager.getRoom(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -4240,6 +4281,7 @@ app.get('/api/voice-rooms/:roomId', authMiddleware as express.RequestHandler, as
 
 app.post('/api/voice-rooms/:roomId/join', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const roomId = paramAsString(req.params.roomId);
     const stationId = req.session?.stationId;
     const displayName = req.session?.callsign || 'Operator';
     const { audioSourceType = 'microphone' } = req.body;
@@ -4249,28 +4291,28 @@ app.post('/api/voice-rooms/:roomId/join', authMiddleware as express.RequestHandl
     }
 
     const participant = voiceRoomManager.addParticipant(
-      req.params.roomId,
+      roomId,
       stationId,
       displayName,
       audioSourceType
     );
 
     // Register with WebRTC signaling
-    webrtcSignaling.registerPeer(req.params.roomId, stationId);
+    webrtcSignaling.registerPeer(roomId, stationId);
 
     // Notify all in room
     wsManager.broadcast('voice', 'participantJoined', {
-      roomId: req.params.roomId,
+      roomId,
       participant,
     });
 
-    await logVoiceEvent(stationId, 'SUCCESS', `Joined voice room ${req.params.roomId}`, {
-      roomId: req.params.roomId,
+    await logVoiceEvent(stationId, 'SUCCESS', `Joined voice room ${roomId}`, {
+      roomId,
       audioSourceType,
     });
 
     // Get peers in the room (excluding the joining participant)
-    const peers = voiceRoomManager.getRoomParticipants(req.params.roomId)
+    const peers = voiceRoomManager.getRoomParticipants(roomId)
       .filter(p => p.id !== stationId)
       .map(p => ({
         id: p.id,
@@ -4290,21 +4332,22 @@ app.post('/api/voice-rooms/:roomId/join', authMiddleware as express.RequestHandl
 
 app.post('/api/voice-rooms/:roomId/leave', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const roomId = paramAsString(req.params.roomId);
     const stationId = req.session?.stationId;
     if (!stationId) {
       return res.status(401).json({ error: 'No active session' });
     }
 
-    const removed = voiceRoomManager.removeParticipant(req.params.roomId, stationId);
-    webrtcSignaling.unregisterPeer(req.params.roomId, stationId);
+    const removed = voiceRoomManager.removeParticipant(roomId, stationId);
+    webrtcSignaling.unregisterPeer(roomId, stationId);
 
     if (removed) {
       wsManager.broadcast('voice', 'participantLeft', {
-        roomId: req.params.roomId,
+        roomId,
         participantId: stationId,
       });
-      await logVoiceEvent(stationId, 'INFO', `Left voice room ${req.params.roomId}`, {
-        roomId: req.params.roomId,
+      await logVoiceEvent(stationId, 'INFO', `Left voice room ${roomId}`, {
+        roomId,
       });
     }
 
@@ -4317,6 +4360,7 @@ app.post('/api/voice-rooms/:roomId/leave', authMiddleware as express.RequestHand
 // WebRTC signaling endpoint
 app.post('/api/voice-rooms/:roomId/signal', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const roomId = paramAsString(req.params.roomId);
     const stationId = req.session?.stationId;
     if (!stationId) {
       return res.status(401).json({ error: 'No active session' });
@@ -4338,13 +4382,13 @@ app.post('/api/voice-rooms/:roomId/signal', authMiddleware as express.RequestHan
     if (to) {
       // Direct peer message
       wsManager.sendTo(to, 'voice', 'signal', {
-        roomId: req.params.roomId,
+        roomId,
         message,
       });
     } else {
       // Broadcast to room
       wsManager.broadcast('voice', 'signal', {
-        roomId: req.params.roomId,
+        roomId,
         message,
       });
     }
@@ -4357,6 +4401,7 @@ app.post('/api/voice-rooms/:roomId/signal', authMiddleware as express.RequestHan
 
 app.post('/api/voice-rooms/:roomId/mute', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const roomId = paramAsString(req.params.roomId);
     const stationId = req.session?.stationId;
     if (!stationId) {
       return res.status(401).json({ error: 'No active session' });
@@ -4367,19 +4412,19 @@ app.post('/api/voice-rooms/:roomId/mute', authMiddleware as express.RequestHandl
       return res.status(400).json({ error: 'isMuted is required' });
     }
 
-    const updated = voiceRoomManager.updateParticipantMute(req.params.roomId, stationId, Boolean(isMuted));
+    const updated = voiceRoomManager.updateParticipantMute(roomId, stationId, Boolean(isMuted));
     if (!updated) {
       return res.status(400).json({ error: 'Participant not in room' });
     }
 
     wsManager.broadcast('voice', 'participantMuteChanged', {
-      roomId: req.params.roomId,
+      roomId,
       participantId: stationId,
       isMuted: Boolean(isMuted),
     });
 
     await logVoiceEvent(stationId, 'INFO', `Voice mute ${Boolean(isMuted) ? 'enabled' : 'disabled'}`, {
-      roomId: req.params.roomId,
+      roomId,
       isMuted: Boolean(isMuted),
     });
 
@@ -4391,6 +4436,7 @@ app.post('/api/voice-rooms/:roomId/mute', authMiddleware as express.RequestHandl
 
 app.post('/api/voice-rooms/:roomId/volume', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   try {
+    const roomId = paramAsString(req.params.roomId);
     const stationId = req.session?.stationId;
     if (!stationId) {
       return res.status(401).json({ error: 'No active session' });
@@ -4401,19 +4447,19 @@ app.post('/api/voice-rooms/:roomId/volume', authMiddleware as express.RequestHan
       return res.status(400).json({ error: 'volume is required' });
     }
 
-    const updated = voiceRoomManager.updateParticipantVolume(req.params.roomId, stationId, Number(volume));
+    const updated = voiceRoomManager.updateParticipantVolume(roomId, stationId, Number(volume));
     if (!updated) {
       return res.status(400).json({ error: 'Participant not in room' });
     }
 
     wsManager.broadcast('voice', 'participantVolumeChanged', {
-      roomId: req.params.roomId,
+      roomId,
       participantId: stationId,
       volume: Number(volume),
     });
 
     await logVoiceEvent(stationId, 'INFO', 'Voice volume updated', {
-      roomId: req.params.roomId,
+      roomId,
       volume: Number(volume),
     });
 

@@ -1660,7 +1660,6 @@ function App() {
     fetchLocations()
     fetchAllStations()
     // fetchRadioAssignments()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -1682,7 +1681,6 @@ function App() {
     if (sessionToken) {
       fetchAdminList()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken])
 
   useEffect(() => {
@@ -1698,7 +1696,6 @@ function App() {
     if (station) {
       void reconcileSessionForStation(station)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stations, selectedStationId, sessionToken])
 
   useEffect(() => {
@@ -1712,7 +1709,6 @@ function App() {
       window.removeEventListener('online', onReconnect)
       document.removeEventListener('visibilitychange', onReconnect)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -1730,7 +1726,6 @@ function App() {
       fetchScenarios()
       fetchForwarderConfig()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentView])
 
   useEffect(() => {
@@ -1744,7 +1739,6 @@ function App() {
     if (isAdmin) {
       fetchScenarios()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin])
 
   useEffect(() => {
@@ -1790,7 +1784,6 @@ function App() {
       return
     }
     fetchAssignedRadio()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveCallsign, sessionToken, selectedStationId])
 
   useEffect(() => {
@@ -1799,7 +1792,6 @@ function App() {
       fetchAssignedRadio()
     }, 5000)
     return () => clearInterval(interval)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveCallsign, sessionToken])
 
   useEffect(() => {
@@ -1811,7 +1803,6 @@ function App() {
       }
     }, 1200)
     return () => clearInterval(interval)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignedRadio?.radio?.id, assignedRadio?.radio?.isConnected])
 
   useEffect(() => {
