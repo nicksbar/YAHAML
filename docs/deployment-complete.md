@@ -18,7 +18,7 @@ PORT=3000
 HOST=0.0.0.0  # Bind to all interfaces
 
 # Relay Server Configuration
-RELAY_PORT=10001
+RELAY_PORT=10000
 RELAY_HOST=0.0.0.0  # Bind to all interfaces
 
 # UDP Listener Configuration
@@ -62,7 +62,7 @@ RUN npx prisma generate
 RUN cd ui && npm run build
 
 # Expose ports
-EXPOSE 3000 10001 2237/udp
+EXPOSE 3000 10000 2237/udp
 
 # Start application
 CMD ["npm", "start"]
@@ -78,13 +78,13 @@ services:
     build: .
     ports:
       - "3000:3000"    # API/Web
-      - "10001:10001"  # N3FJP Relay
+      - "10000:10000"  # N3FJP Relay
       - "2237:2237/udp" # UDP Listener
     environment:
       - NODE_ENV=production
       - HOST=0.0.0.0
       - PORT=3000
-      - RELAY_PORT=10001
+      - RELAY_PORT=10000
       - RELAY_HOST=0.0.0.0
       - UDP_PORT=2237
       - UDP_HOST=0.0.0.0
@@ -216,7 +216,7 @@ Set in platform dashboard:
 - `HOST=0.0.0.0`
 - `PORT` (usually auto-set by platform)
 - `DATABASE_URL` (use platform database or volume)
-- `RELAY_PORT=10001`
+- `RELAY_PORT=10000`
 - `UDP_PORT=2237`
 
 ## Network Configuration
@@ -230,7 +230,7 @@ Open required ports:
 sudo ufw allow 3000/tcp
 
 # N3FJP Relay
-sudo ufw allow 10001/tcp
+sudo ufw allow 10000/tcp
 
 # UDP Listener
 sudo ufw allow 2237/udp
@@ -240,14 +240,14 @@ sudo ufw allow 2237/udp
 
 If deploying behind NAT, forward:
 - TCP 3000 → API server
-- TCP 10001 → N3FJP relay
+- TCP 10000 → N3FJP relay
 - UDP 2237 → UDP listener
 
 ### N3FJP Configuration
 
 Point N3FJP to your deployment:
 - **Host**: `your-domain.com` or IP address
-- **Port**: `10001`
+- **Port**: `10000`
 - **Protocol**: TCP
 - **Encoding**: UTF-16LE
 

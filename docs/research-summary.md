@@ -93,7 +93,7 @@ We analyzed **5 major open-source projects**:
    - ADIF-3 & CABRILLO export standards
    - Common pitfalls & how to avoid them
 
-### 2. **IMPLEMENTATION_ROADMAP.md** (9 KB)
+### 2. **implementation-roadmap.md** (9 KB)
    - 8 phases of development (now → V2)
    - Phase 1: Foundation (current, mostly done)
    - Phase 2: Data Quality & Audit (merge handling)

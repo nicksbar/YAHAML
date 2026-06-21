@@ -86,7 +86,7 @@ npm test -- --testPathPattern="relay.test|api.test"  # Skip E2E
 - Track current band/mode for each station
 - Indexed on stationId and lastSeen
 
-### QSOLog
+### LogEntry
 - Individual QSO records
 - ADIF-compatible fields: callsign, band, mode, frequency, RST, power
 - Points calculation support

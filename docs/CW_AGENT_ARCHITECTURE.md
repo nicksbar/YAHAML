@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document describes how an autonomous CW operator subsystem should integrate with YAHAML without turning YAHAML into the hardware driver. The first operating target is ARRL Field Day CQ/run mode, but the subsystem should be activity-aware rather than Field-Day-only.
+This document describes how an autonomous CW operator subsystem should integrate with YAHAML without turning YAHAML into the hardware driver.
 
 YAHAML remains the system of record for:
 
@@ -21,7 +21,7 @@ The CW agent is an isolated service that consumes YAHAML state and emits validat
 - Default to dry-run mode with no RF transmission.
 - Require explicit arming before any transmit action.
 - Preserve deterministic safety checks outside the LLM.
-- Reuse YAHAML contest, activity, station, radio, and logging abstractions.
+- Reuse YAHAML contest, station, radio, and logging abstractions.
 - Keep the agent small enough to add without disrupting the existing app.
 
 ## Recommended Location
@@ -64,7 +64,7 @@ Current endpoints already expose contest and template data:
 - `GET /api/contest-templates/by-type/:type`
 - `GET /api/contests/upcoming`
 
-These are enough for the agent to discover whether a contest or activity is active and which template rules apply. If no contest is active, the agent should fall back to a general CW activity profile with conservative safety defaults.
+These are enough for the agent to discover whether Field Day is active and which contest template rules apply.
 
 ### Station state
 
@@ -79,7 +79,7 @@ Current station and session data is available through:
 The agent should use these to resolve:
 
 - current station callsign
-- station exchange defaults such as class, section, park, summit, grid, or RST
+- Field Day class and section
 - current location
 - active radio assignment
 - whether the session is authorized to control the selected station
@@ -130,40 +130,15 @@ The CW agent should subscribe to these streams to keep its local state current a
 ## Proposed Runtime Flow
 
 1. Agent boots in `DRY_RUN`.
-2. Agent creates or resumes a YAHAML session with `sourceType: cw-agent`.
-3. Agent resolves the selected station and uses `Station.callsign` as the on-air callsign.
-4. Agent uses `Session.callsign` as the operator/client identity for audit and authorization.
-5. Agent loads active contest/activity, radio assignment, and radio audio source state from YAHAML.
-6. Agent subscribes to YAHAML WebSocket updates.
-7. Agent receives decoded CW text from simulated, manual, or later audio-backed input.
-8. Deterministic state machine evaluates the observation.
-9. Optional LLM policy helper may suggest a candidate action.
-10. Safety validator approves or rejects the action.
-11. Approved actions are executed through YAHAML APIs or guarded keyer interfaces.
-12. Agent logs every observation, decision, approval, rejection, and transmission attempt.
-13. Operator can disarm or kill the agent immediately at any time.
-
-## Callsign and Session Identity
-
-The agent should enter YAHAML the same way an operator client does.
-
-- `Station.callsign` is the on-air callsign used in CQ messages and QSO logs.
-- `Session.callsign` is the operator/client identity used for authorization and audit.
-- `LogEntry.operatorCallsign` should record the agent operator identity when the agent logs a QSO.
-- The session should use `sourceType: cw-agent` and a stable `browserId` such as `cw-agent-<station>`.
-- Radio assignment should be resolved through `GET /api/radio-assignments/me` using the agent session token.
-
-This keeps radio locks, logging permissions, and station identity aligned with the existing YAHAML model.
-
-## Audio Source Handling
-
-Radio audio comes from the assigned radio, not from a separate agent configuration.
-
-- `RadioConnection.audioSourceType` determines the audio path.
-- `loopback` and `http-stream` can be consumed by local/simulated decoder backends first.
-- `janus` represents the WebRTC path and needs a dedicated decoder integration later.
-- The first agent milestone should read and display Janus room/stream metadata but treat actual WebRTC decode as a future backend.
-- The agent should not bypass YAHAML radio assignment to pick an audio stream.
+2. Agent loads current station, active contest, and radio state from YAHAML.
+3. Agent subscribes to YAHAML WebSocket updates.
+4. Agent receives decoded CW text from simulated, manual, or later audio-backed input.
+5. Deterministic state machine evaluates the observation.
+6. Optional LLM policy helper may suggest a candidate action.
+7. Safety validator approves or rejects the action.
+8. Approved actions are executed through YAHAML APIs or guarded keyer interfaces.
+9. Agent logs every observation, decision, approval, rejection, and transmission attempt.
+10. Operator can disarm or kill the agent immediately at any time.
 
 ## Data Models
 
@@ -178,7 +153,7 @@ Represents runtime configuration:
 - selected station
 - selected radio
 - contest type
-- activity-specific sent exchange fields
+- Field Day class and section
 - default mode, backend choices, and rate limits
 - dry-run versus armed state
 - LLM backend preferences
@@ -232,14 +207,14 @@ State machine payload for a single QSO:
 - dupe status
 - log status
 
-### `ActivityExchange`
+### `FieldDayExchange`
 
-Activity-specific exchange data:
+Field Day-specific exchange data:
 
 - callsign
-- parsed fields from the active YAHAML template
-- optional Field Day fields such as class and section
-- optional activity fields such as park, summit, grid, RST, state, or serial
+- class
+- section
+- serial or other contest-specific fields if needed later
 
 ### `AgentAuditEvent`
 
@@ -307,7 +282,7 @@ Every action must pass a central safety validator before execution.
 - agent is not killed
 - current band is valid
 - current mode is valid
-- active contest or activity band restrictions are satisfied
+- Field Day band restrictions are satisfied
 - message length is within limit
 - cooldown and rate limits are respected
 - message text is approved or schema-validated

@@ -317,7 +317,7 @@ npx ts-node src/seed-templates.ts
 For custom scoring rules, extend the scoring engine in `src/scoring.ts` (to be created):
 
 ```typescript
-export function calculateScore(contest: Contest, qsos: QSOLog[]): number {
+export function calculateScore(contest: Contest, qsos: LogEntry[]): number {
   const template = contest.template;
   const rules = JSON.parse(template.scoringRules);
   

@@ -107,19 +107,15 @@ Contest: ARRL-FD
 
 ### Pre-Test Setup
 ```bash
-# Terminal 1: Start server stub
+# Terminal 1: Start the API
 cd /home/nick/YAHAML
-source .venv/bin/activate
-python scripts/n3fjp_server_stub.py \
-  --host 127.0.0.1 \
-  --port 10000 \
-  --log captures/test_$(date +%s).log
+npm run dev:api
 
-# Terminal 2: Monitor logs
-tail -f captures/test_*.log | grep -E "Client|BAMS|MESG|TRANSACTION|ERROR"
+# Terminal 2: Monitor terminal output
+# Watch the API and relay output directly
 
-# Terminal 3: Launch N3FJP
-# (Use N3FJP UI to connect to 127.0.0.1:10000 and perform actions)
+# Terminal 3: Launch your client or relay target
+# (Use N3FJP UI or a compatible client to connect to 127.0.0.1:10000)
 ```
 
 ### Test Scenarios

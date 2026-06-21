@@ -2,8 +2,8 @@
 
 ## 📚 Project Overview
 - [README.md](../README.md) - Project description and goals
-- [ROADMAP.md](../ROADMAP.md) - 4-phase development plan
-- [PROGRESS.md](../PROGRESS.md) - Current status and completed work
+- [STATUS.md](../STATUS.md) - Current status and completed work
+- [implementation-roadmap.md](./implementation-roadmap.md) - Long-term development plan
 
 ## 🔌 Protocol Documentation
 
@@ -15,7 +15,7 @@
   - Testing checklist
 
 ### Detailed Protocol Information
-- [protocols-n3fjp.md](./protocols-n3fjp.md) - N3FJP-specific details
+- [n3fjp_captured_protocol.md](./n3fjp_captured_protocol.md) - N3FJP-specific details and captured message formats
 - [canonical-log-model.md](./canonical-log-model.md) - QSO (contact) field mapping
 - [protocols-udp.md](./protocols-udp.md) - UDP interoperability strategy
 
@@ -27,17 +27,17 @@
 
 ### Testing & Validation
 - [testing-plan.md](./testing-plan.md) - 7-phase test plan with success criteria
-- See PROGRESS.md for current test status
+- See [STATUS.md](../STATUS.md) for current test status
 
 ## 🛠️ Implementation Details
 
 ### Architecture
-- [architecture.md](./architecture.md) - 5-service decomposition
-  - Web UI, API server, UDP bridge, Rig control, Database
+- [architecture.md](./architecture.md) - Current service decomposition
+  - Web UI, API server, relay, UDP listener, rig control, database, and real-time services
 
 ### Requirements
 - [requirements.md](./requirements.md) - MVP scope and acceptance criteria
-- [research-n3fjp.md](./research-n3fjp.md) - N3FJP software inventory
+- [research-summary.md](./research-summary.md) - Research findings and background notes
 
 ### Testing Strategy
 - [testing.md](./testing.md) - Test levels (unit, integration, contract)
@@ -45,17 +45,22 @@
 ## 📁 Source Code
 
 ### Server Implementation
-**[scripts/n3fjp_server_stub.py](../scripts/n3fjp_server_stub.py)** - Working TCP server (280 lines)
-- Message parsing (UTF-16LE, BOR/EOR framing)
+**[src/relay.ts](../src/relay.ts)** - Current N3FJP relay implementation
+- Message parsing and forwarding
 - Per-client state management
-- Response handlers (ACK, WHO, greeting, transaction)
-- Broadcast relay (BAMS, MESG)
-- Full command line configuration
+- Response handlers and broadcast relay
+- Configurable host and port
+
+**[src/index.ts](../src/index.ts)** - API server and service orchestration
+- REST endpoints
+- WebSocket startup
+- UDP listener startup
+- Environment-based configuration
 
 ### Utility Scripts
-- `parse_n3fjp_log.py` - Parse captured hex log files
-- `decode_raw_log.py` - Convert hex to UTF-16LE text
-- `tcp_listener.py` - Raw network capture (for debugging)
+- `npm run relay` - Start the relay process
+- `npm test` - Run unit and integration tests
+- `npm run test:browser` - Run Playwright browser tests
 
 ## 📊 Message Types (Quick Reference)
 
@@ -77,11 +82,10 @@ For detailed field information, see [protocol-summary.md](./protocol-summary.md#
 ```bash
 # 1. Start server
 cd /home/nick/YAHAML
-source .venv/bin/activate
-python scripts/n3fjp_server_stub.py --port 10000 --log captures/test.log
+npm run relay
 
 # 2. Monitor in another terminal
-tail -f captures/test.log
+# Watch the relay terminal output
 
 # 3. Run N3FJP and connect to 127.0.0.1:10000
 # 4. Check results in log
@@ -100,29 +104,10 @@ See [protocols-udp.md](./protocols-udp.md) for UDP strategy.
 
 ## ✅ Completion Status
 
-### Phase 1: Discovery (COMPLETE)
-- [x] Reverse-engineer N3FJP protocol
-- [x] Capture all message types
-- [x] Document field mappings
-- [x] Build working server stub
-
-### Phase 2: Stabilization (IN PROGRESS)
-- [x] Add TRANSACTION ACK handler
-- [ ] Test sustained connections (60+ seconds)
-- [ ] Multi-client relay validation
-- [ ] Edge case handling
-
-### Phase 3: Integration (PENDING)
-- [ ] Build canonical QSO dataclass
-- [ ] Create UDP adapter framework
-- [ ] Implement per-app parsers (N1MM+, DXLab, etc.)
-- [ ] Container deployment
-
-### Phase 4: Enhancement (PENDING)
-- [ ] HAMLib rig control integration
-- [ ] Web UI for log management
-- [ ] Multi-network relay support
-- [ ] ADIF export
+### Discovery and Validation
+- N3FJP protocol research is documented in `protocol-summary.md`
+- Current relay and UDP code live in `src/`
+- Browser, API, and integration coverage live in `tests/` and `playwright/`
 
 ## 📋 Document Structure
 
@@ -162,24 +147,22 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for:
 
 ## 🎯 Current Focus
 
-**Stage**: Protocol discovery and server stub validation
+**Stage**: Protocol notes and relay validation
 
 **What's working**:
-- ✅ N3FJP TCP protocol fully documented
-- ✅ Server stub accepts clients and responds correctly
-- ✅ All 7 message types captured and validated
-- ✅ Transaction (log entry) handling implemented
+- ✅ N3FJP protocol behavior documented
+- ✅ Current relay and API implementations are in `src/`
+- ✅ Message handling, exports, contest templates, and WebSocket updates are implemented
+- ✅ Current validation paths are covered by tests
 
 **What's next**:
-- [ ] Verify transaction ACK fixes client disconnect
-- [ ] Multi-client relay testing
-- [ ] Build canonical log model
-- [ ] Create UDP adapter framework
-
-See [PROGRESS.md](../PROGRESS.md) for real-time updates.
+- [ ] Keep protocol notes aligned with the current relay implementation
+- [ ] Expand browser and integration coverage as new features land
+- [ ] Update historical notes when protocol research changes
+See [STATUS.md](../STATUS.md) for current progress updates.
 
 ---
 
-**Last Updated**: 2026-01-31  
-**Protocol Version**: 1.0 (Stable)  
-**Server Stub Version**: 1.2 (with transaction handler)
+**Last Reviewed**: June 7, 2026  
+**Protocol Version**: Historical research notes and current implementation references  
+**Relay Version**: Current Node/TypeScript implementation in `src/relay.ts`
