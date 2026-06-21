@@ -573,9 +573,10 @@
 /* Responsive: Single column on mobile/tablet */
 @media (max-width: 1024px) {
   .logging-bottom-dock {
-    position: static;
+    position: sticky;
+    bottom: var(--space-sm);
     grid-template-columns: 1fr;
-    backdrop-filter: none;
+    backdrop-filter: blur(4px);
   }
 
   .radio-control-section,

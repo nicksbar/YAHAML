@@ -11,7 +11,6 @@ import { YahamlAgentClient } from './yahaml-client';
 import type {
   CwAgentConfig,
   CwQsoState,
-  EffectiveCallsignContext,
   RadioAudioSource,
   RadioState,
   TxArmState,
@@ -63,7 +62,6 @@ class CwAgentCli {
   private qso: CwQsoState;
   private radio: RadioState;
   private audio: RadioAudioSource = { type: 'none' };
-  private effectiveCallsign?: EffectiveCallsignContext;
   private readonly audit = new MemoryAuditLog();
   private readonly keyer = new SimulatedKeyer();
   private readonly yahamlClient: YahamlAgentClient;

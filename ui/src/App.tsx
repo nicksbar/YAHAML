@@ -152,13 +152,45 @@ const CW_MODE_OPTIONS = ['CW', 'CWR']
 const DIGITAL_MODE_OPTIONS = ['PKTLSB', 'PKTUSB', 'PKTFM', 'RTTY', 'RTTYR', 'FAX']
 const ADVANCED_MODE_OPTIONS = ['ECSSLSB', 'ECSSUSB', 'SAM', 'SAH', 'SAL', 'AMS']
 const TUNE_STEP_OPTIONS = [10, 50, 100, 500, 1000]
+
+// Mode descriptions for tooltips
+const MODE_DESCRIPTIONS: Record<string, string> = {
+  // Phone modes
+  'LSB': 'Lower Sideband - Standard voice mode below 10 MHz',
+  'USB': 'Upper Sideband - Standard voice mode above 10 MHz',
+  'AM': 'Amplitude Modulation - Broadcast-style modulation',
+  'FM': 'Frequency Modulation - High-fidelity VHF/UHF voice',
+  'WFM': 'Wideband FM - Broadcast-style VHF reception',
+  'DSB': 'Double Sideband - Full bandwidth voice transmission',
+  // CW modes
+  'CW': 'Continuous Wave - Morse code transmission',
+  'CWR': 'Continuous Wave Reverse - For receiving reversed signals',
+  // Digital modes
+  'PKTLSB': 'Packet Lower Sideband - Digital data on LSB',
+  'PKTUSB': 'Packet Upper Sideband - Digital data on USB',
+  'PKTFM': 'Packet FM - Digital data on FM',
+  'RTTY': 'Radio Teleprinter - Shift keying digital mode',
+  'RTTYR': 'RTTY Reverse - For receiving reversed RTTY',
+  'FAX': 'Facsimile - Weather/chart transmission',
+  // Advanced modes
+  'ECSSLSB': 'Exalted Carrier Single Sideband Lower - Specialized analytical reception',
+  'ECSSUSB': 'Exalted Carrier Single Sideband Upper - Specialized analytical reception',
+  'SAM': 'Synchronous AM Detection - Coherent AM demodulation',
+  'SAH': 'Sideband AM High - High-frequency sideband extraction',
+  'SAL': 'Sideband AM Low - Low-frequency sideband extraction',
+  'AMS': 'Amplitude Modulation Suppressed - DSB without carrier',
+}
 const OPERATOR_MODE_OPTIONS = ['LSB', 'USB', 'CW', 'CWR', 'AM', 'FM', 'PKTUSB', 'RTTY']
 const BAND_PRESETS = [
   { label: '160m', frequencyHz: 1900000 },
   { label: '80m', frequencyHz: 3750000 },
+  { label: '60m', frequencyHz: 5367000 },
   { label: '40m', frequencyHz: 7150000 },
+  { label: '30m', frequencyHz: 10125000 },
   { label: '20m', frequencyHz: 14250000 },
+  { label: '17m', frequencyHz: 18100000 },
   { label: '15m', frequencyHz: 21250000 },
+  { label: '12m', frequencyHz: 24920000 },
   { label: '10m', frequencyHz: 28400000 },
   { label: '6m', frequencyHz: 50300000 },
   { label: '2m', frequencyHz: 146520000 },
@@ -298,6 +330,7 @@ function App() {
   })
   const selectedStationIdRef = useRef<string | null>(selectedStationId)
   const sessionTokenRef = useRef<string>(sessionToken)
+  const sessionRestoreInFlightRef = useRef(false)
   const lastRadioStateUpdateAtRef = useRef<number>(0)
   const syncingSharedAudioRef = useRef(false)
   const [specialClubId, setSpecialClubId] = useState('')
@@ -626,7 +659,7 @@ function App() {
     setSessionToken('')
   }
 
-  const establishSession = async (station: Station) => {
+  const establishSession = async (station: Station): Promise<boolean> => {
     try {
       const response = await fetch('/api/sessions', {
         method: 'POST',
@@ -640,15 +673,58 @@ function App() {
 
       if (!response.ok) {
         clearSession()
-        return
+        return false
       }
 
       const data = await response.json()
       localStorage.setItem(sessionTokenKey, data.token)
       setSessionToken(data.token)
+      return true
     } catch (error) {
       console.error('Failed to create session:', error)
       clearSession()
+      return false
+    }
+  }
+
+  const reconcileSessionForStation = async (station: Station) => {
+    if (sessionRestoreInFlightRef.current) return
+    sessionRestoreInFlightRef.current = true
+    try {
+      const storedCallsign = (localStorage.getItem(storageKey) || '').trim().toUpperCase()
+      if (!storedCallsign || station.callsign.toUpperCase() !== storedCallsign) {
+        return
+      }
+
+      if (selectedStationIdRef.current !== station.id) {
+        selectedStationIdRef.current = station.id
+        setSelectedStationId(station.id)
+      }
+
+      const storedToken = localStorage.getItem(sessionTokenKey) || ''
+      if (storedToken) {
+        try {
+          const validateResponse = await fetch('/api/sessions/me', {
+            headers: { Authorization: `Bearer ${storedToken}` },
+          })
+          if (validateResponse.ok) {
+            sessionTokenRef.current = storedToken
+            setSessionToken(storedToken)
+            setCallsignInput(storedCallsign)
+            return
+          }
+        } catch (error) {
+          console.warn('[SESSION] Token validation failed, will recreate session:', error)
+        }
+      }
+
+      localStorage.removeItem(sessionTokenKey)
+      sessionTokenRef.current = ''
+      setSessionToken('')
+      setCallsignInput(storedCallsign)
+      await establishSession(station)
+    } finally {
+      sessionRestoreInFlightRef.current = false
     }
   }
 
@@ -862,38 +938,10 @@ function App() {
       const data = (await response.json()) as Station[]
       setStations(data)
       const storedCallsign = localStorage.getItem(storageKey)
-      const storedToken = localStorage.getItem(sessionTokenKey)
-      
-      // Restore session if we have both callsign and token (and haven't already selected a station)
-      if (!selectedStationIdRef.current && storedCallsign && storedToken && !sessionTokenRef.current) {
-        const matched = data.find((station) => station.callsign === storedCallsign)
+      if (storedCallsign) {
+        const matched = data.find((station) => station.callsign.toUpperCase() === storedCallsign.toUpperCase())
         if (matched) {
-          console.log('[SESSION] Restoring session for', storedCallsign)
-          // Validate the token is still valid
-          try {
-            const validateResponse = await fetch('/api/sessions/me', {
-              headers: { 'Authorization': `Bearer ${storedToken}` }
-            })
-            if (validateResponse.ok) {
-              console.log('[SESSION] Session restored successfully')
-              // Use the existing valid token instead of creating a new session
-              sessionTokenRef.current = storedToken
-              selectedStationIdRef.current = matched.id
-              setSessionToken(storedToken)
-              setCallsignInput(storedCallsign)
-              setSelectedStationId(matched.id)
-            } else {
-              console.log('[SESSION] Stored token invalid, clearing')
-              localStorage.removeItem(sessionTokenKey)
-              localStorage.removeItem(storageKey)
-              setSessionToken('')
-            }
-          } catch (err) {
-            console.warn('[SESSION] Failed to validate token:', err)
-            localStorage.removeItem(sessionTokenKey)
-            localStorage.removeItem(storageKey)
-            setSessionToken('')
-          }
+          await reconcileSessionForStation(matched)
         }
       }
     } catch (err) {
@@ -1648,15 +1696,24 @@ function App() {
     if (!storedCall) return
     const station = stations.find((s) => s.callsign === storedCall)
     if (station) {
-      if (selectedStationId !== station.id) {
-        setSelectedStationId(station.id)
-      }
-      if (!sessionToken) {
-        establishSession(station)
-      }
+      void reconcileSessionForStation(station)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stations, selectedStationId, sessionToken])
+
+  useEffect(() => {
+    const onReconnect = () => {
+      void fetchStations()
+    }
+
+    window.addEventListener('online', onReconnect)
+    document.addEventListener('visibilitychange', onReconnect)
+    return () => {
+      window.removeEventListener('online', onReconnect)
+      document.removeEventListener('visibilitychange', onReconnect)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!autoRefresh) return
@@ -3349,15 +3406,17 @@ function App() {
 
                         <div className="rig-controls-grid">
                           <div className="rig-control">
-                            <label>Frequency (MHz)</label>
+                            <label title="Transmit frequency in MHz">Frequency (MHz)</label>
                             <div className="rig-frequency-input">
                               <input
                                 value={inputs.frequency}
                                 onChange={(e) => setControlInput(radio.id, { frequency: e.target.value })}
                                 placeholder="14.074"
+                                title="Enter frequency in MHz format (e.g., 14.074)"
                               />
                               <button
                                 className="btn secondary"
+                                title="Set the radio to the entered frequency"
                                 onClick={async () => {
                                   const hz = toFrequencyHz(inputs.frequency)
                                   if (!hz) return
@@ -3377,6 +3436,7 @@ function App() {
                                 <button
                                   key={step}
                                   className="btn secondary"
+                                  title={`Increase frequency by ${step} kHz`}
                                   onClick={async () => {
                                     const current = toFrequencyHz(formatFrequencyMHz(state.frequency))
                                     if (!current) return
@@ -3396,6 +3456,7 @@ function App() {
                                 <button
                                   key={`-${step}`}
                                   className="btn secondary"
+                                  title={`Decrease frequency by ${step} kHz`}
                                   onClick={async () => {
                                     const current = toFrequencyHz(formatFrequencyMHz(state.frequency))
                                     if (!current) return
@@ -3423,6 +3484,7 @@ function App() {
                                   <button
                                     key={mode}
                                     className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    title={MODE_DESCRIPTIONS[mode] || `Set mode to ${mode}`}
                                     onClick={async () => {
                                       setControlInput(radio.id, { mode })
                                       const response = await fetch(`/api/radios/${radio.id}/mode`, {
@@ -3450,6 +3512,7 @@ function App() {
                                   <button
                                     key={mode}
                                     className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    title={MODE_DESCRIPTIONS[mode] || `Set mode to ${mode}`}
                                     onClick={async () => {
                                       setControlInput(radio.id, { mode })
                                       const response = await fetch(`/api/radios/${radio.id}/mode`, {
@@ -3477,6 +3540,7 @@ function App() {
                                   <button
                                     key={mode}
                                     className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    title={MODE_DESCRIPTIONS[mode] || `Set mode to ${mode}`}
                                     onClick={async () => {
                                       setControlInput(radio.id, { mode })
                                       const response = await fetch(`/api/radios/${radio.id}/mode`, {
@@ -3504,6 +3568,7 @@ function App() {
                                   <button
                                     key={mode}
                                     className={`quick-btn ${inputs.mode === mode ? 'active' : ''}`}
+                                    title={MODE_DESCRIPTIONS[mode] || `Set mode to ${mode}`}
                                     onClick={async () => {
                                       setControlInput(radio.id, { mode })
                                       const response = await fetch(`/api/radios/${radio.id}/mode`, {
@@ -3527,12 +3592,13 @@ function App() {
                           </div>
 
                           <div className="rig-control">
-                            <label>Band</label>
+                            <label title="Quick-select amateur radio bands">Band</label>
                             <div className="global-band-pills" role="group" aria-label="Rig band selection">
                               {BAND_PRESETS.map((band) => (
                                 <button
                                   key={band.label}
                                   className="quick-btn"
+                                  title={`Jump to ${band.label} band`}
                                   onClick={async () => {
                                     const response = await fetch(`/api/radios/${radio.id}/frequency`, {
                                       method: 'POST',
@@ -3554,7 +3620,7 @@ function App() {
                           </div>
 
                           <div className="rig-control">
-                            <label>Power (%)</label>
+                            <label title="Adjust transmit power output">Power (%)</label>
                             <div className="rig-slider">
                               <input
                                 type="range"
@@ -3562,10 +3628,12 @@ function App() {
                                 max={100}
                                 value={inputs.power}
                                 onChange={(e) => setControlInput(radio.id, { power: e.target.value })}
+                                title="Transmit power from 0% (minimum) to 100% (maximum)"
                               />
                               <span>{inputs.power}%</span>
                               <button
                                 className="btn secondary"
+                                title="Apply the selected power level"
                                 onClick={async () => {
                                   await fetch(`/api/radios/${radio.id}/power`, {
                                     method: 'POST',
@@ -3581,10 +3649,11 @@ function App() {
                           </div>
 
                           <div className="rig-control">
-                            <label>PTT</label>
+                            <label title="Push-To-Talk - Enable to transmit">PTT</label>
                             <div className="rig-ptt-row">
                               <button
                                 className={`btn ${state.ptt ? 'danger' : 'secondary'}`}
+                                title={state.ptt ? 'Transmitting - Click to stop' : 'Click to begin transmission'}
                                 onClick={async () => {
                                   await fetch(`/api/radios/${radio.id}/ptt`, {
                                     method: 'POST',

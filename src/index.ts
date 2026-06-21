@@ -490,8 +490,37 @@ const authMiddleware = async (
   }
 };
 
-// Admin callsign whitelist (in-memory for now)
+// Admin callsign whitelist (persisted to database via Club.adminList)
 let adminCallsignList: string[] = [];
+
+// Initialize admin callsigns from database or environment
+const initializeAdminCallsigns = async () => {
+  try {
+    // Try to load from first club's adminList
+    const club = await prisma.club.findFirst();
+    if (club?.adminList) {
+      try {
+        adminCallsignList = JSON.parse(club.adminList);
+        console.log(`[Admin] Loaded admin callsigns from database:`, adminCallsignList);
+        return;
+      } catch (e) {
+        console.warn(`[Admin] Failed to parse adminList JSON from database`, e);
+      }
+    }
+  } catch (e) {
+    console.warn(`[Admin] Failed to load admin callsigns from database:`, e);
+  }
+  
+  // Fallback to environment variable or empty (bootstrap mode)
+  const envAdmins = process.env.ADMIN_CALLSIGNS;
+  if (envAdmins) {
+    adminCallsignList = envAdmins.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
+    console.log(`[Admin] Loaded admin callsigns from ADMIN_CALLSIGNS env:`, adminCallsignList);
+  } else {
+    console.log(`[Admin] No admin callsigns configured - operating in bootstrap mode (all users are admins until list is set)`);
+    adminCallsignList = [];
+  }
+};
 
 const isAdminCallsign = (callsign?: string | null): boolean => {
   // If no admin callsigns configured, allow anyone (bootstrap mode)
@@ -2293,7 +2322,7 @@ app.get(
   }
 );
 
-app.post('/api/admin/callsigns', authMiddleware as express.RequestHandler, (req: AuthRequest, res) => {
+app.post('/api/admin/callsigns', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
   const { callsigns } = req.body;
   if (!Array.isArray(callsigns)) {
     return res.status(400).json({ error: 'callsigns must be an array' });
@@ -2312,7 +2341,34 @@ app.post('/api/admin/callsigns', authMiddleware as express.RequestHandler, (req:
     });
   }
 
+  // Update in-memory list
   adminCallsignList = normalized;
+  
+  // Persist to database
+  try {
+    // Update first club or create default if needed
+    let club = await prisma.club.findFirst();
+    if (club) {
+      await prisma.club.update({
+        where: { id: club.id },
+        data: { adminList: JSON.stringify(normalized) },
+      });
+    } else {
+      // Create a system default club if none exists
+      await prisma.club.create({
+        data: {
+          name: 'System Admins',
+          callsign: 'SYS',
+          adminList: JSON.stringify(normalized),
+        },
+      });
+    }
+    console.log(`[Admin] Saved admin callsigns to database:`, normalized);
+  } catch (e) {
+    console.warn(`[Admin] Failed to persist admin callsigns to database:`, e);
+    // Continue anyway - we updated in-memory list
+  }
+  
   return res.json({ callsigns: adminCallsignList });
 });
 
@@ -4372,6 +4428,11 @@ export default app;
 
 // Only start servers if this file is run directly (not imported for testing)
 if (require.main === module) {
+  // Initialize admin callsigns from database
+  initializeAdminCallsigns().catch(e => {
+    console.error('[Admin] Failed to initialize admin callsigns:', e);
+  });
+
   // Start HTTP server (for WebSocket support)
   const server = http.createServer(app);
 
