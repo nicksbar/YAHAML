@@ -15,7 +15,7 @@ Each radio connection can have an optional audio source configured. When an oper
 ### 2. **Janus Gateway** (Recommended)
 - Uses Janus WebRTC Gateway for low-latency audio streaming
 - Best for real-time operation
-- Requires Janus Gateway running on Raspberry Pi or server
+- Uses YAHAML-managed Janus infrastructure; remote hosts are provisioned via YAHAML provisioning flow
 - Configuration fields:
   - **Janus Room ID**: WebRTC room identifier (e.g., `1234`)
   - **Janus Stream ID**: Stream/participant identifier (e.g., `1`)
@@ -148,17 +148,17 @@ Located in the **📻 Assigned Radio** panel on the LoggingPage sidebar:
 - Handles SDP answer and ICE candidate exchange for browser playback
 - Receives low-latency mixed room audio in the operator browser
 
+Provisioning note:
+- Use `docs/provisioning.md` and `scripts/provision-remote-radio.sh` to configure remote hosts and managed service wiring.
+
 ## Audio Source Setup Examples
 
 ### Setting up Janus Gateway
+Use managed provisioning instead of manual Janus install:
 
-See [janus-setup.md](./janus-setup.md) for complete Janus installation guide.
-
-**Quick ALSA → Janus configuration:**
-1. Install Janus on Raspberry Pi
-2. Configure Janus to receive RTP from ALSA (see janus-setup.md)
-3. Use `gst-launch` or `ffmpeg` to stream ALSA audio to Janus WebRTC room
-4. Configure radio with Janus room ID and stream ID
+1. Run `scripts/provision-remote-radio.sh`
+2. Provide Janus URL + room ID when prompted
+3. Confirm remote `yahaml-audio-publisher` service is running
 
 ### Setting up HTTP Stream with ffmpeg
 
@@ -263,9 +263,9 @@ Both can operate simultaneously:
 
 ### Janus not connecting
 
-- Janus Gateway not running - check Janus service status
-- Room ID mismatch - verify room exists in Janus
-- WebRTC connection failed - check firewall/NAT settings
+- Check provisioning output and remote publisher service status
+- Room ID mismatch - verify room exists and matches radio config
+- WebRTC connection failed - check firewall/NAT and Janus URL reachability
 
 ### Volume/Mute not working
 
@@ -274,7 +274,6 @@ Both can operate simultaneously:
 
 ## Future Enhancements
 
-- [ ] Full Janus client integration (currently placeholder)
 - [ ] Audio level meter visualization
 - [ ] Automatic reconnection on stream failure
 - [ ] Multiple audio sources per radio (e.g., radio + recorder)

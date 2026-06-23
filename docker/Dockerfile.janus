@@ -1,0 +1,107 @@
+# Janus Gateway container for YAHAML
+# Build: docker build -f docker/Dockerfile.janus -t yahaml-janus:latest .
+# Multi-stage build: Source → Builder → Runtime
+
+FROM debian:bookworm as builder
+
+RUN apt-get update && apt-get install -y \
+    git \
+    libmicrohttpd-dev \
+    libjansson-dev \
+    libsrtp2-dev \
+    libssl-dev \
+    libsofia-sip-ua-dev \
+    libnice-dev \
+    libglib2.0-dev \
+    libopus-dev \
+    libogg-dev \
+    libcurl4-openssl-dev \
+    liblua5.3-dev \
+    libconfig-dev \
+    pkg-config \
+    libtool \
+    automake \
+    autoconf \
+    build-essential \
+    cmake
+
+# Clone and build Janus from latest upstream
+ARG JANUS_VERSION=v1.4.1
+RUN git clone https://github.com/meetecho/janus-gateway.git /tmp/janus-gateway && \
+    cd /tmp/janus-gateway && \
+    git checkout ${JANUS_VERSION} && \
+    sh autogen.sh && \
+    ./configure --prefix=/opt/janus \
+      --enable-plugin-audiobridge \
+      --enable-plugin-voicemail \
+      --enable-plugin-textroom \
+      --disable-plugin-videoroom \
+      --disable-plugin-sip \
+      --disable-plugin-gstreamer \
+      --disable-plugin-streaming \
+      --disable-docs && \
+    make -j$(nproc) && \
+    make install && \
+    make configs
+
+# Runtime image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    libmicrohttpd12 \
+    libjansson4 \
+    libsrtp2-1 \
+    libssl3 \
+    libsofia-sip-ua0 \
+    libnice10 \
+    libglib2.0-0 \
+    libopus0 \
+    libogg0 \
+    libcurl4 \
+    liblua5.3-0 \
+    libconfig9 \
+    ca-certificates \
+    libstdc++6 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built Janus from builder
+COPY --from=builder /opt/janus /opt/janus
+
+# Create janus user
+RUN useradd --system --home /var/lib/janus --shell /bin/false janus && \
+    mkdir -p /var/lib/janus && \
+    chown -R janus:janus /var/lib/janus
+
+# Set up environment
+ENV PATH="/opt/janus/bin:${PATH}"
+ENV JANUS_ADMIN_SECRET=""
+ENV JANUS_DEBUG_LEVEL="3"
+ENV JANUS_INTERFACE="0.0.0.0"
+
+# Create custom config directory
+RUN mkdir -p /opt/janus/etc/janus/janus.cfg.d
+
+# Copy YAHAML-specific configs
+COPY docker/janus-yahaml.cfg /opt/janus/etc/janus/janus.cfg.d/
+COPY docker/audiobridge-yahaml.cfg /opt/janus/etc/janus/janus.cfg.d/
+COPY docker/janus.transport.http.jcfg /opt/janus/etc/janus/
+
+# Ensure runtime user can patch config values in entrypoint
+RUN chown -R janus:janus /opt/janus/etc/janus
+
+# Entrypoint script to configure at runtime
+COPY docker/janus-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/janus-entrypoint.sh
+
+USER janus
+
+# API port (HTTP)
+EXPOSE 8088
+# WebSocket transport (optional)
+EXPOSE 8188
+# Admin API port (should be firewalled in production)
+EXPOSE 7088
+
+ENTRYPOINT ["/usr/local/bin/janus-entrypoint.sh"]
+CMD ["-F", "/opt/janus/etc/janus"]

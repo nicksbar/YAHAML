@@ -206,8 +206,157 @@ tests/
 ├── relay.e2e.test.ts        # E2E test (real server)
 ├── websocket.test.ts        # E2E test (real server)
 └── export-*.test.ts         # E2E test (real server)
+
+playwright/
+├── tests/
+│   ├── janus-admin-ui.spec.ts      # Janus room management (full stack)
+│   ├── operator-workflows.spec.ts   # Operator UI workflows (full stack)
+│   └── ...
+└── playwright-report/
 ```
+
+## Browser E2E Tests (Playwright)
+
+### Overview
+Browser tests validate the complete system including Janus audio server, Node.js API, and React UI. Tests run against a full docker-compose stack to ensure all components work together.
+
+### Test Modes
+
+#### 1. **Isolated Mode** (Development, Fast Iteration)
+Use your own dev servers without docker-compose.
+```bash
+npm run test:browser
+```
+- Starts independent dev server for API (port 3100) and UI (port 4173)
+- No Janus server
+- ~2-3 minute setup
+- Good for quick iteration on UI tests only
+- **Best for**: Developing tests, fixing UI logic
+
+#### 2. **Local Compose Mode** (Full System Testing)
+Test against local docker-compose stack (requires services already running).
+```bash
+# Start services first
+docker-compose up -d
+
+# Run tests
+npm run test:browser:local
+```
+- Uses services at http://localhost:3000 (API), http://localhost:8080 (UI), http://localhost:8088 (Janus)
+- Requires manual service startup
+- Tests all three components together
+- **Best for**: Manual testing and quick validation
+
+#### 3. **Managed Compose Mode** (CI/CD, Full Validation)
+Automatically starts and stops docker-compose services.
+```bash
+npm run test:browser:compose
+```
+- Orchestrates complete docker-compose lifecycle
+- Waits for all services to be healthy
+- Automatically cleans up after tests
+- Handles failures gracefully
+- **Best for**: PR validation, CI/CD pipelines, complete system validation
+
+### Running Playwright Tests
+
+```bash
+# Development mode (fast, isolated)
+npm run test:browser
+
+# With browser visible (debug)
+npm run test:browser:headed
+
+# Local compose stack (requires manual docker-compose up)
+npm run test:browser:local
+
+# Full managed compose (recommended for CI)
+npm run test:browser:compose
+
+# Full test suite (unit + integration + E2E with compose)
+npm run test:full:compose
+```
+
+### CI/CD Integration
+
+The GitHub Actions workflow (`pr-checks.yml`) automatically:
+1. ✅ Runs linting, build, unit tests
+2. ✅ Starts docker-compose services
+3. ✅ Waits for service health checks
+4. ✅ Runs full Playwright suite
+5. ✅ Uploads test reports
+6. ✅ Cleans up services
+
+All PRs must pass: `npm run test:full:compose` to merge.
+
+### Debugging Playwright Tests
+
+```bash
+# Run in headed mode (watch browser)
+PLAYWRIGHT_USE_EXISTING_SERVER=true npm run test:browser:headed
+
+# Run single test file
+PLAYWRIGHT_USE_EXISTING_SERVER=true npx playwright test playwright/tests/janus-admin-ui.spec.ts
+
+# Run with debug mode
+PWDEBUG=1 npm run test:browser:local
+
+# View test report after run
+npx playwright show-report
+```
+
+### Adding New Playwright Tests
+
+```typescript
+import { test, expect, Page } from '@playwright/test'
+
+test.describe('Feature Name', () => {
+  test('should do something', async ({ page }) => {
+    // Page is already pointed at baseURL from config
+    await page.goto('/')
+    
+    // Interact with elements
+    await page.click('text=Button')
+    
+    // Assert outcomes
+    await expect(page.locator('text=Success')).toBeVisible()
+  })
+})
+```
+
+When testing against docker-compose:
+- Services run at standard ports: API (3000), UI (8080), Janus (8088)
+- Admin API available at http://localhost:7088/admin (requires admin_secret)
+- All authentication headers available via test fixtures
 
 ## CI/CD Integration (Future)
 - Lint, unit, integration, and smoke tests
 - Services expose health endpoints for integration tests
+
+## Provisioning Flow Validation (Humans + Agents)
+
+Use this when validating remote radio host onboarding.
+
+### Human validation checklist
+
+1. Create or identify a radio in Admin.
+2. Run interactive provisioning script:
+  - `./scripts/provision-remote-radio.sh`
+3. Confirm stream emits `[done] Provisioning complete`.
+4. Verify remote services:
+  - `yahaml-rigctld` (if rigctl install enabled)
+  - `yahaml-audio-publisher` (if audio publisher install enabled)
+5. In Admin UI, verify Janus room and participant behavior for the radio.
+
+### Agent/API validation checklist
+
+1. Probe host options first (`POST /api/radios/probe-remote-options` or `POST /api/radios/:id/probe-remote-options`).
+2. Start provisioning stream (`POST /api/radios/:id/provision-remote-stream`).
+3. Parse NDJSON events incrementally and fail fast on `type=error`.
+4. On `type=done`, assert:
+  - `success === true`
+  - `ssh.privateKeyPath` present
+  - warnings captured and surfaced
+5. Verify `GET /api/admin/janus/rooms` includes expected radio room state.
+
+See also: `docs/provisioning.md` for complete runbook and security notes.

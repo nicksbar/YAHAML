@@ -1,9 +1,39 @@
 services:
+  janus:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.janus
+      args:
+        JANUS_VERSION: ${JANUS_VERSION:-v1.4.1}
+    restart: unless-stopped
+    container_name: yahaml-janus
+    environment:
+      JANUS_ADMIN_SECRET: ${JANUS_ADMIN_SECRET:-yahaml-dev-secret}
+      JANUS_DEBUG_LEVEL: ${JANUS_DEBUG_LEVEL:-4}
+    ports:
+      - "${JANUS_API_PORT:-8088}:8088"
+      - "${JANUS_WS_PORT:-8188}:8188"
+      - "${JANUS_ADMIN_PORT:-7088}:7088"
+    networks:
+      - yahaml
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -X POST http://localhost:8088/janus -H 'Content-Type: application/json' -d '{\"janus\":\"info\",\"transaction\":\"healthcheck\"}' > /dev/null",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   api:
     build:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
+    depends_on:
+      janus:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -14,12 +44,17 @@ services:
       UDP_PORT: 2237
       UDP_HOST: 0.0.0.0
       OAUTH_ENABLED: "false"
+      JANUS_API_URL: http://janus:8088/janus
+      JANUS_API_SECRET: ${JANUS_ADMIN_SECRET:-yahaml-dev-secret}
+      JANUS_TIMEOUT_MS: 8000
     volumes:
       - ./data:/app/data
     ports:
       - "${YAHAML_API_PORT:-3000}:3000"
       - "${YAHAML_RELAY_PORT:-10000}:10000"
       - "${YAHAML_UDP_PORT:-2237}:2237/udp"
+    networks:
+      - yahaml
 
   ui:
     build:
@@ -28,5 +63,13 @@ services:
     restart: unless-stopped
     depends_on:
       - api
+    environment:
+      VITE_API_URL: http://localhost:${YAHAML_API_PORT:-3000}
     ports:
       - "${YAHAML_UI_PORT:-8080}:80"
+    networks:
+      - yahaml
+
+networks:
+  yahaml:
+    driver: bridge

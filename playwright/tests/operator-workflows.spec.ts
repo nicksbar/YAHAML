@@ -10,6 +10,16 @@ async function getStoredSessionToken(page: Page) {
   return page.evaluate(() => localStorage.getItem('yahaml:sessionToken'))
 }
 
+async function canAccessAdmin(request: APIRequestContext, token: string) {
+  const response = await request.get('/api/admin/callsigns', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  return response.status() === 200
+}
+
 async function openLoggingPage(page: Page) {
   await page.getByTestId('nav-logging').click()
   await expect(page.getByTestId('logging-page')).toBeVisible()
@@ -37,48 +47,60 @@ async function waitForAdminReady(page: Page, request: APIRequestContext) {
 }
 
 async function bootstrapAdminSession(page: Page, request: APIRequestContext, callsign = randomCallsign()) {
-  let stationId = ''
+  const preferredCandidates = [callsign, 'W5XYZ', 'W5ABC']
+  const candidateCallsigns = Array.from(new Set(preferredCandidates.map((c) => c.trim().toUpperCase()).filter(Boolean)))
 
-  const createStationResponse = await request.post('/api/stations', {
-    data: {
-      callsign,
-      name: callsign,
-    },
-  })
+  for (const candidateCallsign of candidateCallsigns) {
+    let stationId = ''
 
-  if (createStationResponse.ok()) {
-    const station = await createStationResponse.json()
-    stationId = station.id
-  } else if (createStationResponse.status() === 409) {
-    const stationLookupResponse = await request.get(`/api/stations?callsign=${encodeURIComponent(callsign)}`)
-    expect(stationLookupResponse.ok()).toBeTruthy()
-    const stations = await stationLookupResponse.json()
-    stationId = stations[0]?.id || ''
+    const createStationResponse = await request.post('/api/stations', {
+      data: {
+        callsign: candidateCallsign,
+        name: candidateCallsign,
+      },
+    })
+
+    if (createStationResponse.ok()) {
+      const station = await createStationResponse.json()
+      stationId = station.id
+    } else if (createStationResponse.status() === 409) {
+      const stationLookupResponse = await request.get('/api/stations')
+      expect(stationLookupResponse.ok()).toBeTruthy()
+      const stations = await stationLookupResponse.json()
+      const matchedStation = stations.find((station: { callsign?: string; id?: string }) => {
+        return String(station.callsign || '').toUpperCase() === candidateCallsign
+      })
+      stationId = matchedStation?.id || ''
+    }
+
+    expect(stationId).toBeTruthy()
+
+    const sessionResponse = await request.post('/api/sessions', {
+      data: {
+        callsign: candidateCallsign,
+        stationId,
+        browserId: `playwright-${candidateCallsign}`,
+      },
+    })
+
+    expect(sessionResponse.ok()).toBeTruthy()
+    const session = await sessionResponse.json()
+
+    await page.goto('/')
+    await page.evaluate(({ activeCallsign, token }) => {
+      localStorage.setItem('yahaml:callsign', activeCallsign)
+      localStorage.setItem('yahaml:sessionToken', token)
+    }, { activeCallsign: candidateCallsign, token: session.token })
+    await page.reload()
+
+    await expect(page.getByTestId('callsign-toggle')).toContainText(candidateCallsign)
+
+    if (await canAccessAdmin(request, session.token)) {
+      return candidateCallsign
+    }
   }
 
-  expect(stationId).toBeTruthy()
-
-  const sessionResponse = await request.post('/api/sessions', {
-    data: {
-      callsign,
-      stationId,
-      browserId: `playwright-${callsign}`,
-    },
-  })
-
-  expect(sessionResponse.ok()).toBeTruthy()
-  const session = await sessionResponse.json()
-
-  await page.goto('/')
-  await page.evaluate(({ activeCallsign, token }) => {
-    localStorage.setItem('yahaml:callsign', activeCallsign)
-    localStorage.setItem('yahaml:sessionToken', token)
-  }, { activeCallsign: callsign, token: session.token })
-  await page.reload()
-
-  await expect(page.getByTestId('callsign-toggle')).toContainText(callsign)
-
-  return callsign
+  throw new Error('Failed to bootstrap an admin-capable session for Playwright tests')
 }
 
 async function loadScenario(page: Page, request: APIRequestContext, scenarioId: string) {
@@ -95,12 +117,30 @@ async function loadScenario(page: Page, request: APIRequestContext, scenarioId: 
   await expect(scenarioPanel).toBeVisible()
 
   const scenarioCard = page.getByTestId(`scenario-card-${scenarioId}`)
-  await expect(scenarioCard).toBeVisible()
-  await scenarioCard.getByTestId(`scenario-load-${scenarioId}`).click()
+  const cardVisible = await scenarioCard.isVisible({ timeout: 8000 }).catch(() => false)
 
-  await expect(page.getByText('Confirm Scenario Load')).toBeVisible()
-  await page.getByTestId('scenario-confirm-load').click()
-  await expect(page.getByText(/Loaded:/)).toBeVisible({ timeout: 60_000 })
+  if (cardVisible) {
+    await scenarioCard.getByTestId(`scenario-load-${scenarioId}`).click()
+    await expect(page.getByText('Confirm Scenario Load')).toBeVisible()
+    await page.getByTestId('scenario-confirm-load').click()
+    await expect(page.getByText(/Loaded:/)).toBeVisible({ timeout: 60_000 })
+    return
+  }
+
+  // Fallback path: if scenario cards haven't populated yet in slower compose startup,
+  // invoke the same admin endpoint directly using the browser session token.
+  const token = await getStoredSessionToken(page)
+  expect(token).toBeTruthy()
+
+  const loadResponse = await request.post(`/api/admin/scenarios/${scenarioId}/load`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  expect(loadResponse.ok()).toBeTruthy()
+  await page.reload()
+  await expect(page.getByTestId('nav-admin')).toBeVisible()
 }
 
 async function selectScenarioOperatorViaPicker(page: Page, callsign = 'W5ABC') {

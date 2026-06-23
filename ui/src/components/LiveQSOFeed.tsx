@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import '../styles/LiveQSOFeed.css'
+import { resolveWebSocketUrl } from '../routing'
 
 export interface QSOLogEntry {
   id: string
@@ -189,8 +190,7 @@ export function LiveQSOFeed({ maxEntries = 10, contestId, contestFieldKeys = [] 
     fetchQSOs()
 
     // WebSocket for immediate updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    const ws = new WebSocket(resolveWebSocketUrl('/ws'))
 
     ws.onopen = () => {
       if (!contestId) return

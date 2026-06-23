@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { resolveWebSocketUrl } from '../routing';
 
 export interface QSOContact {
   id: string;
@@ -51,8 +52,7 @@ export function useQSOContacts(
     fetchContacts();
 
     // Connect to WebSocket for real-time updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const ws = new WebSocket(resolveWebSocketUrl('/ws'));
 
     ws.onopen = () => {
       // Subscribe to QSO events

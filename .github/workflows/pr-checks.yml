@@ -61,7 +61,7 @@ jobs:
           DATABASE_URL: file:./.test-db/test.db
 
   browser-tests:
-    name: Browser E2E (Playwright)
+    name: Browser E2E (Playwright + Docker Compose)
     runs-on: ubuntu-latest
     needs: [quality]
 
@@ -86,8 +86,8 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run browser tests
-        run: npm run test:browser
+      - name: Run E2E tests with docker-compose
+        run: npm run test:browser:compose
         env:
           CI: true
       

@@ -6,6 +6,7 @@ import { LogManagementPanel } from './LogManagementPanel'
 import { CWDecoder } from './CWDecoder'
 import { useLoggingContext } from '../hooks/useLoggingContext'
 import { useQSOSubmit } from '../hooks/useQSOSubmit'
+import { buildJanusApiCandidates, resolveWebSocketUrl } from '../routing'
 
 interface LoggingPageProps {
   stationId: string
@@ -169,18 +170,48 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   }
 
   const resolveJanusApiCandidates = (radio: RadioInfo): string[] => {
-    const explicit = localStorage.getItem('yahaml:janusApiUrl')?.trim()
-    const hostFromRadio = (radio?.host || '').trim()
-    const browserHost = window.location.hostname
-    const hostCandidates = [
-      explicit || '',
-      hostFromRadio ? `http://${hostFromRadio}:8088/janus` : '',
-      `http://${browserHost}:8088/janus`,
-      `https://${browserHost}:8089/janus`,
-    ].filter(Boolean)
-
-    return Array.from(new Set(hostCandidates))
+    const radioHost = (radio?.host || '').trim()
+    return buildJanusApiCandidates({
+      includeBrowserFallback: true,
+      includeRadioHostFallback: false,
+      radioHost,
+    })
   }
+
+  useEffect(() => {
+    const hydrateRoutingConfig = async () => {
+      try {
+        const response = await fetch('/api/janus/client-config')
+        if (!response.ok) return
+        const data = await response.json()
+
+        if (data.browserApiOverride) localStorage.setItem('yahaml:janusApiUrl', data.browserApiOverride)
+        else localStorage.removeItem('yahaml:janusApiUrl')
+
+        if (data.proxyHostOverride) localStorage.setItem('yahaml:janusProxyHostOverride', data.proxyHostOverride)
+        else localStorage.removeItem('yahaml:janusProxyHostOverride')
+
+        if (data.globalHostOverride) localStorage.setItem('yahaml:globalHostOverride', data.globalHostOverride)
+        else localStorage.removeItem('yahaml:globalHostOverride')
+
+        if (data.janusHostOverride) localStorage.setItem('yahaml:janusHostOverride', data.janusHostOverride)
+        else localStorage.removeItem('yahaml:janusHostOverride')
+
+        if (data.apiHostOverride) localStorage.setItem('yahaml:apiHostOverride', data.apiHostOverride)
+        else localStorage.removeItem('yahaml:apiHostOverride')
+
+        if (data.wsHostOverride) localStorage.setItem('yahaml:wsHostOverride', data.wsHostOverride)
+        else localStorage.removeItem('yahaml:wsHostOverride')
+
+        if (data.serverLanIp) localStorage.setItem('yahaml:serverLanIp', data.serverLanIp)
+        else localStorage.removeItem('yahaml:serverLanIp')
+      } catch {
+        // non-fatal: fall back to existing localStorage values
+      }
+    }
+
+    hydrateRoutingConfig()
+  }, [])
 
   const createJanusSession = async (candidates: string[]) => {
     let lastError: unknown = null
@@ -1064,8 +1095,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     if (!token) return
 
     let isDisposing = false
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsUrl = `${protocol}://${window.location.host}/ws`
+    const wsUrl = resolveWebSocketUrl('/ws')
     const websocket = new WebSocket(wsUrl)
 
     websocket.onopen = () => {

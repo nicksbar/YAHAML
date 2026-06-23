@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import { PrismaClient } from '@prisma/client';
-import { ensureServerRunning, stopTestServer, cleanupTestRecords } from './test-helpers';
+import { ensureServerRunningInfo, stopTestServer, cleanupTestRecords } from './test-helpers';
 
 const prisma = new PrismaClient();
-const API_URL = 'http://localhost:3000';
+let API_URL = 'http://localhost:3000';
 
 describe('CABRILLO Export Endpoints', () => {
   let weStartedServer = false;
@@ -14,7 +14,9 @@ describe('CABRILLO Export Endpoints', () => {
   let testContestIds: string[] = [];
 
   beforeAll(async () => {
-    weStartedServer = await ensureServerRunning(3000);
+    const serverInfo = await ensureServerRunningInfo(3000);
+    weStartedServer = serverInfo.started;
+    API_URL = `http://127.0.0.1:${serverInfo.port}`;
   });
 
   afterAll(async () => {
@@ -274,7 +276,9 @@ describe('Reverse-Log Export Endpoints', () => {
   let testContestIds: string[] = [];
 
   beforeAll(async () => {
-    weStartedServer = await ensureServerRunning(3000);
+    const serverInfo = await ensureServerRunningInfo(3000);
+    weStartedServer = serverInfo.started;
+    API_URL = `http://127.0.0.1:${serverInfo.port}`;
   });
 
   afterAll(async () => {

@@ -85,6 +85,8 @@ npm run dev:all
 - UI: http://localhost:5173
 - API: http://localhost:3000
 
+**For current remote provisioning and audio/rig workflow**, see [docs/provisioning.md](docs/provisioning.md).
+
 ## 🐳 Docker deployment
 
 ### Option A: SQLite (file-backed)
@@ -146,7 +148,7 @@ Start with [docs/INDEX.md](docs/INDEX.md), then see:
 - [Architecture](docs/architecture.md)
 - [Deployment readiness](docs/DEPLOYMENT_READINESS.md)
 - [Testing](docs/testing.md)
-- [Janus setup](docs/janus-setup.md)
+- [Provisioning (current source-of-truth)](docs/provisioning.md)
 - [Radio audio sources](docs/radio-audio-sources.md)
 - [N3FJP protocol summary](docs/protocol-summary.md)
 - [N3FJP protocol debugging](docs/n3fjp_protocol_debugging.md)

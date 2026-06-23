@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import WebSocket from 'ws';
 import { PrismaClient } from '@prisma/client';
-import { ensureServerRunning, stopTestServer, cleanupTestRecords, createTestSession } from './test-helpers';
+import { ensureServerRunningInfo, stopTestServer, cleanupTestRecords, createTestSession } from './test-helpers';
 
-const API_URL = 'http://127.0.0.1:3000';
-const WS_URL = 'ws://127.0.0.1:3000/ws';
+let API_URL = 'http://127.0.0.1:3000';
+let WS_URL = 'ws://127.0.0.1:3000/ws';
 
 const prisma = new PrismaClient();
 
@@ -56,7 +56,10 @@ describe('WebSocket Integration', () => {
   let testContestIds: string[] = [];
 
   beforeAll(async () => {
-    weStartedServer = await ensureServerRunning(3000);
+    const serverInfo = await ensureServerRunningInfo(3000);
+    weStartedServer = serverInfo.started;
+    API_URL = `http://127.0.0.1:${serverInfo.port}`;
+    WS_URL = `ws://127.0.0.1:${serverInfo.port}/ws`;
     // Wait a bit for WebSocket to be ready
     await new Promise(resolve => setTimeout(resolve, 500));
   });

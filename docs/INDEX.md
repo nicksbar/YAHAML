@@ -8,6 +8,7 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 - **[README.md](../README.md)** - Quick start guide and feature overview
 - **[STATUS.md](../STATUS.md)** - Project status, phase completion, performance metrics
 - **[quick-start.md](quick-start.md)** - Five-minute setup walkthrough
+- **[provisioning.md](provisioning.md)** - Current remote provisioning and managed rig/audio setup
 
 ## Architecture & Design
 - **[architecture.md](architecture.md)** - System design, services, data models, and real-time updates (WebSocket)
@@ -25,6 +26,7 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 - **[DEPLOYMENT_READINESS.md](DEPLOYMENT_READINESS.md)** - Production deployment guide and environment variables
 - **[deployment-complete.md](deployment-complete.md)** - Comprehensive deployment (Docker, VPS, Cloud platforms)
 - **[deployment-quick-ref.md](deployment-quick-ref.md)** - Quick reference for common deployment tasks
+- **[provisioning.md](provisioning.md)** - End-to-end remote host provisioning workflow and validation
 
 ## Features
 - **[radio-control.md](radio-control.md)** - HAMLib integration and remote rig control

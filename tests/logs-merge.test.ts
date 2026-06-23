@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import { PrismaClient } from '@prisma/client';
-import { ensureServerRunning, stopTestServer, cleanupTestRecords, createTestSession } from './test-helpers';
+import { ensureServerRunningInfo, stopTestServer, cleanupTestRecords, createTestSession } from './test-helpers';
 
 const prisma = new PrismaClient();
-const API_URL = 'http://localhost:3000';
+let API_URL = 'http://localhost:3000';
 
 describe('Merge API Endpoints', () => {
   let weStartedServer = false;
@@ -17,7 +17,9 @@ describe('Merge API Endpoints', () => {
   let testContestIds: string[] = [];
 
   beforeAll(async () => {
-    weStartedServer = await ensureServerRunning(3000);
+    const serverInfo = await ensureServerRunningInfo(3000);
+    weStartedServer = serverInfo.started;
+    API_URL = `http://127.0.0.1:${serverInfo.port}`;
   });
 
   afterAll(async () => {
