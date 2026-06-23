@@ -16,8 +16,24 @@ NC='\033[0m' # No Color
 
 echo -e "${YELLOW}[Playwright Setup]${NC} Starting docker-compose services..."
 
+# Detect compose command variant (`docker compose` preferred, `docker-compose` fallback)
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker-compose)
+else
+  echo -e "${RED}[Playwright Setup]${NC} Docker Compose not found. Install Docker Compose v2 (\`docker compose\`) or legacy \`docker-compose\`."
+  exit 1
+fi
+
+compose() {
+  "${COMPOSE_CMD[@]}" "$@"
+}
+
+echo -e "${YELLOW}[Playwright Setup]${NC} Using compose command: ${COMPOSE_CMD[*]}"
+
 # Start docker-compose
-docker-compose up -d --build 2>&1 | grep -E "(Creating|Running|Removing|Recreate)" || true
+compose up -d --build 2>&1 | grep -E "(Creating|Running|Removing|Recreate)" || true
 
 echo -e "${YELLOW}[Playwright Setup]${NC} Waiting for services to be healthy..."
 
@@ -25,14 +41,14 @@ echo -e "${YELLOW}[Playwright Setup]${NC} Waiting for services to be healthy..."
 RETRY_COUNT=0
 MAX_RETRIES=30
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-  if docker-compose ps janus | grep -q "healthy"; then
+  if compose ps janus | grep -q "healthy"; then
     echo -e "${GREEN}[Playwright Setup]${NC} Janus is healthy"
     break
   fi
   RETRY_COUNT=$((RETRY_COUNT + 1))
   if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo -e "${RED}[Playwright Setup]${NC} Janus failed to become healthy"
-    docker-compose logs janus | tail -20
+    compose logs janus | tail -20
     exit 1
   fi
   sleep 2
@@ -49,7 +65,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   RETRY_COUNT=$((RETRY_COUNT + 1))
   if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo -e "${RED}[Playwright Setup]${NC} API failed to respond"
-    docker-compose logs api | tail -20
+    compose logs api | tail -20
     exit 1
   fi
   sleep 2
@@ -66,7 +82,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   RETRY_COUNT=$((RETRY_COUNT + 1))
   if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo -e "${RED}[Playwright Setup]${NC} UI failed to respond"
-    docker-compose logs ui | tail -20
+    compose logs ui | tail -20
     exit 1
   fi
   sleep 2
@@ -82,7 +98,7 @@ TEST_RESULT=$?
 
 echo ""
 echo -e "${YELLOW}[Playwright Setup]${NC} Cleaning up docker-compose services..."
-docker-compose down 2>&1 | grep -E "(Removing|Stopped)" || true
+compose down 2>&1 | grep -E "(Removing|Stopped)" || true
 
 if [ $TEST_RESULT -eq 0 ]; then
   echo -e "${GREEN}[Playwright Setup]${NC} Tests passed"
