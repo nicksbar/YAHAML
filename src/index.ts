@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import http from 'http';
+import os from 'os';
 import { Prisma } from '@prisma/client';
 import prisma from './db';
 import { validateQsoAgainstTemplate } from './contest-validation';
@@ -23,6 +24,7 @@ import { wsManager } from './websocket';
 import { startStatsAggregationJob, aggregateContestStats } from './stats';
 import { voiceRoomManager } from './voice-rooms';
 import { webrtcSignaling } from './webrtc-signaling';
+import { janusAdminClient } from './janus-admin';
 import {
   updateAggregates,
   getAggregates,
@@ -35,6 +37,7 @@ import { calculateNextOccurrence } from './contest-templates/scheduler';
 import { lookupCallsign, validateCallsign } from './hamdb';
 import { locationRouter } from './location-api';
 import { scenarios, scenarioList } from './scenarios';
+import { provisionRemoteRigHost, probeRemoteHostOptions, RemoteProvisionError } from './remote-provision';
 
 dotenv.config();
 
@@ -125,6 +128,203 @@ function parseJsonField(value: unknown) {
 function paramAsString(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || '';
   return value || '';
+}
+
+function getServerLanIP(): string | null {
+  const ifaces = os.networkInterfaces();
+  for (const iface of Object.values(ifaces)) {
+    if (!iface) continue;
+    for (const addr of iface) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        return addr.address;
+      }
+    }
+  }
+  return null;
+}
+
+async function getSystemSettingValue(key: string): Promise<string | null> {
+  const setting = await prisma.systemSetting.findUnique({ where: { key } });
+  return setting?.value ?? null;
+}
+
+async function upsertSystemSettingValue(key: string, value: string): Promise<void> {
+  await prisma.systemSetting.upsert({
+    where: { key },
+    update: { value },
+    create: { key, value },
+  });
+}
+
+async function getJanusClientConfig() {
+  const [
+    browserApiOverride,
+    proxyHostOverride,
+    allowedHostOverridesRaw,
+    globalHostOverride,
+    janusHostOverride,
+    apiHostOverride,
+    wsHostOverride,
+  ] = await Promise.all([
+    getSystemSettingValue('janus.browserApiOverride'),
+    getSystemSettingValue('janus.proxyHostOverride'),
+    getSystemSettingValue('janus.allowedHostOverrides'),
+    getSystemSettingValue('routing.globalHostOverride'),
+    getSystemSettingValue('routing.janusHostOverride'),
+    getSystemSettingValue('routing.apiHostOverride'),
+    getSystemSettingValue('routing.wsHostOverride'),
+  ]);
+
+  const allowedHostOverrides = (allowedHostOverridesRaw || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  const resolvedAllowedHostOverrides = allowedHostOverrides.length > 0
+    ? allowedHostOverrides
+    : ['*'];
+
+  const serverLanIp = getServerLanIP();
+  const resolvedGlobalHostOverride = (globalHostOverride || '').trim() || null;
+  const resolvedJanusHostOverride = (janusHostOverride || '').trim() || null;
+  const resolvedApiHostOverride = (apiHostOverride || '').trim() || null;
+  const resolvedWsHostOverride = (wsHostOverride || '').trim() || null;
+  const preferredJanusHost = resolvedJanusHostOverride || resolvedGlobalHostOverride || serverLanIp || null;
+  const suggestedJanusBrowserApiUrl = preferredJanusHost
+    ? `http://${preferredJanusHost}:8088/janus`
+    : null;
+
+  return {
+    browserApiOverride: browserApiOverride || null,
+    proxyHostOverride: proxyHostOverride || null,
+    allowedHostOverrides: resolvedAllowedHostOverrides,
+    janusServerApiUrl: process.env.JANUS_API_URL || null,
+    globalHostOverride: resolvedGlobalHostOverride,
+    janusHostOverride: resolvedJanusHostOverride,
+    apiHostOverride: resolvedApiHostOverride,
+    wsHostOverride: resolvedWsHostOverride,
+    serverLanIp,
+    suggestedJanusBrowserApiUrl,
+  };
+}
+
+function hashToPositiveInt(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function preferredJanusRoomIdForRadio(radioId: string): number {
+  const minRoom = 100000;
+  const spread = 800000;
+  return minRoom + (hashToPositiveInt(radioId) % spread);
+}
+
+function voiceRoomIdForRadio(radioId: string): string {
+  return `radio-${radioId}`;
+}
+
+async function ensureManagedRadioRoom(radio: {
+  id: string;
+  name: string;
+  audioSourceType?: string | null;
+  janusRoomId?: string | null;
+}): Promise<{ voiceRoomId: string; janusRoomId: string | null; janusSynced: boolean }> {
+  const voiceRoomId = voiceRoomIdForRadio(radio.id);
+  const voiceRoom = voiceRoomManager.getRoom(voiceRoomId);
+
+  if (!voiceRoom) {
+    voiceRoomManager.createRoom({
+      id: voiceRoomId,
+      name: `🎛 ${radio.name}`,
+      description: `Managed room for radio ${radio.name}`,
+      radioId: radio.id,
+      maxParticipants: 100,
+    });
+  }
+
+  if (radio.audioSourceType !== 'janus') {
+    return { voiceRoomId, janusRoomId: radio.janusRoomId || null, janusSynced: false };
+  }
+
+  const targetRoomId = (() => {
+    const parsed = Number(radio.janusRoomId || '');
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return preferredJanusRoomIdForRadio(radio.id);
+  })();
+
+  if (!janusAdminClient.enabled) {
+    return { voiceRoomId, janusRoomId: String(targetRoomId), janusSynced: false };
+  }
+
+  await janusAdminClient.ensureRoom(targetRoomId, `YAHAML ${radio.name}`);
+
+  return {
+    voiceRoomId,
+    janusRoomId: String(targetRoomId),
+    janusSynced: true,
+  };
+}
+
+async function reconcileJanusManagedRooms(): Promise<{
+  processed: number;
+  updated: number;
+  createdVoiceRooms: number;
+  janusSynced: number;
+  radios: Array<{ radioId: string; voiceRoomId: string; janusRoomId: string | null; janusSynced: boolean }>;
+}> {
+  const radios = await prisma.radioConnection.findMany({
+    where: {
+      audioSourceType: 'janus',
+    },
+    orderBy: { name: 'asc' },
+  });
+
+  let updated = 0;
+  let createdVoiceRooms = 0;
+  let janusSynced = 0;
+  const details: Array<{ radioId: string; voiceRoomId: string; janusRoomId: string | null; janusSynced: boolean }> = [];
+
+  for (const radio of radios) {
+    const hadVoiceRoom = Boolean(voiceRoomManager.getRoom(voiceRoomIdForRadio(radio.id)));
+    const ensured = await ensureManagedRadioRoom(radio);
+
+    if (!hadVoiceRoom && voiceRoomManager.getRoom(ensured.voiceRoomId)) {
+      createdVoiceRooms += 1;
+    }
+
+    if (ensured.janusSynced) {
+      janusSynced += 1;
+    }
+
+    if (ensured.janusRoomId && ensured.janusRoomId !== (radio.janusRoomId || null)) {
+      await prisma.radioConnection.update({
+        where: { id: radio.id },
+        data: { janusRoomId: ensured.janusRoomId },
+      });
+      updated += 1;
+    }
+
+    details.push({
+      radioId: radio.id,
+      voiceRoomId: ensured.voiceRoomId,
+      janusRoomId: ensured.janusRoomId,
+      janusSynced: ensured.janusSynced,
+    });
+  }
+
+  return {
+    processed: radios.length,
+    updated,
+    createdVoiceRooms,
+    janusSynced,
+    radios: details,
+  };
 }
 
 function normalizeContestTemplate(template: any | null) {
@@ -2379,6 +2579,225 @@ app.post('/api/admin/callsigns', authMiddleware as express.RequestHandler, async
   return res.json({ callsigns: adminCallsignList });
 });
 
+// Janus managed-room admin endpoints
+app.post('/api/admin/janus/reconcile-rooms', authMiddleware as express.RequestHandler, requireAdmin, async (_req: AuthRequest, res) => {
+  try {
+    const result = await reconcileJanusManagedRooms();
+    return res.json({
+      success: true,
+      janusConfigured: janusAdminClient.enabled,
+      ...result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to reconcile Janus rooms' });
+  }
+});
+
+app.get('/api/admin/janus/rooms', authMiddleware as express.RequestHandler, requireAdmin, async (_req: AuthRequest, res) => {
+  try {
+    const radios = await prisma.radioConnection.findMany({
+      where: { audioSourceType: 'janus' },
+      include: {
+        assignments: {
+          where: { isActive: true },
+          include: { station: true },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    // Ensure voice rooms exist for all Janus-enabled radios
+    for (const radio of radios) {
+      await ensureManagedRadioRoom(radio);
+    }
+
+    // Build the flat JanusRoomWithDetails[] the admin UI expects
+    const result = radios.map((radio) => {
+      const voiceRoom = voiceRoomManager.getRoom(voiceRoomIdForRadio(radio.id));
+      const janusRoomId = parseInt(radio.janusRoomId || '0') || 0;
+
+      const participants = voiceRoom
+        ? Array.from(voiceRoom.participants.values()).map((p: any) => ({
+            id: typeof p.id === 'number' ? p.id : 0,
+            display: p.displayName || p.display || p.id || 'unknown',
+            publisher: p.audioSourceType !== 'system',
+            talking: false,
+          }))
+        : [];
+
+      return {
+        roomId: janusRoomId,
+        radioId: radio.id,
+        radioName: radio.name,
+        description: [radio.manufacturer, radio.model].filter(Boolean).join(' ') || radio.name,
+        participantCount: voiceRoom?.participants.size ?? 0,
+        participants,
+        rtpForwards: [] as { streamId: number; host: string; port: number }[],
+        isActive: Boolean(voiceRoom),
+        janusConfigured: janusAdminClient.enabled,
+        remoteSshHost: radio.remoteSshHost,
+        remoteProvisionStatus: radio.remoteProvisionStatus,
+      };
+    });
+
+    return res.json(result);
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to load Janus rooms' });
+  }
+});
+
+app.get('/api/admin/janus/settings', authMiddleware as express.RequestHandler, requireAdmin, async (_req: AuthRequest, res) => {
+  try {
+    const config = await getJanusClientConfig();
+    return res.json(config);
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to load Janus settings' });
+  }
+});
+
+app.put('/api/admin/janus/settings', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const browserApiOverride = typeof req.body?.browserApiOverride === 'string'
+      ? req.body.browserApiOverride.trim()
+      : '';
+    const proxyHostOverride = typeof req.body?.proxyHostOverride === 'string'
+      ? req.body.proxyHostOverride.trim()
+      : '';
+    const globalHostOverride = typeof req.body?.globalHostOverride === 'string'
+      ? req.body.globalHostOverride.trim()
+      : '';
+    const janusHostOverride = typeof req.body?.janusHostOverride === 'string'
+      ? req.body.janusHostOverride.trim()
+      : '';
+    const apiHostOverride = typeof req.body?.apiHostOverride === 'string'
+      ? req.body.apiHostOverride.trim()
+      : '';
+    const wsHostOverride = typeof req.body?.wsHostOverride === 'string'
+      ? req.body.wsHostOverride.trim()
+      : '';
+
+    const allowedHostOverridesInput = Array.isArray(req.body?.allowedHostOverrides)
+      ? req.body.allowedHostOverrides
+      : String(req.body?.allowedHostOverrides || '')
+          .split(',')
+          .map((entry) => entry.trim());
+
+    const allowedHostOverrides = allowedHostOverridesInput
+      .map((entry: any) => String(entry || '').trim())
+      .filter(Boolean);
+
+    await Promise.all([
+      upsertSystemSettingValue('janus.browserApiOverride', browserApiOverride),
+      upsertSystemSettingValue('janus.proxyHostOverride', proxyHostOverride),
+      upsertSystemSettingValue('janus.allowedHostOverrides', allowedHostOverrides.join(',')),
+      upsertSystemSettingValue('routing.globalHostOverride', globalHostOverride),
+      upsertSystemSettingValue('routing.janusHostOverride', janusHostOverride),
+      upsertSystemSettingValue('routing.apiHostOverride', apiHostOverride),
+      upsertSystemSettingValue('routing.wsHostOverride', wsHostOverride),
+    ]);
+
+    const updated = await getJanusClientConfig();
+    return res.json(updated);
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to save Janus settings' });
+  }
+});
+
+app.get('/api/janus/client-config', async (_req, res) => {
+  try {
+    const config = await getJanusClientConfig();
+    return res.json(config);
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to load Janus client config' });
+  }
+});
+
+app.get('/api/admin/janus/rooms/:roomId/participants', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const roomId = Number(paramAsString(req.params.roomId));
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ error: 'roomId must be a positive number' });
+    }
+    if (!janusAdminClient.enabled) {
+      return res.status(400).json({ error: 'JANUS_API_URL is not configured' });
+    }
+
+    const participants = await janusAdminClient.listParticipants(roomId);
+    return res.json({ roomId, participants });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to list Janus participants' });
+  }
+});
+
+app.post('/api/admin/janus/rooms/:roomId/kick', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const roomId = Number(paramAsString(req.params.roomId));
+    const participantId = Number(req.body?.participantId);
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ error: 'roomId must be a positive number' });
+    }
+    if (!Number.isFinite(participantId) || participantId <= 0) {
+      return res.status(400).json({ error: 'participantId must be a positive number' });
+    }
+    if (!janusAdminClient.enabled) {
+      return res.status(400).json({ error: 'JANUS_API_URL is not configured' });
+    }
+
+    await janusAdminClient.kickParticipant(roomId, participantId);
+    return res.json({ success: true, roomId, participantId });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to kick participant' });
+  }
+});
+
+app.post('/api/admin/janus/rooms/:roomId/rtp-forward/start', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const roomId = Number(paramAsString(req.params.roomId));
+    const host = String(req.body?.host || '').trim();
+    const port = Number(req.body?.port);
+    const payloadType = req.body?.payloadType !== undefined ? Number(req.body.payloadType) : 111;
+
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ error: 'roomId must be a positive number' });
+    }
+    if (!host) {
+      return res.status(400).json({ error: 'host is required' });
+    }
+    if (!Number.isFinite(port) || port <= 0) {
+      return res.status(400).json({ error: 'port must be a positive number' });
+    }
+    if (!janusAdminClient.enabled) {
+      return res.status(400).json({ error: 'JANUS_API_URL is not configured' });
+    }
+
+    const streamId = await janusAdminClient.startRtpForward(roomId, host, port, payloadType);
+    return res.json({ success: true, roomId, streamId, host, port, payloadType });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to start RTP forward' });
+  }
+});
+
+app.post('/api/admin/janus/rooms/:roomId/rtp-forward/stop', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const roomId = Number(paramAsString(req.params.roomId));
+    const streamId = Number(req.body?.streamId);
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ error: 'roomId must be a positive number' });
+    }
+    if (!Number.isFinite(streamId) || streamId <= 0) {
+      return res.status(400).json({ error: 'streamId must be a positive number' });
+    }
+    if (!janusAdminClient.enabled) {
+      return res.status(400).json({ error: 'JANUS_API_URL is not configured' });
+    }
+
+    await janusAdminClient.stopRtpForward(roomId, streamId);
+    return res.json({ success: true, roomId, streamId });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to stop RTP forward' });
+  }
+});
+
 // Station management endpoints
 app.get('/api/admin/stations', authMiddleware as express.RequestHandler, requireAdmin, async (_req: AuthRequest, res) => {
   try {
@@ -2937,7 +3356,7 @@ app.get('/api/radios/:id', async (req, res) => {
 // Create radio connection
 app.post('/api/radios', async (req, res) => {
   try {
-    const { name, host, port, pollInterval, connectionType } = req.body;
+    const { name, host, port, pollInterval, connectionType, audioSourceType, janusRoomId, janusStreamId, httpStreamUrl } = req.body;
     const normalizedType = connectionType === 'mock' ? 'mock' : 'hamlib';
     
     if (!name || (normalizedType === 'hamlib' && !host)) {
@@ -2959,8 +3378,23 @@ app.post('/api/radios', async (req, res) => {
         connectionType: normalizedType,
         pollInterval: pollInterval || 1000,
         isEnabled: false,
+        audioSourceType: audioSourceType !== undefined ? audioSourceType : undefined,
+        janusRoomId: janusRoomId !== undefined ? janusRoomId : undefined,
+        janusStreamId: janusStreamId !== undefined ? janusStreamId : undefined,
+        httpStreamUrl: httpStreamUrl !== undefined ? httpStreamUrl : undefined,
       },
     });
+
+    if (radio.audioSourceType === 'janus') {
+      const ensured = await ensureManagedRadioRoom(radio);
+      if (ensured.janusRoomId && ensured.janusRoomId !== radio.janusRoomId) {
+        const updatedRadio = await prisma.radioConnection.update({
+          where: { id: radio.id },
+          data: { janusRoomId: ensured.janusRoomId },
+        });
+        return res.status(201).json(updatedRadio);
+      }
+    }
     
     return res.status(201).json(radio);
   } catch (error: any) {
@@ -2997,6 +3431,17 @@ app.put('/api/radios/:id', async (req, res) => {
       where: { id: radioId },
       data: updateData,
     });
+
+    let resolvedRadio = radio;
+    if (resolvedRadio.audioSourceType === 'janus') {
+      const ensured = await ensureManagedRadioRoom(resolvedRadio);
+      if (ensured.janusRoomId && ensured.janusRoomId !== (resolvedRadio.janusRoomId || null)) {
+        resolvedRadio = await prisma.radioConnection.update({
+          where: { id: resolvedRadio.id },
+          data: { janusRoomId: ensured.janusRoomId },
+        });
+      }
+    }
     
     // If enabled, start the radio
     if (isEnabled) {
@@ -3005,7 +3450,7 @@ app.put('/api/radios/:id', async (req, res) => {
       await radioManager.stopRadio(radio.id);
     }
     
-    return res.json(radio);
+    return res.json(resolvedRadio);
   } catch (error: any) {
     if (error.code === 'P2025') {
       return res.status(404).json({ error: 'Radio not found' });
@@ -3092,6 +3537,322 @@ app.post('/api/radios/test-connection', async (req, res) => {
     return res.status(500).json({ 
       success: false, 
       error: error.message 
+    });
+  }
+});
+
+// Provision remote radio host via SSH (admin only)
+app.post('/api/radios/:id/provision-remote', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    if (!radio) {
+      return res.status(404).json({ error: 'Radio not found' });
+    }
+
+    const {
+      host,
+      port,
+      username,
+      password,
+      sudoPassword,
+      installRigctl,
+      installAudioPublisher,
+      installJanus,
+      grantScopedSudo,
+      rigModel,
+      rigDevice,
+      rigBaud,
+      audioCaptureDevice,
+      audioPlaybackDevice,
+      yahamlJanusUrl,
+    } = req.body || {};
+
+    if (!host || !username || !password) {
+      return res.status(400).json({ error: 'host, username, and password are required' });
+    }
+
+    // Derive the Janus URL the Pi should use (prefer explicit, then server LAN IP, then placeholder)
+    const resolvedJanusUrl = (() => {
+      if (yahamlJanusUrl && String(yahamlJanusUrl).trim()) return String(yahamlJanusUrl).trim();
+      const lanIp = getServerLanIP();
+      return lanIp ? `http://${lanIp}:8088/janus` : null;
+    })();
+
+    const result = await provisionRemoteRigHost(radioId, {
+      host: String(host),
+      port: Number(port || 22),
+      username: String(username),
+      password: String(password),
+      sudoPassword: sudoPassword ? String(sudoPassword) : undefined,
+      installRigctl: installRigctl !== false,
+      installAudioPublisher: installAudioPublisher !== undefined
+        ? installAudioPublisher !== false
+        : installJanus !== false,
+      installJanus: installJanus !== false,
+      grantScopedSudo: grantScopedSudo !== false,
+      radioPort: radio.port,
+      rigModel: Number.isFinite(Number(rigModel)) ? Number(rigModel) : undefined,
+      rigDevice: rigDevice ? String(rigDevice) : undefined,
+      rigBaud: Number.isFinite(Number(rigBaud)) ? Number(rigBaud) : undefined,
+      audioCaptureDevice: audioCaptureDevice ? String(audioCaptureDevice) : undefined,
+      audioPlaybackDevice: audioPlaybackDevice ? String(audioPlaybackDevice) : undefined,
+      yahamlJanusUrl: resolvedJanusUrl ?? undefined,
+      janusRoomId: radio.janusRoomId ?? undefined,
+    });
+
+    await prisma.radioConnection.update({
+      where: { id: radioId },
+      data: {
+        remoteSshHost: String(host),
+        remoteSshPort: Number(port || 22),
+        remoteSshUser: String(username),
+        remoteSshPublicKey: result.publicKey,
+        remoteSshPrivateKeyPath: result.privateKeyPath,
+        remoteProvisionedAt: new Date(),
+        remoteProvisionStatus: 'ok',
+        remoteProvisionLastError: null,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: 'Remote host provisioned',
+      scopedSudoGranted: result.scopedSudoGranted,
+      warnings: result.warnings,
+      logs: result.logs,
+      ssh: {
+        host: String(host),
+        port: Number(port || 22),
+        user: String(username),
+        publicKey: result.publicKey,
+        privateKeyPath: result.privateKeyPath,
+      },
+    });
+  } catch (error: any) {
+    const radioId = paramAsString(req.params.id);
+    await prisma.radioConnection.update({
+      where: { id: radioId },
+      data: {
+        remoteProvisionStatus: 'error',
+        remoteProvisionLastError: error?.message || 'Remote provisioning failed',
+      },
+    }).catch(() => {
+      // best effort
+    });
+
+    const isProvisionError = error instanceof RemoteProvisionError;
+    return res.status(500).json({
+      error: error?.message || 'Remote provisioning failed',
+      logs: isProvisionError ? error.logs : undefined,
+      warnings: isProvisionError ? error.warnings : undefined,
+    });
+  }
+});
+
+// Provision remote host with live NDJSON log stream (admin only)
+app.post('/api/radios/:id/provision-remote-stream', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  const writeEvent = (event: Record<string, any>) => {
+    res.write(`${JSON.stringify(event)}\n`);
+  };
+
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    if (!radio) {
+      writeEvent({ type: 'error', error: 'Radio not found' });
+      return res.end();
+    }
+
+    const {
+      host,
+      port,
+      username,
+      password,
+      sudoPassword,
+      installRigctl,
+      installAudioPublisher,
+      installJanus,
+      grantScopedSudo,
+      rigModel,
+      rigDevice,
+      rigBaud,
+      audioCaptureDevice,
+      audioPlaybackDevice,
+      yahamlJanusUrl,
+    } = req.body || {};
+
+    if (!host || !username || !password) {
+      writeEvent({ type: 'error', error: 'host, username, and password are required' });
+      return res.end();
+    }
+
+    const resolvedJanusUrl = (() => {
+      if (yahamlJanusUrl && String(yahamlJanusUrl).trim()) return String(yahamlJanusUrl).trim();
+      const lanIp = getServerLanIP();
+      return lanIp ? `http://${lanIp}:8088/janus` : null;
+    })();
+
+    writeEvent({ type: 'status', message: `Starting remote provisioning... (Janus URL for Pi: ${resolvedJanusUrl ?? 'not detected — will use placeholder'})` });
+
+    const result = await provisionRemoteRigHost(
+      radioId,
+      {
+        host: String(host),
+        port: Number(port || 22),
+        username: String(username),
+        password: String(password),
+        sudoPassword: sudoPassword ? String(sudoPassword) : undefined,
+        installRigctl: installRigctl !== false,
+        installAudioPublisher: installAudioPublisher !== undefined
+          ? installAudioPublisher !== false
+          : installJanus !== false,
+        installJanus: installJanus !== false,
+        grantScopedSudo: grantScopedSudo !== false,
+        radioPort: radio.port,
+        rigModel: Number.isFinite(Number(rigModel)) ? Number(rigModel) : undefined,
+        rigDevice: rigDevice ? String(rigDevice) : undefined,
+        rigBaud: Number.isFinite(Number(rigBaud)) ? Number(rigBaud) : undefined,
+        audioCaptureDevice: audioCaptureDevice ? String(audioCaptureDevice) : undefined,
+        audioPlaybackDevice: audioPlaybackDevice ? String(audioPlaybackDevice) : undefined,
+        yahamlJanusUrl: resolvedJanusUrl ?? undefined,
+        janusRoomId: radio.janusRoomId ?? undefined,
+      },
+      {
+        onLog: (line) => writeEvent({ type: 'log', line }),
+        onWarning: (line) => writeEvent({ type: 'warning', line }),
+      },
+    );
+
+    await prisma.radioConnection.update({
+      where: { id: radioId },
+      data: {
+        remoteSshHost: String(host),
+        remoteSshPort: Number(port || 22),
+        remoteSshUser: String(username),
+        remoteSshPublicKey: result.publicKey,
+        remoteSshPrivateKeyPath: result.privateKeyPath,
+        remoteProvisionedAt: new Date(),
+        remoteProvisionStatus: 'ok',
+        remoteProvisionLastError: null,
+      },
+    });
+
+    writeEvent({
+      type: 'done',
+      success: true,
+      scopedSudoGranted: result.scopedSudoGranted,
+      warnings: result.warnings,
+      logs: result.logs,
+      ssh: {
+        host: String(host),
+        port: Number(port || 22),
+        user: String(username),
+        publicKey: result.publicKey,
+        privateKeyPath: result.privateKeyPath,
+      },
+    });
+    return res.end();
+  } catch (error: any) {
+    const radioId = paramAsString(req.params.id);
+    await prisma.radioConnection.update({
+      where: { id: radioId },
+      data: {
+        remoteProvisionStatus: 'error',
+        remoteProvisionLastError: error?.message || 'Remote provisioning failed',
+      },
+    }).catch(() => {
+      // best effort
+    });
+
+    const isProvisionError = error instanceof RemoteProvisionError;
+    writeEvent({
+      type: 'error',
+      error: error?.message || 'Remote provisioning failed',
+      logs: isProvisionError ? error.logs : undefined,
+      warnings: isProvisionError ? error.warnings : undefined,
+    });
+    return res.end();
+  }
+});
+
+// Probe remote host for rig models/devices/audio options (admin only)
+app.post('/api/radios/probe-remote-options', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const host = String(req.body?.host || '').trim();
+    const username = String(req.body?.username || '').trim();
+    const password = req.body?.password ? String(req.body.password) : undefined;
+    const port = Number(req.body?.port || 22);
+
+    if (!host || !username) {
+      return res.status(400).json({ error: 'host and username are required' });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'password is required for initial probe before provisioning' });
+    }
+
+    const result = await probeRemoteHostOptions({
+      host,
+      port,
+      username,
+      password,
+    });
+
+    return res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      error: error?.message || 'Failed to probe remote host options',
+    });
+  }
+});
+
+// Probe remote host options using provided credentials OR stored SSH key for a radio (admin only)
+app.post('/api/radios/:id/probe-remote-options', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    if (!radio) {
+      return res.status(404).json({ error: 'Radio not found' });
+    }
+
+    const host = String(req.body?.host || radio.remoteSshHost || radio.host || '').trim();
+    const username = String(req.body?.username || radio.remoteSshUser || '').trim();
+    const password = req.body?.password ? String(req.body.password) : undefined;
+    const port = Number(req.body?.port || radio.remoteSshPort || 22);
+    const privateKeyPath = String(req.body?.privateKeyPath || radio.remoteSshPrivateKeyPath || '').trim() || undefined;
+
+    if (!host || !username) {
+      return res.status(400).json({ error: 'host and username are required' });
+    }
+
+    const result = await probeRemoteHostOptions({
+      host,
+      port,
+      username,
+      password,
+      privateKeyPath,
+    });
+
+    return res.json({
+      success: true,
+      ...result,
+      ssh: {
+        host,
+        port,
+        user: username,
+        privateKeyPath: privateKeyPath || null,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      error: error?.message || 'Failed to probe remote host options',
     });
   }
 });
@@ -4284,17 +5045,49 @@ app.post('/api/voice-rooms/:roomId/join', authMiddleware as express.RequestHandl
     const roomId = paramAsString(req.params.roomId);
     const stationId = req.session?.stationId;
     const displayName = req.session?.callsign || 'Operator';
-    const { audioSourceType = 'microphone' } = req.body;
+    const room = voiceRoomManager.getRoom(roomId);
+    const { audioSourceType = 'microphone', joinMode } = req.body || {};
 
     if (!stationId) {
       return res.status(401).json({ error: 'No active session' });
+    }
+
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+
+    const requestedJoinMode = String(joinMode || '').trim().toLowerCase();
+    const isListenerJoin = requestedJoinMode === 'listener';
+    const isManagedRadioRoom = room.id.startsWith('radio-') && Boolean(room.radioId);
+
+    let resolvedAudioSourceType: 'microphone' | 'radio' | 'janus' | 'http-stream' | 'system' = audioSourceType;
+
+    if (isManagedRadioRoom) {
+      const assignment = await prisma.radioAssignment.findFirst({
+        where: {
+          radioId: room.radioId || undefined,
+          stationId,
+          isActive: true,
+        },
+      });
+
+      const wantsOperatorTx = !isListenerJoin && resolvedAudioSourceType === 'microphone';
+      if (wantsOperatorTx && !assignment) {
+        return res.status(403).json({
+          error: 'Operator transmit access requires active radio assignment',
+        });
+      }
+
+      if (!assignment) {
+        resolvedAudioSourceType = 'system';
+      }
     }
 
     const participant = voiceRoomManager.addParticipant(
       roomId,
       stationId,
       displayName,
-      audioSourceType
+      resolvedAudioSourceType
     );
 
     // Register with WebRTC signaling
@@ -4308,7 +5101,8 @@ app.post('/api/voice-rooms/:roomId/join', authMiddleware as express.RequestHandl
 
     await logVoiceEvent(stationId, 'SUCCESS', `Joined voice room ${roomId}`, {
       roomId,
-      audioSourceType,
+      audioSourceType: resolvedAudioSourceType,
+      joinMode: isListenerJoin ? 'listener' : 'operator',
     });
 
     // Get peers in the room (excluding the joining participant)
@@ -4522,4 +5316,15 @@ if (require.main === module) {
   } catch (error) {
     console.warn('Shack room already exists or error:', error);
   }
+
+  reconcileJanusManagedRooms()
+    .then((result) => {
+      console.log(`✓ Janus managed-room reconciliation complete: processed=${result.processed}, updated=${result.updated}, voiceRoomsCreated=${result.createdVoiceRooms}, janusSynced=${result.janusSynced}`);
+      if (!janusAdminClient.enabled) {
+        console.log('  - JANUS_API_URL not configured: voice rooms created locally, Janus sync skipped');
+      }
+    })
+    .catch((error) => {
+      console.error('Janus managed-room reconciliation error:', error);
+    });
 }

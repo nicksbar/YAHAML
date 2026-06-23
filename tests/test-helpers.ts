@@ -16,6 +16,11 @@ import { wsManager } from '../src/websocket';
 let testServer: http.Server | null = null;
 let serverWasRunning = false;
 
+type TestServerInfo = {
+  started: boolean;
+  port: number;
+};
+
 /**
  * Check if server is already running on a port
  */
@@ -36,31 +41,100 @@ export async function isServerRunning(port: number = 3000): Promise<boolean> {
   });
 }
 
+async function isCompatibleYahamlServer(port: number): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/export/adif`, {
+      signal: controller.signal,
+    });
+
+    // Expected app behavior: endpoint exists and rejects missing contestId with 400.
+    return response.status === 400;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Failed to allocate free port')));
+        return;
+      }
+
+      const port = address.port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(port);
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
+/**
+ * Start test server if needed and return connection info.
+ * If preferred port is occupied by an incompatible process, an ephemeral port is used.
+ */
+export async function ensureServerRunningInfo(preferredPort: number = 3000): Promise<TestServerInfo> {
+  serverWasRunning = await isServerRunning(preferredPort);
+
+  if (serverWasRunning) {
+    const compatible = await isCompatibleYahamlServer(preferredPort);
+    if (compatible) {
+      console.log(`[Test Helper] ✓ Compatible server already running on port ${preferredPort}`);
+      return { started: false, port: preferredPort };
+    }
+
+    const fallbackPort = await findFreePort();
+    console.warn(
+      `[Test Helper] ⚠ Port ${preferredPort} is occupied by an incompatible process. Starting isolated test server on port ${fallbackPort}.`,
+    );
+
+    const app = (await import('../src/index')).default;
+    testServer = http.createServer(app);
+    wsManager.initialize(testServer);
+
+    return new Promise((resolve, reject) => {
+      testServer!.listen(fallbackPort, '127.0.0.1', () => {
+        console.log(`[Test Helper] ✓ Started isolated test server on port ${fallbackPort}`);
+        resolve({ started: true, port: fallbackPort });
+      });
+      testServer!.on('error', reject);
+    });
+  }
+
+  const app = (await import('../src/index')).default;
+
+  testServer = http.createServer(app);
+  wsManager.initialize(testServer);
+
+  return new Promise((resolve, reject) => {
+    testServer!.listen(preferredPort, '127.0.0.1', () => {
+      console.log(`[Test Helper] ✓ Started test server on port ${preferredPort}`);
+      resolve({ started: true, port: preferredPort });
+    });
+    testServer!.on('error', reject);
+  });
+}
+
 /**
  * Start test server if not already running
  * Returns whether we started it (so we know whether to stop it later)
  */
 export async function ensureServerRunning(port: number = 3000): Promise<boolean> {
-  serverWasRunning = await isServerRunning(port);
-  
-  if (serverWasRunning) {
-    console.log(`[Test Helper] ✓ Server already running on port ${port}`);
-    return false; // We didn't start it
-  }
-
-  // Import app only when we need to start the server
-  const app = (await import('../src/index')).default;
-  
-  testServer = http.createServer(app);
-  wsManager.initialize(testServer);
-
-  return new Promise((resolve, reject) => {
-    testServer!.listen(port, '127.0.0.1', () => {
-      console.log(`[Test Helper] ✓ Started test server on port ${port}`);
-      resolve(true); // We started it
-    });
-    testServer!.on('error', reject);
-  });
+  const info = await ensureServerRunningInfo(port);
+  return info.started;
 }
 
 /**

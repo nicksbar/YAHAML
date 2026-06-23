@@ -210,6 +210,17 @@ model NetworkStatus {
   @@map("network_status")
 }
 
+// Global key/value settings for admin-managed runtime configuration
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
 // ADIF file imports (metadata)
 model ADIFImport {
   id           String   @id @default(cuid())
@@ -417,6 +428,16 @@ model RadioConnection {
   janusRoomId      String?  // Janus audiobridge room ID
   janusStreamId    String?  // Janus stream/participant ID
   httpStreamUrl    String?  // HTTP audio stream URL (fallback)
+
+  // Remote host bootstrap metadata
+  remoteSshHost            String?
+  remoteSshPort            Int?
+  remoteSshUser            String?
+  remoteSshPublicKey       String?
+  remoteSshPrivateKeyPath  String?
+  remoteProvisionedAt      DateTime?
+  remoteProvisionStatus    String?
+  remoteProvisionLastError String?
   
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

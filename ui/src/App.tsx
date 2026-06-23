@@ -10,6 +10,8 @@ import { StatsPanel } from './components/StatsPanel'
 import { DebugPanel } from './components/DebugPanel'
 import { LoggingPage } from './components/LoggingPage'
 import { VoiceRoomPanel } from './components/VoiceRoomPanel'
+import { JanusRoomsAdmin } from './components/JanusRoomsAdmin'
+import { buildJanusApiCandidates, resolveWebSocketUrl } from './routing'
 type BandActivity = {
   id: string
   band: string
@@ -120,6 +122,14 @@ type RadioConnection = {
   janusRoomId?: string | null
   janusStreamId?: string | null
   httpStreamUrl?: string | null
+  remoteSshHost?: string | null
+  remoteSshPort?: number | null
+  remoteSshUser?: string | null
+  remoteSshPublicKey?: string | null
+  remoteSshPrivateKeyPath?: string | null
+  remoteProvisionedAt?: string | null
+  remoteProvisionStatus?: string | null
+  remoteProvisionLastError?: string | null
   assignments?: RadioAssignment[]
 }
 
@@ -147,11 +157,38 @@ type N3fjpForwarderConfig = {
   timeoutMs: number
 }
 
+type JanusClientConfig = {
+  browserApiOverride: string | null
+  proxyHostOverride: string | null
+  allowedHostOverrides: string[]
+  janusServerApiUrl: string | null
+  globalHostOverride: string | null
+  janusHostOverride: string | null
+  apiHostOverride: string | null
+  wsHostOverride: string | null
+  serverLanIp: string | null
+  suggestedJanusBrowserApiUrl: string | null
+}
+
+type RigModelOption = {
+  modelId: number
+  label: string
+}
+
 const PHONE_MODE_OPTIONS = ['LSB', 'USB', 'AM', 'FM', 'WFM', 'DSB']
 const CW_MODE_OPTIONS = ['CW', 'CWR']
 const DIGITAL_MODE_OPTIONS = ['PKTLSB', 'PKTUSB', 'PKTFM', 'RTTY', 'RTTYR', 'FAX']
 const ADVANCED_MODE_OPTIONS = ['ECSSLSB', 'ECSSUSB', 'SAM', 'SAH', 'SAL', 'AMS']
 const TUNE_STEP_OPTIONS = [10, 50, 100, 500, 1000]
+
+const COMMON_RIG_MODEL_OPTIONS: RigModelOption[] = [
+  { modelId: 3073, label: 'Icom IC-7300' },
+  { modelId: 3077, label: 'Icom IC-7610' },
+  { modelId: 1045, label: 'Yaesu FTDX101MP' },
+  { modelId: 1035, label: 'Yaesu FT-991A' },
+  { modelId: 2014, label: 'Kenwood TS-590SG' },
+  { modelId: 2027, label: 'Elecraft K3' },
+]
 
 // Mode descriptions for tooltips
 const MODE_DESCRIPTIONS: Record<string, string> = {
@@ -292,6 +329,36 @@ function App() {
   const [radioHost, setRadioHost] = useState('')
   const [radioPort, setRadioPort] = useState('4532')
   const [radioPollInterval, setRadioPollInterval] = useState('1000')
+  const [provisionRemoteOnCreate, setProvisionRemoteOnCreate] = useState(false)
+  const [remoteSshPort, setRemoteSshPort] = useState('22')
+  const [remoteSshUser, setRemoteSshUser] = useState('')
+  const [remoteSshPassword, setRemoteSshPassword] = useState('')
+  const [remoteSudoPassword, setRemoteSudoPassword] = useState('')
+  const [remoteRigModel, setRemoteRigModel] = useState('')
+  const [remoteRigDevice, setRemoteRigDevice] = useState('')
+  const [remoteRigBaud, setRemoteRigBaud] = useState('115200')
+  const [remoteAudioCaptureDevice, setRemoteAudioCaptureDevice] = useState('')
+  const [remoteAudioPlaybackDevice, setRemoteAudioPlaybackDevice] = useState('')
+  const [yahamlJanusUrl, setYahamlJanusUrl] = useState(() => {
+    const janusHost = localStorage.getItem('yahaml:janusHostOverride')?.trim()
+      || localStorage.getItem('yahaml:globalHostOverride')?.trim()
+      || localStorage.getItem('yahaml:serverLanIp')?.trim()
+      || window.location.hostname
+    return `http://${janusHost}:8088/janus`
+  })
+  const [remoteInstallRigctl, setRemoteInstallRigctl] = useState(true)
+  const [remoteInstallAudioPublisher, setRemoteInstallAudioPublisher] = useState(true)
+  const [remoteGrantScopedSudo, setRemoteGrantScopedSudo] = useState(true)
+  const [remoteProvisioning, setRemoteProvisioning] = useState(false)
+  const [remoteProvisionStatus, setRemoteProvisionStatus] = useState<string | null>(null)
+  const [remoteProvisionLogs, setRemoteProvisionLogs] = useState<string[]>([])
+  const [remoteProvisionWarnings, setRemoteProvisionWarnings] = useState<string[]>([])
+  const [remoteProbeLoading, setRemoteProbeLoading] = useState(false)
+  const [remoteProbeStatus, setRemoteProbeStatus] = useState<string | null>(null)
+  const [remoteProbeConnectionMethod, setRemoteProbeConnectionMethod] = useState<'password' | 'privateKey' | null>(null)
+  const [remoteProbeModelOptions, setRemoteProbeModelOptions] = useState<RigModelOption[]>(COMMON_RIG_MODEL_OPTIONS)
+  const [remoteProbeSerialDevices, setRemoteProbeSerialDevices] = useState<string[]>([])
+  const [remoteProbeAudioDevices, setRemoteProbeAudioDevices] = useState<string[]>([])
   const [radioTestResult, setRadioTestResult] = useState<{
     success: boolean
     message?: string
@@ -376,6 +443,28 @@ function App() {
   const [forwarderLoading, setForwarderLoading] = useState(false)
   const [forwarderSaving, setForwarderSaving] = useState(false)
   const [forwarderStatus, setForwarderStatus] = useState<string | null>(null)
+  const [janusClientConfig, setJanusClientConfig] = useState<JanusClientConfig>({
+    browserApiOverride: null,
+    proxyHostOverride: null,
+    allowedHostOverrides: [],
+    janusServerApiUrl: null,
+    globalHostOverride: null,
+    janusHostOverride: null,
+    apiHostOverride: null,
+    wsHostOverride: null,
+    serverLanIp: null,
+    suggestedJanusBrowserApiUrl: null,
+  })
+  const [janusSettingsLoading, setJanusSettingsLoading] = useState(false)
+  const [janusSettingsSaving, setJanusSettingsSaving] = useState(false)
+  const [janusSettingsStatus, setJanusSettingsStatus] = useState<string | null>(null)
+  const [janusBrowserApiOverrideInput, setJanusBrowserApiOverrideInput] = useState('')
+  const [janusProxyHostOverrideInput, setJanusProxyHostOverrideInput] = useState('')
+  const [janusAllowedHostOverridesInput, setJanusAllowedHostOverridesInput] = useState('')
+  const [globalHostOverrideInput, setGlobalHostOverrideInput] = useState('')
+  const [janusHostOverrideInput, setJanusHostOverrideInput] = useState('')
+  const [apiHostOverrideInput, setApiHostOverrideInput] = useState('')
+  const [wsHostOverrideInput, setWsHostOverrideInput] = useState('')
   
   // Station management state
   const [allStations, setAllStations] = useState<any[]>([])
@@ -1210,6 +1299,239 @@ function App() {
     }
   }
 
+  async function probeRemoteHostOptions() {
+    if (!remoteSshUser || !radioHost) {
+      addError('Host and SSH user are required before probing')
+      return
+    }
+
+    try {
+      setRemoteProbeLoading(true)
+      setRemoteProbeStatus(null)
+
+      const matchingProvisionedRadio = radios.find((radio) => {
+        return (
+          String(radio.remoteSshHost || '').trim() === String(radioHost || '').trim() &&
+          String(radio.remoteSshUser || '').trim() === String(remoteSshUser || '').trim() &&
+          Boolean(radio.remoteSshPrivateKeyPath)
+        )
+      })
+
+      const endpoint = (!remoteSshPassword && matchingProvisionedRadio?.id)
+        ? `/api/radios/${matchingProvisionedRadio.id}/probe-remote-options`
+        : '/api/radios/probe-remote-options'
+
+      if (!remoteSshPassword && !matchingProvisionedRadio?.id) {
+        addError('Enter SSH password for first probe, or provision once so stored SSH key can be reused')
+        setRemoteProbeLoading(false)
+        return
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({
+          host: radioHost,
+          port: Number(remoteSshPort || 22),
+          username: remoteSshUser,
+          password: remoteSshPassword || undefined,
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to probe remote host')
+      }
+
+      const rigModels = Array.isArray(data.rigModels) ? data.rigModels : []
+      const serialDevices = Array.isArray(data.serialDevices) ? data.serialDevices : []
+      const audioCaptureDevices = Array.isArray(data.audioCaptureDevices) ? data.audioCaptureDevices : []
+
+      const modelOptions = [...rigModels, ...COMMON_RIG_MODEL_OPTIONS].reduce((acc: RigModelOption[], option: RigModelOption) => {
+        if (!acc.some((existing) => existing.modelId === option.modelId)) {
+          acc.push(option)
+        }
+        return acc
+      }, [])
+
+      setRemoteProbeModelOptions(modelOptions.length > 0 ? modelOptions : COMMON_RIG_MODEL_OPTIONS)
+      setRemoteProbeSerialDevices(serialDevices)
+      setRemoteProbeAudioDevices(audioCaptureDevices)
+      setRemoteProbeConnectionMethod(data.connectionMethod === 'privateKey' ? 'privateKey' : 'password')
+
+      if (!remoteRigModel && modelOptions.length > 0) {
+        setRemoteRigModel(String(modelOptions[0].modelId))
+      }
+      if (!remoteRigDevice && serialDevices.length > 0) {
+        setRemoteRigDevice(serialDevices[0])
+      }
+      if (!remoteAudioCaptureDevice && audioCaptureDevices.length > 0) {
+        const normalized = audioCaptureDevices[0].split(' ')[0]
+        setRemoteAudioCaptureDevice(normalized || audioCaptureDevices[0])
+      }
+
+      setRemoteProbeStatus(`Remote probe complete. Found ${modelOptions.length} rig models, ${serialDevices.length} serial devices, ${audioCaptureDevices.length} capture devices.`)
+    } catch (error) {
+      setRemoteProbeStatus(error instanceof Error ? error.message : 'Failed to probe remote host')
+    } finally {
+      setRemoteProbeLoading(false)
+    }
+  }
+
+  async function fetchJanusClientConfig() {
+    try {
+      setJanusSettingsLoading(true)
+      const response = await fetch('/api/janus/client-config')
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to load Janus client config')
+      }
+      const data = await response.json()
+      setJanusClientConfig(data)
+      setJanusBrowserApiOverrideInput(data.browserApiOverride || '')
+      setJanusProxyHostOverrideInput(data.proxyHostOverride || '')
+      setJanusAllowedHostOverridesInput((data.allowedHostOverrides || []).join(', '))
+      setGlobalHostOverrideInput(data.globalHostOverride || '')
+      setJanusHostOverrideInput(data.janusHostOverride || '')
+      setApiHostOverrideInput(data.apiHostOverride || '')
+      setWsHostOverrideInput(data.wsHostOverride || '')
+
+      if (data.browserApiOverride) {
+        localStorage.setItem('yahaml:janusApiUrl', data.browserApiOverride)
+      } else {
+        localStorage.removeItem('yahaml:janusApiUrl')
+      }
+
+      if (data.proxyHostOverride) {
+        localStorage.setItem('yahaml:janusProxyHostOverride', data.proxyHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:janusProxyHostOverride')
+      }
+
+      if (data.globalHostOverride) {
+        localStorage.setItem('yahaml:globalHostOverride', data.globalHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:globalHostOverride')
+      }
+
+      if (data.janusHostOverride) {
+        localStorage.setItem('yahaml:janusHostOverride', data.janusHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:janusHostOverride')
+      }
+
+      if (data.apiHostOverride) {
+        localStorage.setItem('yahaml:apiHostOverride', data.apiHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:apiHostOverride')
+      }
+
+      if (data.wsHostOverride) {
+        localStorage.setItem('yahaml:wsHostOverride', data.wsHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:wsHostOverride')
+      }
+
+      if (data.serverLanIp) {
+        localStorage.setItem('yahaml:serverLanIp', data.serverLanIp)
+      } else {
+        localStorage.removeItem('yahaml:serverLanIp')
+      }
+
+      if (data.suggestedJanusBrowserApiUrl) {
+        setYahamlJanusUrl(data.suggestedJanusBrowserApiUrl)
+      }
+    } catch (error) {
+      setJanusSettingsStatus(error instanceof Error ? error.message : 'Failed to load Janus config')
+    } finally {
+      setJanusSettingsLoading(false)
+    }
+  }
+
+  async function saveJanusClientConfig() {
+    if (!sessionToken || !isAdmin) return
+    try {
+      setJanusSettingsSaving(true)
+      setJanusSettingsStatus(null)
+
+      const response = await fetch('/api/admin/janus/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({
+          browserApiOverride: janusBrowserApiOverrideInput,
+          proxyHostOverride: janusProxyHostOverrideInput,
+          globalHostOverride: globalHostOverrideInput,
+          janusHostOverride: janusHostOverrideInput,
+          apiHostOverride: apiHostOverrideInput,
+          wsHostOverride: wsHostOverrideInput,
+          allowedHostOverrides: janusAllowedHostOverridesInput
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+        }),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to save Janus settings')
+      }
+
+      const data = await response.json()
+      setJanusClientConfig(data)
+      setJanusSettingsStatus('Janus client config saved')
+
+      if (data.browserApiOverride) {
+        localStorage.setItem('yahaml:janusApiUrl', data.browserApiOverride)
+      } else {
+        localStorage.removeItem('yahaml:janusApiUrl')
+      }
+
+      if (data.proxyHostOverride) {
+        localStorage.setItem('yahaml:janusProxyHostOverride', data.proxyHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:janusProxyHostOverride')
+      }
+
+      if (data.globalHostOverride) {
+        localStorage.setItem('yahaml:globalHostOverride', data.globalHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:globalHostOverride')
+      }
+
+      if (data.janusHostOverride) {
+        localStorage.setItem('yahaml:janusHostOverride', data.janusHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:janusHostOverride')
+      }
+
+      if (data.apiHostOverride) {
+        localStorage.setItem('yahaml:apiHostOverride', data.apiHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:apiHostOverride')
+      }
+
+      if (data.wsHostOverride) {
+        localStorage.setItem('yahaml:wsHostOverride', data.wsHostOverride)
+      } else {
+        localStorage.removeItem('yahaml:wsHostOverride')
+      }
+
+      if (data.serverLanIp) {
+        localStorage.setItem('yahaml:serverLanIp', data.serverLanIp)
+      } else {
+        localStorage.removeItem('yahaml:serverLanIp')
+      }
+
+      if (data.suggestedJanusBrowserApiUrl) {
+        setYahamlJanusUrl(data.suggestedJanusBrowserApiUrl)
+      }
+    } catch (error) {
+      setJanusSettingsStatus(error instanceof Error ? error.message : 'Failed to save Janus config')
+    } finally {
+      setJanusSettingsSaving(false)
+    }
+  }
+
   async function activateContest(contestId: string) {
     try {
       const response = await fetch(`/api/admin/activate-contest/${contestId}`, {
@@ -1597,8 +1919,7 @@ function App() {
   useEffect(() => {
     // Connect to WebSocket for real-time updates
     let isDisposing = false
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    const ws = new WebSocket(resolveWebSocketUrl('/ws'))
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'subscribe', channel: 'stations' }))
@@ -1680,6 +2001,7 @@ function App() {
   useEffect(() => {
     if (sessionToken) {
       fetchAdminList()
+      fetchJanusClientConfig()
     }
   }, [sessionToken])
 
@@ -3189,7 +3511,261 @@ function App() {
                   placeholder="1000"
                 />
               </div>
+              {isAdmin && radioConnectionType === 'hamlib' && (
+                <>
+                  <div className="field" style={{ gridColumn: '1 / -1' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={provisionRemoteOnCreate}
+                        onChange={(e) => {
+                          setProvisionRemoteOnCreate(e.target.checked)
+                          setRemoteProvisionStatus(null)
+                          setRemoteProvisionLogs([])
+                          setRemoteProvisionWarnings([])
+                        }}
+                      />
+                      Auto-provision remote host after radio creation (SSH + scoped sudo)
+                    </label>
+                  </div>
+                  {provisionRemoteOnCreate && (
+                    <>
+                      <div className="field">
+                        <label>SSH User *</label>
+                        <input
+                          value={remoteSshUser}
+                          onChange={(e) => setRemoteSshUser(e.target.value)}
+                          placeholder="pi"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>SSH Port</label>
+                        <input
+                          value={remoteSshPort}
+                          onChange={(e) => setRemoteSshPort(e.target.value)}
+                          placeholder="22"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>SSH Password *</label>
+                        <input
+                          type="password"
+                          value={remoteSshPassword}
+                          onChange={(e) => setRemoteSshPassword(e.target.value)}
+                          placeholder="One-time use"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Sudo Password (optional)</label>
+                        <input
+                          type="password"
+                          value={remoteSudoPassword}
+                          onChange={(e) => setRemoteSudoPassword(e.target.value)}
+                          placeholder="Needed if sudo requires password"
+                        />
+                      </div>
+                      <div className="field" style={{ gridColumn: '1 / -1' }}>
+                        <div className="hint" style={{ marginBottom: '0.25rem' }}>
+                          Optional rig service config (generic; not model-assumed). If omitted, provisioning will detect devices and log what it finds.
+                        </div>
+                        <div className="hint" style={{ marginBottom: '0.25rem' }}>
+                          The Pi does NOT need Janus — Janus runs on the YAHAML server. The Pi only needs rigctld (rig control) + a lightweight audio publisher that streams ALSA → Opus RTP to the server.
+                          Probe uses SSH password first; once provisioned, it can reuse the stored SSH key.
+                        </div>
+                      </div>
+                      <div className="field" style={{ gridColumn: '1 / -1' }}>
+                        <div className="action-buttons" style={{ marginTop: 0 }}>
+                          <button
+                            type="button"
+                            className="btn secondary"
+                            onClick={probeRemoteHostOptions}
+                            disabled={remoteProbeLoading || !remoteSshUser || !radioHost}
+                          >
+                            {remoteProbeLoading ? '⏳ Probing host...' : '🔎 Probe Host for Models/Devices'}
+                          </button>
+                          {remoteProbeConnectionMethod && (
+                            <span className="hint" style={{ alignSelf: 'center' }}>
+                              Auth: {remoteProbeConnectionMethod === 'privateKey' ? 'stored SSH key' : 'password'}
+                            </span>
+                          )}
+                        </div>
+                        {remoteProbeStatus && (
+                          <div className={`notice ${remoteProbeStatus.toLowerCase().includes('failed') ? 'error' : 'success'}`} style={{ marginTop: '0.5rem' }}>
+                            {remoteProbeStatus}
+                          </div>
+                        )}
+                      </div>
+                      <div className="field">
+                        <label>Rig Model (hamlib -m)</label>
+                        <select
+                          value={remoteRigModel}
+                          onChange={(e) => setRemoteRigModel(e.target.value)}
+                        >
+                          <option value="">-- Select model --</option>
+                          {remoteProbeModelOptions.map((model) => (
+                            <option key={model.modelId} value={String(model.modelId)}>
+                              {model.modelId} — {model.label}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="hint" style={{ marginTop: '0.3rem' }}>
+                          Need another model ID? Enter custom value below.
+                        </div>
+                        <input
+                          value={remoteRigModel}
+                          onChange={(e) => setRemoteRigModel(e.target.value)}
+                          placeholder="custom model id (e.g. 3073)"
+                          style={{ marginTop: '0.35rem' }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Rig Device (hamlib -r)</label>
+                        {remoteProbeSerialDevices.length > 0 ? (
+                          <select
+                            value={remoteRigDevice}
+                            onChange={(e) => setRemoteRigDevice(e.target.value)}
+                          >
+                            <option value="">-- Select detected serial device --</option>
+                            {remoteProbeSerialDevices.map((device) => (
+                              <option key={device} value={device}>{device}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          value={remoteRigDevice}
+                          onChange={(e) => setRemoteRigDevice(e.target.value)}
+                          placeholder="e.g. /dev/ttyUSB0"
+                          style={{ marginTop: remoteProbeSerialDevices.length > 0 ? '0.35rem' : undefined }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Rig Baud (hamlib -s)</label>
+                        <input
+                          value={remoteRigBaud}
+                          onChange={(e) => setRemoteRigBaud(e.target.value)}
+                          placeholder="115200"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Audio Capture Device (RX → Janus)</label>
+                        {remoteProbeAudioDevices.length > 0 ? (
+                          <select
+                            value={remoteAudioCaptureDevice}
+                            onChange={(e) => setRemoteAudioCaptureDevice(e.target.value)}
+                          >
+                            <option value="">-- Select detected capture device --</option>
+                            {remoteProbeAudioDevices.map((device) => (
+                              <option key={device} value={device}>{device}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          value={remoteAudioCaptureDevice}
+                          onChange={(e) => setRemoteAudioCaptureDevice(e.target.value)}
+                          placeholder="e.g. hw:2,0 (radio RX audio in)"
+                          style={{ marginTop: remoteProbeAudioDevices.length > 0 ? '0.35rem' : undefined }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Audio Playback Device (Janus → TX)</label>
+                        {remoteProbeAudioDevices.length > 0 ? (
+                          <select
+                            value={remoteAudioPlaybackDevice}
+                            onChange={(e) => setRemoteAudioPlaybackDevice(e.target.value)}
+                          >
+                            <option value="">-- Same as capture (default) --</option>
+                            {remoteProbeAudioDevices.map((device) => (
+                              <option key={device} value={device}>{device}</option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          value={remoteAudioPlaybackDevice}
+                          onChange={(e) => setRemoteAudioPlaybackDevice(e.target.value)}
+                          placeholder="e.g. hw:2,0 (leave blank to use same as capture)"
+                          style={{ marginTop: remoteProbeAudioDevices.length > 0 ? '0.35rem' : undefined }}
+                        />
+                        <div className="hint" style={{ marginTop: '0.25rem' }}>Janus room mix is sent here during PTT — radio transmits it.</div>
+                      </div>
+                      <div className="field" style={{ gridColumn: '1 / -1' }}>
+                        <label>YAHAML Janus URL (Pi-accessible)</label>
+                        <input
+                          value={yahamlJanusUrl}
+                          onChange={(e) => setYahamlJanusUrl(e.target.value)}
+                          placeholder="http://192.168.1.x:8088/janus"
+                        />
+                        <div className="hint" style={{ marginTop: '0.25rem' }}>
+                          The Pi needs to reach <em>your server's</em> Janus — not localhost. If the Pi is on the same LAN, use this machine's LAN IP. Auto-detected: <code>{window.location.hostname}</code>.
+                        </div>
+                      </div>
+                      <div className="field" style={{ gridColumn: '1 / -1' }}>
+                        <div className="quick-select">
+                          <button
+                            type="button"
+                            className={`quick-btn ${remoteInstallRigctl ? 'active' : ''}`}
+                            onClick={() => setRemoteInstallRigctl((prev) => !prev)}
+                          >
+                            {remoteInstallRigctl ? '✅' : '⬜'} Install rigctld deps
+                          </button>
+                          <button
+                            type="button"
+                            className={`quick-btn ${remoteInstallAudioPublisher ? 'active' : ''}`}
+                            onClick={() => setRemoteInstallAudioPublisher((prev) => !prev)}
+                          >
+                            {remoteInstallAudioPublisher ? '✅' : '⬜'} Install audio publisher
+                          </button>
+                          <button
+                            type="button"
+                            className={`quick-btn ${remoteGrantScopedSudo ? 'active' : ''}`}
+                            onClick={() => setRemoteGrantScopedSudo((prev) => !prev)}
+                          >
+                            {remoteGrantScopedSudo ? '✅' : '⬜'} Scoped sudo grants
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </div>
+
+            {remoteProvisionStatus && (
+              <div className={`notice ${remoteProvisionStatus.toLowerCase().includes('failed') ? 'error' : 'success'}`}>
+                {remoteProvisionStatus}
+              </div>
+            )}
+            {(remoteProvisionWarnings.length > 0 || remoteProvisionLogs.length > 0) && (
+              <div className="notice" style={{ marginTop: '0.75rem' }}>
+                <strong>Remote provisioning output</strong>
+                {remoteProvisionWarnings.length > 0 && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Warnings</div>
+                    <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                      {remoteProvisionWarnings.map((warning, idx) => (
+                        <li key={`warn-${idx}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {remoteProvisionLogs.length > 0 && (
+                  <pre
+                    style={{
+                      marginTop: '0.5rem',
+                      maxHeight: '260px',
+                      overflowY: 'auto',
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-color)',
+                      padding: '0.75rem',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {remoteProvisionLogs.join('\n')}
+                  </pre>
+                )}
+              </div>
+            )}
             
             {/* Test Result Display */}
             {radioTestResult && (
@@ -3219,6 +3795,12 @@ function App() {
                   </>
                 )}
               </div>
+            )}
+
+            {radioConnectionType === 'hamlib' && !radioTestResult?.success && (
+              <p className="hint" style={{ marginTop: '0.5rem' }}>
+                You can add this radio now and run <strong>Test</strong> from the radio card after it is created.
+              </p>
             )}
             
             <div className="action-buttons">
@@ -3258,14 +3840,20 @@ function App() {
               <button 
                 className="btn primary"
                 disabled={radioConnectionType === 'hamlib'
-                  ? (!radioName || !radioHost || !radioTestResult?.success)
+                  ? (!radioName || !radioHost)
                   : !radioName}
                 onClick={async () => {
                   if (!radioName || (radioConnectionType === 'hamlib' && !radioHost)) {
                     alert('Name and host are required')
                     return
                   }
+                  if (provisionRemoteOnCreate && radioConnectionType === 'hamlib' && (!remoteSshUser || !remoteSshPassword)) {
+                    addError('SSH user and SSH password are required for remote provisioning')
+                    return
+                  }
                 try {
+                  setRemoteProvisionLogs([])
+                  setRemoteProvisionWarnings([])
                   const response = await fetch('/api/radios', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3277,21 +3865,146 @@ function App() {
                       connectionType: radioConnectionType,
                     }),
                   })
-                  if (response.ok) {
+                  const createdRadio = response.ok ? await response.json() : null
+                  if (response.ok && createdRadio?.id) {
+                    if (provisionRemoteOnCreate && radioConnectionType === 'hamlib') {
+                      setRemoteProvisioning(true)
+                      setRemoteProvisionStatus('Provisioning remote host...')
+                      const provisionResponse = await fetch(`/api/radios/${createdRadio.id}/provision-remote-stream`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                        body: JSON.stringify({
+                          host: radioHost,
+                          port: Number(remoteSshPort || 22),
+                          username: remoteSshUser,
+                          password: remoteSshPassword,
+                          sudoPassword: remoteSudoPassword || undefined,
+                          installRigctl: remoteInstallRigctl,
+                          installAudioPublisher: remoteInstallAudioPublisher,
+                          installJanus: remoteInstallAudioPublisher,
+                          grantScopedSudo: remoteGrantScopedSudo,
+                          rigModel: remoteRigModel ? Number(remoteRigModel) : undefined,
+                          rigDevice: remoteRigDevice || undefined,
+                          rigBaud: remoteRigBaud ? Number(remoteRigBaud) : undefined,
+                          audioCaptureDevice: remoteAudioCaptureDevice || undefined,
+                          audioPlaybackDevice: remoteAudioPlaybackDevice || undefined,
+                          yahamlJanusUrl: yahamlJanusUrl || undefined,
+                        }),
+                      })
+
+                      if (!provisionResponse.body) {
+                        throw new Error('Provision stream did not return a readable body')
+                      }
+
+                      const decoder = new TextDecoder()
+                      const reader = provisionResponse.body.getReader()
+                      let buffer = ''
+                      let streamCompleted = false
+                      let streamError: string | null = null
+                      let finalScopedSudoGranted = false
+
+                      while (true) {
+                        const { value, done } = await reader.read()
+                        if (done) break
+                        buffer += decoder.decode(value, { stream: true })
+
+                        const lines = buffer.split('\n')
+                        buffer = lines.pop() || ''
+
+                        for (const line of lines) {
+                          const trimmed = line.trim()
+                          if (!trimmed) continue
+                          const event = JSON.parse(trimmed)
+
+                          if (event.type === 'status' && event.message) {
+                            setRemoteProvisionStatus(String(event.message))
+                          } else if (event.type === 'log' && event.line) {
+                            setRemoteProvisionLogs((prev) => [...prev, String(event.line)])
+                          } else if (event.type === 'warning' && event.line) {
+                            setRemoteProvisionWarnings((prev) => [...prev, String(event.line)])
+                          } else if (event.type === 'done') {
+                            streamCompleted = true
+                            finalScopedSudoGranted = Boolean(event.scopedSudoGranted)
+                            if (Array.isArray(event.warnings)) {
+                              setRemoteProvisionWarnings(event.warnings.map((w: any) => String(w)))
+                            }
+                            if (Array.isArray(event.logs)) {
+                              setRemoteProvisionLogs(event.logs.map((l: any) => String(l)))
+                            }
+                          } else if (event.type === 'error') {
+                            streamError = String(event.error || 'Remote provisioning failed')
+                            if (Array.isArray(event.warnings)) {
+                              setRemoteProvisionWarnings(event.warnings.map((w: any) => String(w)))
+                            }
+                            if (Array.isArray(event.logs)) {
+                              setRemoteProvisionLogs(event.logs.map((l: any) => String(l)))
+                            }
+                          }
+                        }
+                      }
+
+                      if (buffer.trim()) {
+                        try {
+                          const event = JSON.parse(buffer.trim())
+                          if (event.type === 'error') {
+                            streamError = String(event.error || 'Remote provisioning failed')
+                          }
+                        } catch {
+                          // ignore trailing partial
+                        }
+                      }
+
+                      if (streamError) {
+                        throw new Error(streamError)
+                      }
+                      if (!streamCompleted) {
+                        throw new Error('Provision stream ended unexpectedly before completion')
+                      }
+
+                      setRemoteProvisionStatus(
+                        `Remote host provisioned. SSH key installed${finalScopedSudoGranted ? ', scoped sudo granted.' : '.'}`,
+                      )
+                    }
+
                     setRadioName('')
                     setRadioHost('')
                     setRadioPort('4532')
                     setRadioConnectionType('hamlib')
                     setRadioPollInterval('1000')
                     setRadioTestResult(null)
+                    setProvisionRemoteOnCreate(false)
+                    setRemoteSshPort('22')
+                    setRemoteSshUser('')
+                    setRemoteSshPassword('')
+                    setRemoteSudoPassword('')
+                    setRemoteRigModel('')
+                    setRemoteRigDevice('')
+                    setRemoteRigBaud('115200')
+                    setRemoteAudioCaptureDevice('')
+                    setRemoteAudioPlaybackDevice('')
+                    setRemoteProbeStatus(null)
+                    setRemoteProbeConnectionMethod(null)
+                    setRemoteProbeModelOptions(COMMON_RIG_MODEL_OPTIONS)
+                    setRemoteProbeSerialDevices([])
+                    setRemoteProbeAudioDevices([])
+                    setRemoteInstallRigctl(true)
+                    setRemoteInstallAudioPublisher(true)
+                    setRemoteGrantScopedSudo(true)
                     await fetchRadios()
                   }
                 } catch (error) {
-                  console.error('Failed to create radio:', error)
+                  console.error('Failed to create/provision radio:', error)
+                  const failedMessage = error instanceof Error ? error.message : 'Failed to create/provision radio'
+                  addError(failedMessage)
+                  setRemoteProvisionStatus(`Remote provisioning failed: ${failedMessage}`)
+                } finally {
+                  setRemoteProvisioning(false)
                 }
               }}
             >
-              {radioTestResult?.success ? '✅ Add Radio' : 'Add Radio'}
+              {remoteProvisioning
+                ? '⏳ Provisioning...'
+                : (radioTestResult?.success ? '✅ Add Radio' : 'Add Radio (skip test)')}
             </button>
             </div>
           </section>
@@ -3834,15 +4547,10 @@ function App() {
                                         return response.json()
                                       }
 
-                                      const explicit = localStorage.getItem('yahaml:janusApiUrl')?.trim()
-                                      const hostFromRadio = (radio.host || '').trim()
-                                      const browserHost = window.location.hostname
-                                      const candidates = Array.from(new Set([
-                                        explicit || '',
-                                        hostFromRadio ? `http://${hostFromRadio}:8088/janus` : '',
-                                        `http://${browserHost}:8088/janus`,
-                                        `https://${browserHost}:8089/janus`,
-                                      ].filter(Boolean)))
+                                      const candidates = buildJanusApiCandidates({
+                                        includeBrowserFallback: true,
+                                        includeRadioHostFallback: false,
+                                      })
 
                                       let baseUrl = ''
                                       let sessionId = 0
@@ -4938,6 +5646,108 @@ function App() {
             <p className="hint">
               <strong>Current Status:</strong> {isAdmin ? '✅ You have admin access' : '❌ Not authorized'}
             </p>
+          </section>
+
+          <section className="panel" data-testid="janus-admin-panel">
+            <h2>🛰️ Janus Rooms</h2>
+            <p className="hint">
+              Monitor room participants and control RTP forwarding for Janus AudioBridge rooms.
+            </p>
+            <JanusRoomsAdmin sessionToken={sessionToken} apiUrl="" />
+          </section>
+
+          <section className="panel">
+            <h2>🌐 Client Routing Overrides</h2>
+            <p className="hint">
+              Configure a global host override and optional per-service overrides. This controls browser routing for WebSocket + Janus. Server Janus API remains{' '}
+              <code>{janusClientConfig.janusServerApiUrl || 'unset'}</code>.
+            </p>
+            {janusSettingsStatus && (
+              <div className={`notice ${janusSettingsStatus.toLowerCase().includes('saved') ? 'success' : 'error'}`}>
+                {janusSettingsStatus}
+              </div>
+            )}
+            <div className="form-grid">
+              <div className="field">
+                <label>Global Host Override</label>
+                <input
+                  value={globalHostOverrideInput}
+                  onChange={(e) => setGlobalHostOverrideInput(e.target.value)}
+                  placeholder="192.168.1.50"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+              <div className="field">
+                <label>Janus Host Override</label>
+                <input
+                  value={janusHostOverrideInput}
+                  onChange={(e) => setJanusHostOverrideInput(e.target.value)}
+                  placeholder="janus.example.local"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+              <div className="field">
+                <label>WebSocket Host Override</label>
+                <input
+                  value={wsHostOverrideInput}
+                  onChange={(e) => setWsHostOverrideInput(e.target.value)}
+                  placeholder="app.example.local:3000"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+              <div className="field">
+                <label>API Host Override</label>
+                <input
+                  value={apiHostOverrideInput}
+                  onChange={(e) => setApiHostOverrideInput(e.target.value)}
+                  placeholder="app.example.local:3000"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label>Browser Janus API Override</label>
+                <input
+                  value={janusBrowserApiOverrideInput}
+                  onChange={(e) => setJanusBrowserApiOverrideInput(e.target.value)}
+                  placeholder="http://your-host:8088/janus"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+              <div className="field">
+                <label>Proxy Host Override</label>
+                <input
+                  value={janusProxyHostOverrideInput}
+                  onChange={(e) => setJanusProxyHostOverrideInput(e.target.value)}
+                  placeholder="proxy.example.local"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+              <div className="field">
+                <label>Allowed Host Overrides (comma-separated)</label>
+                <input
+                  value={janusAllowedHostOverridesInput}
+                  onChange={(e) => setJanusAllowedHostOverridesInput(e.target.value)}
+                  placeholder="*, janus.internal.local, 192.168.1.20"
+                  disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+                />
+              </div>
+            </div>
+            <div className="action-buttons">
+              <button
+                className="btn secondary"
+                onClick={fetchJanusClientConfig}
+                disabled={janusSettingsLoading || janusSettingsSaving}
+              >
+                {janusSettingsLoading ? '⏳ Loading...' : '🔄 Reload'}
+              </button>
+              <button
+                className="btn primary"
+                onClick={saveJanusClientConfig}
+                disabled={janusSettingsLoading || janusSettingsSaving || !isAdmin}
+              >
+                {janusSettingsSaving ? '💾 Saving...' : '💾 Save Routing Overrides'}
+              </button>
+            </div>
           </section>
 
           <section className="panel">

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { resolveWebSocketUrl } from '../routing';
 
 export interface BandOccupancyEntry {
   band: string;
@@ -57,8 +58,7 @@ export function useBandOccupancy(contestId?: string) {
 
     const connectWebSocket = () => {
       try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        ws = new WebSocket(resolveWebSocketUrl('/ws'));
 
         ws.onopen = () => {
           reconnectAttempts = 0;

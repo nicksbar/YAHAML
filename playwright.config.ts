@@ -1,9 +1,14 @@
-import { defineConfig } from '@playwright/test'
+import { defineConfig, devices } from '@playwright/test'
 
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT || 3100)
 const uiPort = Number(process.env.PLAYWRIGHT_UI_PORT || 4173)
 const databaseUrl = process.env.PLAYWRIGHT_DATABASE_URL || 'file:./data/yahaml-playwright.db'
 const useExistingServer = process.env.PLAYWRIGHT_USE_EXISTING_SERVER === 'true'
+
+// When using docker-compose, services are already running at standard ports
+const useCompose = process.env.PLAYWRIGHT_USE_DOCKER_COMPOSE === 'true'
+const composeApiPort = 3000
+const composeUiPort = 8080
 
 export default defineConfig({
   testDir: './playwright/tests',
@@ -15,13 +20,13 @@ export default defineConfig({
   workers: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: `http://127.0.0.1:${uiPort}`,
+    baseURL: useCompose ? `http://127.0.0.1:${composeUiPort}` : `http://127.0.0.1:${uiPort}`,
     headless: true,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
-  webServer: useExistingServer
+  webServer: useExistingServer || useCompose
     ? undefined
     : [
         {

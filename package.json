@@ -7,7 +7,8 @@
     "dev": "npm run db:generate:auto && ts-node src/index.ts",
     "dev:api": "npm run db:generate:auto && ts-node src/index.ts",
     "dev:ui": "npm --prefix ui run dev",
-    "dev:all": "concurrently -n api,ui -c blue,green \"npm run dev:api\" \"npm run dev:ui\"",
+    "dev:janus": "docker compose up -d janus || docker-compose up -d janus",
+    "dev:all": "npm run dev:janus && concurrently -n api,ui -c blue,green \"npm run dev:api\" \"npm run dev:ui\"",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
@@ -23,7 +24,10 @@
     "test:browser": "PLAYWRIGHT_USE_EXISTING_SERVER=false playwright test",
     "test:browser:headed": "playwright test --headed",
     "test:browser:local": "PLAYWRIGHT_USE_EXISTING_SERVER=true PLAYWRIGHT_API_PORT=3000 PLAYWRIGHT_UI_PORT=5173 playwright test",
+    "test:browser:compose": "bash scripts/playwright-setup.sh",
+    "test:browser:ci": "PLAYWRIGHT_USE_DOCKER_COMPOSE=true playwright test",
     "test:full": "npm test -- --runInBand && npm run test:browser",
+    "test:full:compose": "npm test -- --runInBand && npm run test:browser:compose",
     "cw:agent": "ts-node src/agent/cw/cli.ts",
     "relay": "ts-node scripts/n3fjp_mitm_relay.ts",
     "relay:default": "ts-node scripts/n3fjp_mitm_relay.ts 2000 localhost 1000",
@@ -39,9 +43,11 @@
   "license": "MIT",
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "@types/ssh2": "^1.15.5",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "ssh2": "^1.17.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {

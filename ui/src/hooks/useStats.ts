@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { resolveWebSocketUrl } from '../routing';
 
 export interface ContestStatsSnapshot {
   qsoCount: number;
@@ -52,8 +53,7 @@ export function useStats(contestId?: string) {
     fetchStats();
 
     // Connect to WebSocket for real-time updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const ws = new WebSocket(resolveWebSocketUrl('/ws'));
 
     ws.onopen = () => {
       // Subscribe to stats updates (roughly 5-min interval)

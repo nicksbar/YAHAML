@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { resolveWebSocketUrl } from '../routing'
 
 export interface DebugLog {
   id: string
@@ -119,8 +120,7 @@ export function useDebugLogs(stationId?: string) {
 
     const connectWebSocket = () => {
       try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+        ws = new WebSocket(resolveWebSocketUrl('/ws'))
 
         ws.onopen = () => {
           reconnectAttempts = 0

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
+import { resolveWebSocketUrl } from '../routing'
 
 interface VoiceRoom {
   id: string
@@ -17,6 +18,7 @@ interface Participant {
   joinedAt: string
   isActive: boolean
   audioSourceType: 'microphone' | 'radio' | 'janus' | 'http-stream' | 'system'
+  role?: 'operator' | 'listener'
 }
 
 interface VoiceRoomProps {
@@ -34,6 +36,8 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   const [isMuted, setIsMuted] = useState(false)
   const [volume, setVolume] = useState(100)
   const [isPTT, setIsPTT] = useState(false)
+  const [joinMode, setJoinMode] = useState<'operator' | 'listener'>('operator')
+  const [userRole, setUserRole] = useState<'operator' | 'listener' | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map())
@@ -236,7 +240,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   }
 
   // Join a room
-  const joinRoom = async (roomId: string, audioSourceType: 'microphone' | 'radio' | 'system' = 'microphone') => {
+  const joinRoom = async (roomId: string, audioSourceType: 'microphone' | 'radio' | 'system' = 'microphone', mode: 'operator' | 'listener' = 'operator') => {
     if (!stationId) return
 
     try {
@@ -256,7 +260,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
         },
-        body: JSON.stringify({ audioSourceType }),
+        body: JSON.stringify({ audioSourceType, joinMode: mode }),
       })
 
       if (response.ok) {
@@ -265,6 +269,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
         if (room) {
           setActiveRoom(room)
           setParticipants(data.peers || [])
+          setUserRole(data.role || mode)
           setError(null)
 
           // Setup WebSocket for signaling
@@ -292,8 +297,7 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
 
   // Setup WebSocket connection
   const setupWebSocket = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsUrl = `${protocol}://${window.location.host}/ws${sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : ''}`
+    const wsUrl = resolveWebSocketUrl(`/ws${sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : ''}`)
     const ws = new WebSocket(wsUrl)
 
     ws.onopen = () => {
@@ -538,20 +542,48 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
                   {room.participantCount} / {room.maxParticipants || '∞'} participants
                 </span>
               </div>
-              <button
-                className="btn btn-primary"
-                onClick={() => joinRoom(room.id, 'microphone')}
-                disabled={loading}
-              >
-                Join
-              </button>
+              <div className="voice-room-join-controls">
+                <div className="voice-room-join-mode">
+                  <label>
+                    <input
+                      type="radio"
+                      value="operator"
+                      checked={joinMode === 'operator'}
+                      onChange={(e) => setJoinMode(e.target.value as 'operator' | 'listener')}
+                    />
+                    <span>🎤 Operator</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      value="listener"
+                      checked={joinMode === 'listener'}
+                      onChange={(e) => setJoinMode(e.target.value as 'operator' | 'listener')}
+                    />
+                    <span>📻 Listener</span>
+                  </label>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => joinRoom(room.id, 'microphone', joinMode)}
+                  disabled={loading}
+                >
+                  Join
+                </button>
+              </div>
             </div>
           ))}
         </div>
       ) : (
         <div className="voice-room-active">
           <div className="voice-room-active-header">
-            <h4>{activeRoom.name}</h4>
+            <div className="voice-room-active-title">
+              <h4>{activeRoom.name}</h4>
+              <span className="voice-room-role-badge" title={userRole || 'unknown'}>
+                {userRole === 'operator' && '🎤 Operator'}
+                {userRole === 'listener' && '📻 Listener'}
+              </span>
+            </div>
             <button
               className="btn btn-small"
               onClick={leaveRoom}
@@ -587,9 +619,13 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
             <div className="participant-list">
               {participants.map(p => (
                 <div key={p.id} className="participant-item">
+                  <span className="participant-role" title={p.role || 'unknown'}>
+                    {p.role === 'operator' && '🎤'}
+                    {p.role === 'listener' && '📻'}
+                  </span>
                   <span className="participant-name">{p.displayName}</span>
                   <span className={`participant-source ${p.audioSourceType}`}>
-                    {p.audioSourceType === 'microphone' && '🎤'}
+                    {p.audioSourceType === 'microphone' && '🎙'}
                     {p.audioSourceType === 'radio' && '📡'}
                     {p.audioSourceType === 'janus' && '🛰️'}
                     {p.audioSourceType === 'http-stream' && '🌐'}
