@@ -13,6 +13,28 @@ const trimOrNull = (value: string | null | undefined) => {
   return trimmed || null
 }
 
+function hasExplicitPort(hostOrUrl: string): boolean {
+  const raw = hostOrUrl.trim()
+  if (!raw) return false
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      return Boolean(new URL(raw).port)
+    } catch {
+      return false
+    }
+  }
+
+  const hostOnly = raw.split('/')[0]
+  if (hostOnly.startsWith('[')) {
+    return /\]:\d+$/.test(hostOnly)
+  }
+
+  const colonIndex = hostOnly.lastIndexOf(':')
+  if (colonIndex === -1) return false
+  return /^\d+$/.test(hostOnly.slice(colonIndex + 1))
+}
+
 export function getRoutingOverridesFromStorage(): RoutingOverrides {
   return {
     globalHostOverride: trimOrNull(localStorage.getItem('yahaml:globalHostOverride')),
@@ -29,20 +51,64 @@ function withWsScheme(hostOrUrl: string): string {
   const raw = hostOrUrl.trim()
   if (!raw) return ''
 
+  const fallbackPort = window.location.port
+
   if (raw.startsWith('ws://') || raw.startsWith('wss://')) {
     return raw.replace(/\/$/, '')
   }
 
   if (raw.startsWith('http://')) {
-    return `ws://${raw.replace(/^http:\/\//, '').replace(/\/$/, '')}`
+    try {
+      const parsed = new URL(raw)
+      const hasPort = Boolean(parsed.port)
+      const host = parsed.hostname.includes(':') ? `[${parsed.hostname}]` : parsed.hostname
+      const portSuffix = hasPort ? `:${parsed.port}` : (fallbackPort ? `:${fallbackPort}` : '')
+      return `ws://${host}${portSuffix}`
+    } catch {
+      return `ws://${raw.replace(/^http:\/\//, '').replace(/\/$/, '')}`
+    }
   }
 
   if (raw.startsWith('https://')) {
-    return `wss://${raw.replace(/^https:\/\//, '').replace(/\/$/, '')}`
+    try {
+      const parsed = new URL(raw)
+      const hasPort = Boolean(parsed.port)
+      const host = parsed.hostname.includes(':') ? `[${parsed.hostname}]` : parsed.hostname
+      const portSuffix = hasPort ? `:${parsed.port}` : (fallbackPort ? `:${fallbackPort}` : '')
+      return `wss://${host}${portSuffix}`
+    } catch {
+      return `wss://${raw.replace(/^https:\/\//, '').replace(/\/$/, '')}`
+    }
   }
 
   const pageProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
-  return `${pageProtocol}${raw.replace(/\/$/, '')}`
+  const normalized = raw.replace(/\/$/, '')
+  const withPort = hasExplicitPort(normalized)
+    ? normalized
+    : `${normalized}${fallbackPort ? `:${fallbackPort}` : ''}`
+  return `${pageProtocol}${withPort}`
+}
+
+function normalizeJanusApiFromHost(hostOrUrl: string, secure: boolean): string {
+  const raw = hostOrUrl.trim()
+  if (!raw) return ''
+  const defaultPort = secure ? '8089' : '8088'
+  const protocol = secure ? 'https' : 'http'
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      const host = parsed.hostname.includes(':') ? `[${parsed.hostname}]` : parsed.hostname
+      const port = parsed.port || defaultPort
+      return `${protocol}://${host}:${port}/janus`
+    } catch {
+      return ''
+    }
+  }
+
+  const host = raw.split('/')[0]
+  const hostWithPort = hasExplicitPort(host) ? host : `${host}:${defaultPort}`
+  return `${protocol}://${hostWithPort}/janus`
 }
 
 export function resolveWebSocketUrl(path = '/ws'): string {
@@ -84,13 +150,13 @@ export function buildJanusApiCandidates(options?: {
 
   const candidates = [
     janusApiUrlOverride || '',
-    preferredJanusHost ? `http://${preferredJanusHost}:8088/janus` : '',
-    preferredJanusHost ? `https://${preferredJanusHost}:8089/janus` : '',
-    janusProxyHostOverride ? `http://${janusProxyHostOverride}:8088/janus` : '',
-    janusProxyHostOverride ? `https://${janusProxyHostOverride}:8089/janus` : '',
-    includeRadioHostFallback && radioHost ? `http://${radioHost}:8088/janus` : '',
-    includeBrowserFallback && browserHost && !browserHostIsLoopback ? `http://${browserHost}:8088/janus` : '',
-    includeBrowserFallback && browserHost && !browserHostIsLoopback ? `https://${browserHost}:8089/janus` : '',
+    preferredJanusHost ? normalizeJanusApiFromHost(preferredJanusHost, false) : '',
+    preferredJanusHost ? normalizeJanusApiFromHost(preferredJanusHost, true) : '',
+    janusProxyHostOverride ? normalizeJanusApiFromHost(janusProxyHostOverride, false) : '',
+    janusProxyHostOverride ? normalizeJanusApiFromHost(janusProxyHostOverride, true) : '',
+    includeRadioHostFallback && radioHost ? normalizeJanusApiFromHost(radioHost, false) : '',
+    includeBrowserFallback && browserHost && !browserHostIsLoopback ? normalizeJanusApiFromHost(browserHost, false) : '',
+    includeBrowserFallback && browserHost && !browserHostIsLoopback ? normalizeJanusApiFromHost(browserHost, true) : '',
   ].filter(Boolean)
 
   return Array.from(new Set(candidates))

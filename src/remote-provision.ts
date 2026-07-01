@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
+import { generateKeyPairSync } from 'crypto';
 import { Client } from 'ssh2';
 
 const execFile = promisify(execFileCb);
@@ -74,6 +75,51 @@ function shSingleQuote(input: string): string {
   return `'${input.replace(/'/g, `'"'"'`)}'`;
 }
 
+function encodeSshString(data: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  return Buffer.concat([length, data]);
+}
+
+function buildOpenSshEd25519PublicKey(publicKeyDer: Buffer, comment: string): string {
+  // Ed25519 SPKI DER prefix followed by 32-byte public key payload.
+  const ed25519SpkiPrefix = Buffer.from('302a300506032b6570032100', 'hex');
+  if (!publicKeyDer.subarray(0, ed25519SpkiPrefix.length).equals(ed25519SpkiPrefix)) {
+    throw new Error('Unexpected Ed25519 public key encoding while building OpenSSH key');
+  }
+
+  const rawPublicKey = publicKeyDer.subarray(ed25519SpkiPrefix.length);
+  if (rawPublicKey.length !== 32) {
+    throw new Error('Unexpected Ed25519 public key length while building OpenSSH key');
+  }
+
+  const keyType = Buffer.from('ssh-ed25519', 'utf8');
+  const payload = Buffer.concat([
+    encodeSshString(keyType),
+    encodeSshString(rawPublicKey),
+  ]);
+
+  return `ssh-ed25519 ${payload.toString('base64')} ${comment}`.trim();
+}
+
+function generateSshKeyPairInProcess(comment: string): { privateKey: string; publicKey: string } {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519', {
+    privateKeyEncoding: {
+      type: 'pkcs8',
+      format: 'pem',
+    },
+    publicKeyEncoding: {
+      type: 'spki',
+      format: 'der',
+    },
+  });
+
+  return {
+    privateKey: String(privateKey),
+    publicKey: buildOpenSshEd25519PublicKey(Buffer.from(publicKey), comment),
+  };
+}
+
 async function runLocalSshKeygen(comment: string): Promise<{ privateKey: string; publicKey: string }> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'yahaml-ssh-'));
   const keyPath = path.join(tempDir, 'id_ed25519');
@@ -96,6 +142,12 @@ async function runLocalSshKeygen(comment: string): Promise<{ privateKey: string;
       privateKey,
       publicKey: publicKey.trim(),
     };
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      // Container fallback when ssh-keygen binary is unavailable.
+      return generateSshKeyPairInProcess(comment);
+    }
+    throw error;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
