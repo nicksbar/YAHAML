@@ -233,6 +233,23 @@ const BAND_PRESETS = [
   { label: '2m', frequencyHz: 146520000 },
 ]
 
+function resolveDefaultJanusUrlFromOverride(rawHostOrUrl: string): string {
+  const fallbackHost = window.location.hostname
+  const input = String(rawHostOrUrl || '').trim() || fallbackHost
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `http://${input}`
+
+  try {
+    const parsed = new URL(withScheme)
+    const secure = parsed.protocol === 'https:'
+    const host = parsed.hostname.includes(':') ? `[${parsed.hostname}]` : parsed.hostname
+    const port = parsed.port || (secure ? '8089' : '8088')
+    const path = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/+$/, '') : '/janus'
+    return `${secure ? 'https' : 'http'}://${host}:${port}${path.endsWith('/janus') ? path : '/janus'}`
+  } catch {
+    return `http://${input}:8088/janus`
+  }
+}
+
 function App() {
   const [stations, setStations] = useState<Station[]>([])
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null)
@@ -335,6 +352,7 @@ function App() {
   const [remoteSshPassword, setRemoteSshPassword] = useState('')
   const [remoteSudoPassword, setRemoteSudoPassword] = useState('')
   const [remoteRigModel, setRemoteRigModel] = useState('')
+  const [remoteRigModelFilter, setRemoteRigModelFilter] = useState('')
   const [remoteRigDevice, setRemoteRigDevice] = useState('')
   const [remoteRigBaud, setRemoteRigBaud] = useState('115200')
   const [remoteAudioCaptureDevice, setRemoteAudioCaptureDevice] = useState('')
@@ -344,7 +362,7 @@ function App() {
       || localStorage.getItem('yahaml:globalHostOverride')?.trim()
       || localStorage.getItem('yahaml:serverLanIp')?.trim()
       || window.location.hostname
-    return `http://${janusHost}:8088/janus`
+    return resolveDefaultJanusUrlFromOverride(janusHost)
   })
   const [remoteInstallRigctl, setRemoteInstallRigctl] = useState(true)
   const [remoteInstallAudioPublisher, setRemoteInstallAudioPublisher] = useState(true)
@@ -500,6 +518,15 @@ function App() {
     () => [...stations].sort((a, b) => a.callsign.localeCompare(b.callsign)),
     [stations],
   )
+
+  const filteredRemoteProbeModelOptions = useMemo(() => {
+    const needle = remoteRigModelFilter.trim().toLowerCase()
+    if (!needle) return remoteProbeModelOptions
+
+    return remoteProbeModelOptions.filter((model) => {
+      return String(model.modelId).includes(needle) || model.label.toLowerCase().includes(needle)
+    })
+  }, [remoteProbeModelOptions, remoteRigModelFilter])
 
   const getAuthHeaders = (): Record<string, string> => {
     const token = sessionToken || localStorage.getItem(sessionTokenKey) || ''
@@ -3550,6 +3577,9 @@ function App() {
                         <label>SSH Password *</label>
                         <input
                           type="password"
+                          autoComplete="new-password"
+                          data-lpignore="true"
+                          data-form-type="other"
                           value={remoteSshPassword}
                           onChange={(e) => setRemoteSshPassword(e.target.value)}
                           placeholder="One-time use"
@@ -3559,6 +3589,9 @@ function App() {
                         <label>Sudo Password (optional)</label>
                         <input
                           type="password"
+                          autoComplete="new-password"
+                          data-lpignore="true"
+                          data-form-type="other"
                           value={remoteSudoPassword}
                           onChange={(e) => setRemoteSudoPassword(e.target.value)}
                           placeholder="Needed if sudo requires password"
@@ -3597,12 +3630,18 @@ function App() {
                       </div>
                       <div className="field">
                         <label>Rig Model (hamlib -m)</label>
+                        <input
+                          value={remoteRigModelFilter}
+                          onChange={(e) => setRemoteRigModelFilter(e.target.value)}
+                          placeholder="type to search models (e.g. 7300, yaesu, kenwood)"
+                          style={{ marginBottom: '0.35rem' }}
+                        />
                         <select
                           value={remoteRigModel}
                           onChange={(e) => setRemoteRigModel(e.target.value)}
                         >
                           <option value="">-- Select model --</option>
-                          {remoteProbeModelOptions.map((model) => (
+                          {filteredRemoteProbeModelOptions.map((model) => (
                             <option key={model.modelId} value={String(model.modelId)}>
                               {model.modelId} — {model.label}
                             </option>
@@ -3978,6 +4017,7 @@ function App() {
                     setRemoteSshPassword('')
                     setRemoteSudoPassword('')
                     setRemoteRigModel('')
+                    setRemoteRigModelFilter('')
                     setRemoteRigDevice('')
                     setRemoteRigBaud('115200')
                     setRemoteAudioCaptureDevice('')
