@@ -143,6 +143,22 @@ function getServerLanIP(): string | null {
   return null;
 }
 
+function normalizeJanusBrowserApiUrlFromHostOverride(rawValue: string | null | undefined): string | null {
+  const input = String(rawValue || '').trim();
+  if (!input) return null;
+
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `http://${input}`;
+  try {
+    const parsed = new URL(withScheme);
+    const secure = parsed.protocol === 'https:';
+    const host = parsed.hostname.includes(':') ? `[${parsed.hostname}]` : parsed.hostname;
+    const port = parsed.port || (secure ? '8089' : '8088');
+    return `${secure ? 'https' : 'http'}://${host}:${port}/janus`;
+  } catch {
+    return null;
+  }
+}
+
 async function getSystemSettingValue(key: string): Promise<string | null> {
   const setting = await prisma.systemSetting.findUnique({ where: { key } });
   return setting?.value ?? null;
@@ -190,9 +206,7 @@ async function getJanusClientConfig() {
   const resolvedApiHostOverride = (apiHostOverride || '').trim() || null;
   const resolvedWsHostOverride = (wsHostOverride || '').trim() || null;
   const preferredJanusHost = resolvedJanusHostOverride || resolvedGlobalHostOverride || serverLanIp || null;
-  const suggestedJanusBrowserApiUrl = preferredJanusHost
-    ? `http://${preferredJanusHost}:8088/janus`
-    : null;
+  const suggestedJanusBrowserApiUrl = normalizeJanusBrowserApiUrlFromHostOverride(preferredJanusHost);
 
   return {
     browserApiOverride: browserApiOverride || null,

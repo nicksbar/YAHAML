@@ -10,10 +10,12 @@ services:
     environment:
       JANUS_ADMIN_SECRET: ${JANUS_ADMIN_SECRET:-yahaml-dev-secret}
       JANUS_DEBUG_LEVEL: ${JANUS_DEBUG_LEVEL:-4}
+      JANUS_RTP_PORT_RANGE: ${JANUS_RTP_PORT_RANGE:-20000-20039}
     ports:
       - "${JANUS_API_PORT:-8088}:8088"
       - "${JANUS_WS_PORT:-8188}:8188"
       - "${JANUS_ADMIN_PORT:-7088}:7088"
+      - "${JANUS_RTP_PORT_RANGE:-20000-20039}:${JANUS_RTP_PORT_RANGE:-20000-20039}/udp"
     networks:
       - yahaml
     healthcheck:
