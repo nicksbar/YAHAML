@@ -26,6 +26,7 @@ Welcome to the YAHAML documentation. Select the section relevant to your needs.
 - **[DEPLOYMENT_READINESS.md](DEPLOYMENT_READINESS.md)** - Production deployment guide and environment variables
 - **[deployment-complete.md](deployment-complete.md)** - Comprehensive deployment (Docker, VPS, Cloud platforms)
 - **[deployment-quick-ref.md](deployment-quick-ref.md)** - Quick reference for common deployment tasks
+- **[portainer-nginx-proxy-manager.md](portainer-nginx-proxy-manager.md)** - Portainer + NPM setup, exact port requirements, and host-override guidance
 - **[provisioning.md](provisioning.md)** - End-to-end remote host provisioning workflow and validation
 
 ## Features

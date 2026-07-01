@@ -33,6 +33,20 @@ if [ -n "${JANUS_DEBUG_LEVEL}" ]; then
   fi
 fi
 
+# RTP port range (e.g. 20000-20039). Keep bounded for firewall/NAT predictability.
+if [ -n "${JANUS_RTP_PORT_RANGE}" ]; then
+  if echo "${JANUS_RTP_PORT_RANGE}" | grep -Eq '^[0-9]+-[0-9]+$'; then
+    CONFIG_FILE="/opt/janus/etc/janus/janus.cfg.d/janus-yahaml.cfg"
+    if [ -f "$CONFIG_FILE" ]; then
+      sed "s/rtp_port_range = .*/rtp_port_range = \"${JANUS_RTP_PORT_RANGE}\"/" "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
+      mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+      echo "[Entrypoint] RTP port range configured: ${JANUS_RTP_PORT_RANGE}"
+    fi
+  else
+    echo "[Entrypoint] Ignoring invalid JANUS_RTP_PORT_RANGE='${JANUS_RTP_PORT_RANGE}' (expected format MIN-MAX)"
+  fi
+fi
+
 # Start Janus
 echo "[Entrypoint] Starting Janus with args: $@"
 exec /opt/janus/bin/janus "$@"
