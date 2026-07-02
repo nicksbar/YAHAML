@@ -12,7 +12,9 @@ export type RemoteProvisionRequest = {
   host: string;
   port?: number;
   username: string;
-  password: string;
+  password?: string;
+  /** Optional path to a local private key for key-based SSH auth when password is not supplied */
+  privateKeyPath?: string;
   sudoPassword?: string;
   installRigctl?: boolean;
   /** Preferred flag: install/manage YAHAML audio publisher on remote host */
@@ -153,12 +155,35 @@ async function runLocalSshKeygen(comment: string): Promise<{ privateKey: string;
   }
 }
 
-async function persistPrivateKey(radioId: string, privateKey: string, warnings: string[]): Promise<string> {
-  const candidateDirs = [
+function getManagedKeyStorageRoots(): string[] {
+  return [
     path.resolve(process.cwd(), 'data', 'ssh'),
     path.resolve(os.homedir(), '.yahaml', 'ssh'),
     path.resolve(os.tmpdir(), 'yahaml-ssh-persist'),
   ];
+}
+
+function normalizeManagedPrivateKeyPath(inputPath: string): string {
+  const resolved = path.resolve(inputPath);
+  const managedRoots = getManagedKeyStorageRoots();
+  const isUnderManagedRoot = managedRoots.some((root) => {
+    const relative = path.relative(root, resolved);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  });
+
+  if (!isUnderManagedRoot) {
+    throw new Error('privateKeyPath must point to a YAHAML-managed key file');
+  }
+
+  if (!resolved.endsWith('_id_ed25519')) {
+    throw new Error('privateKeyPath must reference a managed ed25519 key file');
+  }
+
+  return resolved;
+}
+
+async function persistPrivateKey(radioId: string, privateKey: string, warnings: string[]): Promise<string> {
+  const candidateDirs = getManagedKeyStorageRoots();
 
   let lastError: any = null;
 
@@ -211,7 +236,8 @@ async function connectSshWithFallback(host: string, port: number, username: stri
   }
 
   if (privateKeyPath) {
-    const privateKey = await readFile(privateKeyPath, 'utf8');
+    const managedPath = normalizeManagedPrivateKeyPath(privateKeyPath);
+    const privateKey = await readFile(managedPath, 'utf8');
     const client = await connectSsh(host, port, username, { privateKey });
     return { client, method: 'privateKey' };
   }
@@ -395,10 +421,11 @@ export async function provisionRemoteRigHost(
   const host = request.host.trim();
   const username = request.username.trim();
   const password = request.password;
+  const requestedPrivateKeyPath = typeof request.privateKeyPath === 'string' ? request.privateKeyPath.trim() : '';
   const port = request.port ?? 22;
 
-  if (!host || !username || !password) {
-    throw new Error('host, username, and password are required');
+  if (!host || !username || (!password && !requestedPrivateKeyPath)) {
+    throw new Error('host and username are required, plus either password or privateKeyPath');
   }
 
   const logs: string[] = [];
@@ -416,7 +443,7 @@ export async function provisionRemoteRigHost(
   const keyPair = await runLocalSshKeygen(`yahaml-${radioId}`);
   const privateKeyPath = await persistPrivateKey(radioId, keyPair.privateKey, warnings);
 
-  const { client } = await connectSshWithFallback(host, port, username, password);
+  const { client } = await connectSshWithFallback(host, port, username, password, requestedPrivateKeyPath || undefined);
   hooks?.onLog?.(`SSH connected to ${host}:${port} as ${username}`);
 
   try {

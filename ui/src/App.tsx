@@ -126,7 +126,7 @@ type RadioConnection = {
   remoteSshPort?: number | null
   remoteSshUser?: string | null
   remoteSshPublicKey?: string | null
-  remoteSshPrivateKeyPath?: string | null
+  remoteHasStoredSshKey?: boolean
   remoteProvisionedAt?: string | null
   remoteProvisionStatus?: string | null
   remoteProvisionLastError?: string | null
@@ -1340,7 +1340,7 @@ function App() {
         return (
           String(radio.remoteSshHost || '').trim() === String(radioHost || '').trim() &&
           String(radio.remoteSshUser || '').trim() === String(remoteSshUser || '').trim() &&
-          Boolean(radio.remoteSshPrivateKeyPath)
+          Boolean(radio.remoteHasStoredSshKey)
         )
       })
 
@@ -1625,6 +1625,64 @@ function App() {
       }
     } catch {
       // silent
+    }
+  }
+
+  async function reprovisionExistingRadio(radio: RadioConnection) {
+    if (!sessionToken || !isAdmin) {
+      addError('Admin session required for remote reprovisioning')
+      return
+    }
+
+    try {
+      setRemoteProvisioning(true)
+      setRemoteProvisionStatus(`Re-provisioning ${radio.name}...`)
+      setRemoteProvisionWarnings([])
+      setRemoteProvisionLogs([])
+
+      const response = await fetch(`/api/radios/${radio.id}/provision-remote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({}),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reprovision remote host')
+      }
+
+      setRemoteProvisionWarnings(Array.isArray(data.warnings) ? data.warnings : [])
+      setRemoteProvisionLogs(Array.isArray(data.logs) ? data.logs : [])
+      setRemoteProvisionStatus(`Remote reprovision complete for ${radio.name}${data.janusRoomId ? ` (room ${data.janusRoomId})` : ''}.`)
+      await fetchRadios()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to reprovision remote host'
+      setRemoteProvisionStatus(`Remote reprovision failed for ${radio.name}: ${message}`)
+      addError(message)
+    } finally {
+      setRemoteProvisioning(false)
+    }
+  }
+
+  async function reconcileRadioJanusRoom(radio: RadioConnection) {
+    if (!sessionToken || !isAdmin) {
+      addError('Admin session required to reconcile Janus room')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/radios/${radio.id}/reconcile-janus-room`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders() },
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reconcile Janus room')
+      }
+      addSuccess(`Reconciled ${radio.name} to managed Janus room ${data.janusRoomId}`)
+      await fetchRadios()
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to reconcile Janus room')
     }
   }
 
@@ -4122,6 +4180,26 @@ function App() {
                           <strong>Error:</strong> {radio.lastError}
                         </div>
                       )}
+                      {(radio.remoteSshHost || radio.remoteProvisionStatus || radio.remoteProvisionLastError) && (
+                        <>
+                          <div className="radio-info">
+                            <strong>Remote SSH:</strong>{' '}
+                            {radio.remoteSshHost
+                              ? `${radio.remoteSshUser || 'user'}@${radio.remoteSshHost}:${radio.remoteSshPort || 22}`
+                              : 'Not configured'}
+                          </div>
+                          <div className="radio-info">
+                            <strong>Provision:</strong>{' '}
+                            {radio.remoteProvisionStatus || 'unknown'}
+                            {radio.remoteHasStoredSshKey ? ' • SSH key saved' : ''}
+                          </div>
+                          {radio.remoteProvisionLastError && (
+                            <div className="radio-info error">
+                              <strong>Provision Error:</strong> {radio.remoteProvisionLastError}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
                     {radio.isConnected && (
                       <div className="radio-control-panel">
@@ -4711,6 +4789,14 @@ function App() {
                                 >
                                   Discover Janus Rooms
                                 </button>
+                                <button
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    await reconcileRadioJanusRoom(radio)
+                                  }}
+                                >
+                                  Use Managed Room ID
+                                </button>
                               </div>
                             </div>
                           </>
@@ -4827,6 +4913,20 @@ function App() {
                       >
                         Test
                       </button>
+                      {isAdmin && radio.connectionType !== 'mock' && (
+                        <button
+                          className="btn secondary"
+                          disabled={remoteProvisioning}
+                          title={radio.remoteHasStoredSshKey
+                            ? 'Re-provision using saved profile and SSH key'
+                            : 'Re-provision using saved profile (may require providing password via initial provisioning form)'}
+                          onClick={async () => {
+                            await reprovisionExistingRadio(radio)
+                          }}
+                        >
+                          {remoteProvisioning ? '⏳ Re-provisioning...' : '🔁 Re-provision Remote'}
+                        </button>
+                      )}
                       {!assignment && (
                         <select
                           onChange={async (e) => {

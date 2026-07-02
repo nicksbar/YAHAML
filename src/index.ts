@@ -222,6 +222,255 @@ async function getJanusClientConfig() {
   };
 }
 
+function sanitizeRadioConnectionForClient<T extends {
+  remoteSshPrivateKeyPath?: string | null;
+  remoteSshPublicKey?: string | null;
+}>(radio: T): Omit<T, 'remoteSshPrivateKeyPath' | 'remoteSshPublicKey'> & { remoteHasStoredSshKey: boolean } {
+  const { remoteSshPrivateKeyPath, remoteSshPublicKey, ...rest } = radio as any;
+  return {
+    ...rest,
+    remoteHasStoredSshKey: Boolean(remoteSshPrivateKeyPath),
+  };
+}
+
+type RemoteProvisionProfile = {
+  host?: string;
+  port?: number;
+  username?: string;
+  installRigctl?: boolean;
+  installAudioPublisher?: boolean;
+  grantScopedSudo?: boolean;
+  rigModel?: number;
+  rigDevice?: string;
+  rigBaud?: number;
+  audioCaptureDevice?: string;
+  audioPlaybackDevice?: string;
+  yahamlJanusUrl?: string;
+  janusRoomId?: string;
+};
+
+function remoteProvisionProfileSettingKey(radioId: string): string {
+  return `radio.remoteProvisionProfile.${radioId}`;
+}
+
+function normalizeOptionalString(input: unknown): string | undefined {
+  if (typeof input !== 'string') return undefined;
+  const trimmed = input.trim();
+  return trimmed || undefined;
+}
+
+function normalizeOptionalNumber(input: unknown): number | undefined {
+  const parsed = Number(input);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed;
+}
+
+function normalizeOptionalPositiveInt(input: unknown): number | undefined {
+  const parsed = normalizeOptionalNumber(input);
+  if (parsed === undefined || parsed <= 0) return undefined;
+  return Math.floor(parsed);
+}
+
+function sanitizeRemoteProvisionProfile(input: unknown): RemoteProvisionProfile {
+  const raw = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+  return {
+    host: normalizeOptionalString(raw.host),
+    port: normalizeOptionalPositiveInt(raw.port),
+    username: normalizeOptionalString(raw.username),
+    installRigctl: typeof raw.installRigctl === 'boolean' ? raw.installRigctl : undefined,
+    installAudioPublisher: typeof raw.installAudioPublisher === 'boolean' ? raw.installAudioPublisher : undefined,
+    grantScopedSudo: typeof raw.grantScopedSudo === 'boolean' ? raw.grantScopedSudo : undefined,
+    rigModel: normalizeOptionalPositiveInt(raw.rigModel),
+    rigDevice: normalizeOptionalString(raw.rigDevice),
+    rigBaud: normalizeOptionalPositiveInt(raw.rigBaud),
+    audioCaptureDevice: normalizeOptionalString(raw.audioCaptureDevice),
+    audioPlaybackDevice: normalizeOptionalString(raw.audioPlaybackDevice),
+    yahamlJanusUrl: normalizeOptionalString(raw.yahamlJanusUrl),
+    janusRoomId: normalizeOptionalString(raw.janusRoomId),
+  };
+}
+
+async function getRemoteProvisionProfile(radioId: string): Promise<RemoteProvisionProfile> {
+  const raw = await getSystemSettingValue(remoteProvisionProfileSettingKey(radioId));
+  if (!raw) return {};
+  try {
+    return sanitizeRemoteProvisionProfile(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+async function saveRemoteProvisionProfile(radioId: string, profile: RemoteProvisionProfile): Promise<RemoteProvisionProfile> {
+  const sanitized = sanitizeRemoteProvisionProfile(profile);
+  await upsertSystemSettingValue(
+    remoteProvisionProfileSettingKey(radioId),
+    JSON.stringify(sanitized),
+  );
+  return sanitized;
+}
+
+async function resolveRadioJanusRoomIdForProvisioning(radio: {
+  id: string;
+  name: string;
+  audioSourceType?: string | null;
+  janusRoomId?: string | null;
+}): Promise<string> {
+  if (radio.audioSourceType === 'janus') {
+    const ensured = await ensureManagedRadioRoom(radio);
+    if (ensured.janusRoomId && ensured.janusRoomId !== (radio.janusRoomId || null)) {
+      await prisma.radioConnection.update({
+        where: { id: radio.id },
+        data: { janusRoomId: ensured.janusRoomId },
+      });
+    }
+    if (ensured.janusRoomId) return ensured.janusRoomId;
+  }
+
+  const parsed = Number(radio.janusRoomId || '');
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return String(Math.floor(parsed));
+  }
+
+  return String(preferredJanusRoomIdForRadio(radio.id));
+}
+
+async function buildRemoteProvisionRequestForRadio(
+  radio: {
+    id: string;
+    name: string;
+    host: string;
+    port: number;
+    audioSourceType?: string | null;
+    janusRoomId?: string | null;
+    remoteSshHost?: string | null;
+    remoteSshPort?: number | null;
+    remoteSshUser?: string | null;
+    remoteSshPrivateKeyPath?: string | null;
+  },
+  body: any,
+): Promise<{
+  request: {
+    host: string;
+    port: number;
+    username: string;
+    password?: string;
+    privateKeyPath?: string;
+    sudoPassword?: string;
+    installRigctl: boolean;
+    installAudioPublisher: boolean;
+    installJanus: boolean;
+    grantScopedSudo: boolean;
+    radioPort?: number;
+    rigModel?: number;
+    rigDevice?: string;
+    rigBaud?: number;
+    audioCaptureDevice?: string;
+    audioPlaybackDevice?: string;
+    yahamlJanusUrl?: string;
+    janusRoomId?: string;
+  };
+  profileToPersist: RemoteProvisionProfile;
+}> {
+  const profile = await getRemoteProvisionProfile(radio.id);
+
+  const host = normalizeOptionalString(body?.host)
+    || profile.host
+    || normalizeOptionalString(radio.remoteSshHost)
+    || normalizeOptionalString(radio.host);
+  const port = normalizeOptionalPositiveInt(body?.port)
+    || profile.port
+    || normalizeOptionalPositiveInt(radio.remoteSshPort)
+    || 22;
+  const username = normalizeOptionalString(body?.username)
+    || profile.username
+    || normalizeOptionalString(radio.remoteSshUser);
+  const password = normalizeOptionalString(body?.password);
+  const privateKeyPath = normalizeOptionalString(body?.privateKeyPath)
+    || normalizeOptionalString(radio.remoteSshPrivateKeyPath);
+  const sudoPassword = normalizeOptionalString(body?.sudoPassword);
+
+  if (!host || !username) {
+    throw new Error('host and username are required (or must exist in saved provisioning profile)');
+  }
+  if (!password && !privateKeyPath) {
+    throw new Error('Provide password for first-time provisioning, or ensure a stored SSH private key path exists for this radio');
+  }
+
+  const installRigctl = typeof body?.installRigctl === 'boolean'
+    ? body.installRigctl
+    : typeof profile.installRigctl === 'boolean'
+      ? profile.installRigctl
+      : true;
+  const installAudioPublisher = typeof body?.installAudioPublisher === 'boolean'
+    ? body.installAudioPublisher
+    : typeof body?.installJanus === 'boolean'
+      ? body.installJanus
+      : typeof profile.installAudioPublisher === 'boolean'
+        ? profile.installAudioPublisher
+        : true;
+  const grantScopedSudo = typeof body?.grantScopedSudo === 'boolean'
+    ? body.grantScopedSudo
+    : typeof profile.grantScopedSudo === 'boolean'
+      ? profile.grantScopedSudo
+      : true;
+
+  const rigModel = normalizeOptionalPositiveInt(body?.rigModel) ?? profile.rigModel;
+  const rigDevice = normalizeOptionalString(body?.rigDevice) ?? profile.rigDevice;
+  const rigBaud = normalizeOptionalPositiveInt(body?.rigBaud) ?? profile.rigBaud;
+  const audioCaptureDevice = normalizeOptionalString(body?.audioCaptureDevice) ?? profile.audioCaptureDevice;
+  const audioPlaybackDevice = normalizeOptionalString(body?.audioPlaybackDevice) ?? profile.audioPlaybackDevice;
+
+  const janusRoomId = normalizeOptionalString(body?.janusRoomId)
+    || profile.janusRoomId
+    || await resolveRadioJanusRoomIdForProvisioning(radio);
+
+  const resolvedJanusUrl = (() => {
+    const fromBody = normalizeOptionalString(body?.yahamlJanusUrl);
+    if (fromBody) return fromBody;
+    if (profile.yahamlJanusUrl) return profile.yahamlJanusUrl;
+    const lanIp = getServerLanIP();
+    return lanIp ? `http://${lanIp}:8088/janus` : undefined;
+  })();
+
+  return {
+    request: {
+      host,
+      port,
+      username,
+      password: password || undefined,
+      privateKeyPath: privateKeyPath || undefined,
+      sudoPassword: sudoPassword || undefined,
+      installRigctl,
+      installAudioPublisher,
+      installJanus: installAudioPublisher,
+      grantScopedSudo,
+      radioPort: radio.port,
+      rigModel,
+      rigDevice,
+      rigBaud,
+      audioCaptureDevice,
+      audioPlaybackDevice,
+      yahamlJanusUrl: resolvedJanusUrl,
+      janusRoomId,
+    },
+    profileToPersist: {
+      host,
+      port,
+      username,
+      installRigctl,
+      installAudioPublisher,
+      grantScopedSudo,
+      rigModel,
+      rigDevice,
+      rigBaud,
+      audioCaptureDevice,
+      audioPlaybackDevice,
+      yahamlJanusUrl: resolvedJanusUrl,
+      janusRoomId,
+    },
+  };
+}
+
 function hashToPositiveInt(seed: string): number {
   let hash = 0;
   for (let i = 0; i < seed.length; i += 1) {
@@ -3336,7 +3585,7 @@ app.get('/api/radios', async (_req, res) => {
         },
       },
     });
-    return res.json(radios);
+    return res.json(radios.map((radio) => sanitizeRadioConnectionForClient(radio)));
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -3361,7 +3610,7 @@ app.get('/api/radios/:id', async (req, res) => {
       return res.status(404).json({ error: 'Radio not found' });
     }
     
-    return res.json(radio);
+    return res.json(sanitizeRadioConnectionForClient(radio));
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -3555,6 +3804,74 @@ app.post('/api/radios/test-connection', async (req, res) => {
   }
 });
 
+// Get persisted remote provisioning profile for a radio (admin only)
+app.get('/api/radios/:id/remote-provision-profile', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    if (!radio) {
+      return res.status(404).json({ error: 'Radio not found' });
+    }
+
+    const profile = await getRemoteProvisionProfile(radioId);
+    const resolvedJanusRoomId = await resolveRadioJanusRoomIdForProvisioning(radio);
+
+    return res.json({
+      radioId,
+      profile: {
+        ...profile,
+        host: profile.host || radio.remoteSshHost || radio.host || '',
+        port: profile.port || radio.remoteSshPort || 22,
+        username: profile.username || radio.remoteSshUser || '',
+        janusRoomId: profile.janusRoomId || resolvedJanusRoomId,
+      },
+      hints: {
+        hasStoredSshKey: Boolean(radio.remoteSshPrivateKeyPath),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to load remote provision profile' });
+  }
+});
+
+// Save persisted remote provisioning profile for a radio (admin only)
+app.put('/api/radios/:id/remote-provision-profile', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    if (!radio) {
+      return res.status(404).json({ error: 'Radio not found' });
+    }
+
+    const profile = await saveRemoteProvisionProfile(radioId, req.body || {});
+    return res.json({ success: true, radioId, profile });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to save remote provision profile' });
+  }
+});
+
+// Ensure the radio uses a managed Janus room and persist its room id (admin only)
+app.post('/api/radios/:id/reconcile-janus-room', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    if (!radio) {
+      return res.status(404).json({ error: 'Radio not found' });
+    }
+
+    const janusRoomId = await resolveRadioJanusRoomIdForProvisioning(radio);
+    const refreshed = await prisma.radioConnection.findUnique({ where: { id: radioId } });
+    return res.json({
+      success: true,
+      radioId,
+      janusRoomId,
+      radio: refreshed ? sanitizeRadioConnectionForClient(refreshed) : null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Failed to reconcile Janus room' });
+  }
+});
+
 // Provision remote radio host via SSH (admin only)
 app.post('/api/radios/:id/provision-remote', authMiddleware as express.RequestHandler, requireAdmin, async (req: AuthRequest, res) => {
   try {
@@ -3564,70 +3881,25 @@ app.post('/api/radios/:id/provision-remote', authMiddleware as express.RequestHa
       return res.status(404).json({ error: 'Radio not found' });
     }
 
-    const {
-      host,
-      port,
-      username,
-      password,
-      sudoPassword,
-      installRigctl,
-      installAudioPublisher,
-      installJanus,
-      grantScopedSudo,
-      rigModel,
-      rigDevice,
-      rigBaud,
-      audioCaptureDevice,
-      audioPlaybackDevice,
-      yahamlJanusUrl,
-    } = req.body || {};
-
-    if (!host || !username || !password) {
-      return res.status(400).json({ error: 'host, username, and password are required' });
-    }
-
-    // Derive the Janus URL the Pi should use (prefer explicit, then server LAN IP, then placeholder)
-    const resolvedJanusUrl = (() => {
-      if (yahamlJanusUrl && String(yahamlJanusUrl).trim()) return String(yahamlJanusUrl).trim();
-      const lanIp = getServerLanIP();
-      return lanIp ? `http://${lanIp}:8088/janus` : null;
-    })();
-
-    const result = await provisionRemoteRigHost(radioId, {
-      host: String(host),
-      port: Number(port || 22),
-      username: String(username),
-      password: String(password),
-      sudoPassword: sudoPassword ? String(sudoPassword) : undefined,
-      installRigctl: installRigctl !== false,
-      installAudioPublisher: installAudioPublisher !== undefined
-        ? installAudioPublisher !== false
-        : installJanus !== false,
-      installJanus: installJanus !== false,
-      grantScopedSudo: grantScopedSudo !== false,
-      radioPort: radio.port,
-      rigModel: Number.isFinite(Number(rigModel)) ? Number(rigModel) : undefined,
-      rigDevice: rigDevice ? String(rigDevice) : undefined,
-      rigBaud: Number.isFinite(Number(rigBaud)) ? Number(rigBaud) : undefined,
-      audioCaptureDevice: audioCaptureDevice ? String(audioCaptureDevice) : undefined,
-      audioPlaybackDevice: audioPlaybackDevice ? String(audioPlaybackDevice) : undefined,
-      yahamlJanusUrl: resolvedJanusUrl ?? undefined,
-      janusRoomId: radio.janusRoomId ?? undefined,
-    });
+    const merged = await buildRemoteProvisionRequestForRadio(radio, req.body || {});
+    const result = await provisionRemoteRigHost(radioId, merged.request);
 
     await prisma.radioConnection.update({
       where: { id: radioId },
       data: {
-        remoteSshHost: String(host),
-        remoteSshPort: Number(port || 22),
-        remoteSshUser: String(username),
+        remoteSshHost: merged.request.host,
+        remoteSshPort: merged.request.port,
+        remoteSshUser: merged.request.username,
         remoteSshPublicKey: result.publicKey,
         remoteSshPrivateKeyPath: result.privateKeyPath,
         remoteProvisionedAt: new Date(),
         remoteProvisionStatus: 'ok',
         remoteProvisionLastError: null,
+        janusRoomId: merged.request.janusRoomId || undefined,
       },
     });
+
+    await saveRemoteProvisionProfile(radioId, merged.profileToPersist);
 
     return res.json({
       success: true,
@@ -3636,12 +3908,14 @@ app.post('/api/radios/:id/provision-remote', authMiddleware as express.RequestHa
       warnings: result.warnings,
       logs: result.logs,
       ssh: {
-        host: String(host),
-        port: Number(port || 22),
-        user: String(username),
+        host: merged.request.host,
+        port: merged.request.port,
+        user: merged.request.username,
         publicKey: result.publicKey,
-        privateKeyPath: result.privateKeyPath,
+        hasStoredSshKey: Boolean(result.privateKeyPath),
       },
+      janusRoomId: merged.request.janusRoomId || null,
+      profile: merged.profileToPersist,
     });
   } catch (error: any) {
     const radioId = paramAsString(req.params.id);
@@ -3682,60 +3956,13 @@ app.post('/api/radios/:id/provision-remote-stream', authMiddleware as express.Re
       return res.end();
     }
 
-    const {
-      host,
-      port,
-      username,
-      password,
-      sudoPassword,
-      installRigctl,
-      installAudioPublisher,
-      installJanus,
-      grantScopedSudo,
-      rigModel,
-      rigDevice,
-      rigBaud,
-      audioCaptureDevice,
-      audioPlaybackDevice,
-      yahamlJanusUrl,
-    } = req.body || {};
+    const merged = await buildRemoteProvisionRequestForRadio(radio, req.body || {});
 
-    if (!host || !username || !password) {
-      writeEvent({ type: 'error', error: 'host, username, and password are required' });
-      return res.end();
-    }
-
-    const resolvedJanusUrl = (() => {
-      if (yahamlJanusUrl && String(yahamlJanusUrl).trim()) return String(yahamlJanusUrl).trim();
-      const lanIp = getServerLanIP();
-      return lanIp ? `http://${lanIp}:8088/janus` : null;
-    })();
-
-    writeEvent({ type: 'status', message: `Starting remote provisioning... (Janus URL for Pi: ${resolvedJanusUrl ?? 'not detected — will use placeholder'})` });
+    writeEvent({ type: 'status', message: `Starting remote provisioning... (Janus URL for Pi: ${merged.request.yahamlJanusUrl ?? 'not detected — will use placeholder'}, room: ${merged.request.janusRoomId || 'unknown'})` });
 
     const result = await provisionRemoteRigHost(
       radioId,
-      {
-        host: String(host),
-        port: Number(port || 22),
-        username: String(username),
-        password: String(password),
-        sudoPassword: sudoPassword ? String(sudoPassword) : undefined,
-        installRigctl: installRigctl !== false,
-        installAudioPublisher: installAudioPublisher !== undefined
-          ? installAudioPublisher !== false
-          : installJanus !== false,
-        installJanus: installJanus !== false,
-        grantScopedSudo: grantScopedSudo !== false,
-        radioPort: radio.port,
-        rigModel: Number.isFinite(Number(rigModel)) ? Number(rigModel) : undefined,
-        rigDevice: rigDevice ? String(rigDevice) : undefined,
-        rigBaud: Number.isFinite(Number(rigBaud)) ? Number(rigBaud) : undefined,
-        audioCaptureDevice: audioCaptureDevice ? String(audioCaptureDevice) : undefined,
-        audioPlaybackDevice: audioPlaybackDevice ? String(audioPlaybackDevice) : undefined,
-        yahamlJanusUrl: resolvedJanusUrl ?? undefined,
-        janusRoomId: radio.janusRoomId ?? undefined,
-      },
+      merged.request,
       {
         onLog: (line) => writeEvent({ type: 'log', line }),
         onWarning: (line) => writeEvent({ type: 'warning', line }),
@@ -3745,16 +3972,19 @@ app.post('/api/radios/:id/provision-remote-stream', authMiddleware as express.Re
     await prisma.radioConnection.update({
       where: { id: radioId },
       data: {
-        remoteSshHost: String(host),
-        remoteSshPort: Number(port || 22),
-        remoteSshUser: String(username),
+        remoteSshHost: merged.request.host,
+        remoteSshPort: merged.request.port,
+        remoteSshUser: merged.request.username,
         remoteSshPublicKey: result.publicKey,
         remoteSshPrivateKeyPath: result.privateKeyPath,
         remoteProvisionedAt: new Date(),
         remoteProvisionStatus: 'ok',
         remoteProvisionLastError: null,
+        janusRoomId: merged.request.janusRoomId || undefined,
       },
     });
+
+    await saveRemoteProvisionProfile(radioId, merged.profileToPersist);
 
     writeEvent({
       type: 'done',
@@ -3763,12 +3993,14 @@ app.post('/api/radios/:id/provision-remote-stream', authMiddleware as express.Re
       warnings: result.warnings,
       logs: result.logs,
       ssh: {
-        host: String(host),
-        port: Number(port || 22),
-        user: String(username),
+        host: merged.request.host,
+        port: merged.request.port,
+        user: merged.request.username,
         publicKey: result.publicKey,
-        privateKeyPath: result.privateKeyPath,
+        hasStoredSshKey: Boolean(result.privateKeyPath),
       },
+      janusRoomId: merged.request.janusRoomId || null,
+      profile: merged.profileToPersist,
     });
     return res.end();
   } catch (error: any) {
@@ -3861,7 +4093,7 @@ app.post('/api/radios/:id/probe-remote-options', authMiddleware as express.Reque
         host,
         port,
         user: username,
-        privateKeyPath: privateKeyPath || null,
+        hasStoredSshKey: Boolean(privateKeyPath),
       },
     });
   } catch (error: any) {

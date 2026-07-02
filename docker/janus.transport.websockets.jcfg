@@ -1,0 +1,10 @@
+# Janus WebSocket Transport Configuration for YAHAML (v1.4.1+)
+# Enables WS signaling endpoint at :8188 under /janus
+
+general: {
+  json = "indented"
+  ws = true
+  ws_port = 8188
+  wss = false
+  ws_logging = "warn"
+}
