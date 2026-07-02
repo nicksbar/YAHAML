@@ -22,12 +22,18 @@ const result = spawnSync(
   ['prisma', 'generate', '--schema', schema],
   {
     stdio: 'inherit',
+    shell: process.platform === 'win32',
     env: {
       ...process.env,
       PRISMA_SCHEMA: schema,
     },
   },
 );
+
+if (result.error) {
+  console.error('[prisma] Failed to run prisma generate:', result.error);
+  process.exit(1);
+}
 
 if (typeof result.status !== 'number' || result.status !== 0) {
   process.exit(result.status || 1);
