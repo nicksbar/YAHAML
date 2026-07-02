@@ -37,7 +37,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     if (!Number.isFinite(raw)) return 100
     return Math.max(0, Math.min(100, Math.round(raw)))
   })
-  const [radioAudioPtt, setRadioAudioPtt] = useState(false)
   const [, setJanusStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
   const [, setJanusTransportStats] = useState<{
     iceState: string
@@ -1160,11 +1159,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       radioAudioRef.current.muted = radioAudioMuted
     }
   }, [radioAudioVolume, radioAudioMuted])
-
-  useEffect(() => {
-    if (radioState?.ptt === null || radioState?.ptt === undefined) return
-    setRadioAudioPtt(Boolean(radioState.ptt))
-  }, [radioState?.ptt])
 
   // Update EQ when bass/mid/treble change
   useEffect(() => {
