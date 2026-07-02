@@ -440,13 +440,23 @@ export async function provisionRemoteRigHost(
   const rigBaud = Number.isFinite(Number(request.rigBaud)) ? Number(request.rigBaud) : 115200;
   const audioCaptureDevice = typeof request.audioCaptureDevice === 'string' ? request.audioCaptureDevice.trim() : '';
 
-  const keyPair = await runLocalSshKeygen(`yahaml-${radioId}`);
-  const privateKeyPath = await persistPrivateKey(radioId, keyPair.privateKey, warnings);
-
   const { client } = await connectSshWithFallback(host, port, username, password, requestedPrivateKeyPath || undefined);
   hooks?.onLog?.(`SSH connected to ${host}:${port} as ${username}`);
 
   try {
+    const keyPair = await runLocalSshKeygen(`yahaml-${radioId}`);
+    let privateKeyPath = '';
+
+    if (requestedPrivateKeyPath) {
+      const managedPath = normalizeManagedPrivateKeyPath(requestedPrivateKeyPath);
+      await writeFile(managedPath, keyPair.privateKey, { encoding: 'utf8', mode: 0o600 });
+      privateKeyPath = managedPath;
+      logs.push('Rotated existing managed SSH key');
+      hooks?.onLog?.(`Rotated existing managed SSH key`);
+    } else {
+      privateKeyPath = await persistPrivateKey(radioId, keyPair.privateKey, warnings);
+    }
+
     const authKeyCmd = [
       'mkdir -p ~/.ssh',
       'chmod 700 ~/.ssh',
@@ -577,16 +587,8 @@ def load_conf(path='/etc/yahaml-publisher.conf'):
         pass
     return conf
 
-conf = load_conf()
-def cfg(key, default=''):
-    return conf.get(key) or os.environ.get(key) or default
-
-JANUS_URL        = cfg('JANUS_URL', 'http://localhost:8088/janus')
-JANUS_ROOM       = int(cfg('JANUS_ROOM', '1234'))
-ALSA_CAPTURE     = cfg('ALSA_CAPTURE', 'hw:0,0')
-ALSA_PLAYBACK    = cfg('ALSA_PLAYBACK', 'hw:0,0')
-DISPLAY_NAME     = cfg('DISPLAY_NAME', 'PiRadio')
-DOWNLINK_PORT    = int(cfg('DOWNLINK_PORT', '5006'))
+def runtime_cfg(conf, key, default=''):
+  return conf.get(key) or os.environ.get(key) or default
 
 def txn():
     return ''.join(random.choices(string.ascii_lowercase, k=8))
@@ -597,6 +599,35 @@ def post(url, body):
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read())
 
+def get(url):
+  req = urllib.request.Request(url)
+  with urllib.request.urlopen(req, timeout=15) as r:
+    return json.loads(r.read())
+
+def wait_for_rtp_port(janus_base, sid, hid, txid, timeout_sec=10):
+  deadline = time.time() + timeout_sec
+  while time.time() < deadline:
+    rid = int(time.time() * 1000)
+    try:
+      event = get(f'{janus_base}/{sid}?rid={rid}&maxev=1')
+    except Exception:
+      continue
+
+    if not isinstance(event, dict):
+      continue
+
+    # Some Janus setups include transaction on the event; others do not.
+    # Accept sender match and presence of rtp_port payload.
+    if event.get('janus') == 'event' and int(event.get('sender', 0) or 0) == hid:
+      data = (event.get('plugindata') or {}).get('data') or {}
+      rtp_port = data.get('rtp_port')
+      if rtp_port:
+        return int(rtp_port)
+
+    time.sleep(0.2)
+
+  return None
+
 def my_ip(janus_host):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -606,6 +637,14 @@ def my_ip(janus_host):
         s.close()
 
 def run():
+    conf = load_conf()
+    JANUS_URL = runtime_cfg(conf, 'JANUS_URL', 'http://localhost:8088/janus')
+    JANUS_ROOM = int(runtime_cfg(conf, 'JANUS_ROOM', '1234'))
+    ALSA_CAPTURE = runtime_cfg(conf, 'ALSA_CAPTURE', 'hw:0,0')
+    ALSA_PLAYBACK = runtime_cfg(conf, 'ALSA_PLAYBACK', 'hw:0,0')
+    DISPLAY_NAME = runtime_cfg(conf, 'DISPLAY_NAME', 'PiRadio')
+    DOWNLINK_PORT = int(runtime_cfg(conf, 'DOWNLINK_PORT', '5006'))
+
     janus_host = JANUS_URL.split('/')[2].split(':')[0]
     pi_ip = my_ip(janus_host)
     print(f'[publisher] Pi IP={pi_ip}  Janus={JANUS_URL}  Room={JANUS_ROOM}')
@@ -625,13 +664,23 @@ def run():
     })
     print(f'[publisher] Joined room {JANUS_ROOM}')
 
-    # Configure publisher - get the RTP port Janus expects us to send to
+    # Configure publisher - get the RTP port Janus expects us to send to.
+    # Janus may return immediate success OR an ack and emit the result via event polling.
+    tx_configure = txn()
     r = post(f'{JANUS_URL}/{sid}/{hid}', {
         'janus': 'message',
         'body': {'request': 'configure', 'muted': False},
-        'transaction': txn(),
+      'transaction': tx_configure,
     })
+
     rtp_uplink_port = (r.get('plugindata', {}) or {}).get('data', {}).get('rtp_port')
+    if not rtp_uplink_port and r.get('janus') == 'ack':
+      # Build Janus base URL without trailing /janus path when needed
+      janus_base = JANUS_URL
+      if janus_base.endswith('/janus'):
+        janus_base = janus_base[:-6]
+      rtp_uplink_port = wait_for_rtp_port(janus_base, sid, hid, tx_configure, timeout_sec=12)
+
     if not rtp_uplink_port:
         raise RuntimeError(f'No rtp_port from Janus configure. Full response: {json.dumps(r)}')
     print(f'[publisher] UPLINK: {ALSA_CAPTURE} -> Opus -> {janus_host}:{rtp_uplink_port}')
@@ -763,7 +812,9 @@ if __name__ == '__main__':
         '',
       ].join('\n');
 
-      const startNow = isFullyConfigured ? ' && systemctl start yahaml-audio-publisher.service' : '';
+      const startNow = isFullyConfigured
+        ? ' && (systemctl restart yahaml-audio-publisher.service || systemctl start yahaml-audio-publisher.service)'
+        : '';
       const serviceInstallCmd = [
         `printf %s ${shSingleQuote(publisherService)} > /tmp/yahaml-publisher.service`,
         sudoCommand(`install -m 0644 /tmp/yahaml-publisher.service /etc/systemd/system/yahaml-audio-publisher.service && rm -f /tmp/yahaml-publisher.service`, request.sudoPassword),

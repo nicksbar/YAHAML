@@ -421,13 +421,19 @@ async function buildRemoteProvisionRequestForRadio(
   const audioPlaybackDevice = normalizeOptionalString(body?.audioPlaybackDevice) ?? profile.audioPlaybackDevice;
 
   const janusRoomId = normalizeOptionalString(body?.janusRoomId)
-    || profile.janusRoomId
-    || await resolveRadioJanusRoomIdForProvisioning(radio);
+    || await resolveRadioJanusRoomIdForProvisioning(radio)
+    || profile.janusRoomId;
 
+  const janusClientConfig = await getJanusClientConfig();
   const resolvedJanusUrl = (() => {
     const fromBody = normalizeOptionalString(body?.yahamlJanusUrl);
     if (fromBody) return fromBody;
+
+    const fromCurrentServerRouting = normalizeOptionalString(janusClientConfig?.suggestedJanusBrowserApiUrl);
+    if (fromCurrentServerRouting) return fromCurrentServerRouting;
+
     if (profile.yahamlJanusUrl) return profile.yahamlJanusUrl;
+
     const lanIp = getServerLanIP();
     return lanIp ? `http://${lanIp}:8088/janus` : undefined;
   })();
@@ -4103,6 +4109,138 @@ app.post('/api/radios/:id/probe-remote-options', authMiddleware as express.Reque
   }
 });
 
+// Get role-aware operator status for a radio (authenticated users)
+app.get('/api/radios/:id/operator-status', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const radioId = paramAsString(req.params.id);
+    const radio = await prisma.radioConnection.findUnique({
+      where: { id: radioId },
+      include: {
+        assignments: {
+          where: { isActive: true },
+          include: { station: true },
+          orderBy: { assignedAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!radio) {
+      return res.status(404).json({ error: 'Radio not found' });
+    }
+
+    const assignment = radio.assignments[0] || null;
+    const canControl = Boolean(assignment && req.session?.stationId === assignment.stationId);
+    const controlReason = !assignment
+      ? 'Radio is unassigned'
+      : canControl
+        ? 'Assigned to your station'
+        : `Assigned to ${assignment.station?.callsign || 'another station'}`;
+
+    const voiceRoomId = voiceRoomIdForRadio(radio.id);
+    const voiceRoom = voiceRoomManager.getRoom(voiceRoomId);
+    const localParticipants = voiceRoom
+      ? Array.from(voiceRoom.participants.values()).map((participant: any) => ({
+          id: participant.id,
+          displayName: participant.displayName,
+          audioSourceType: participant.audioSourceType,
+          isMuted: Boolean(participant.isMuted),
+          volume: Number(participant.volume ?? 100),
+          isSpeaking: Boolean(participant.isSpeaking),
+        }))
+      : [];
+
+    let janusParticipants: Array<{ id: number; display: string; publisher: boolean; talking: boolean }> = [];
+    let janusParticipantError: string | null = null;
+    const janusRoomNumericId = Number(radio.janusRoomId || '');
+    if (radio.audioSourceType === 'janus' && janusAdminClient.enabled && Number.isFinite(janusRoomNumericId) && janusRoomNumericId > 0) {
+      try {
+        const participants = await janusAdminClient.listParticipants(janusRoomNumericId);
+        janusParticipants = participants.map((participant: any) => ({
+          id: Number(participant.id || 0),
+          display: String(participant.display || 'unknown'),
+          publisher: Boolean(participant.publisher),
+          talking: Boolean(participant.talking),
+        }));
+      } catch (error: any) {
+        janusParticipantError = error?.message || 'Failed to query Janus participants';
+      }
+    }
+
+    const client = radioManager.getClient(radio.id);
+    let controlState: {
+      ptt: boolean | null;
+      frequency: string | null;
+      mode: string | null;
+      power: number | null;
+      vfo: string | null;
+      stateError: string | null;
+    } = {
+      ptt: null,
+      frequency: radio.frequency || null,
+      mode: radio.mode || null,
+      power: null,
+      vfo: null,
+      stateError: null,
+    };
+
+    if (client) {
+      try {
+        const state = await client.getState();
+        controlState = {
+          ptt: state.ptt ?? null,
+          frequency: state.frequency ?? radio.frequency ?? null,
+          mode: state.mode ?? radio.mode ?? null,
+          power: typeof state.power === 'number' ? state.power : null,
+          vfo: state.vfo ?? null,
+          stateError: null,
+        };
+      } catch (error: any) {
+        controlState.stateError = error?.message || 'Failed to fetch live radio state';
+      }
+    }
+
+    return res.json({
+      radioId: radio.id,
+      radioName: radio.name,
+      isConnected: Boolean(radio.isConnected),
+      audioSourceType: radio.audioSourceType || null,
+      janusRoomId: radio.janusRoomId || null,
+      remoteProvisionStatus: radio.remoteProvisionStatus || null,
+      remoteProvisionLastError: radio.remoteProvisionLastError || null,
+      lastError: radio.lastError || null,
+      lastSeen: radio.lastSeen || null,
+      assignment: assignment
+        ? {
+            id: assignment.id,
+            stationId: assignment.stationId,
+            callsign: assignment.station?.callsign || null,
+            assignedAt: assignment.assignedAt,
+          }
+        : null,
+      permissions: {
+        canControl,
+        canListen: true,
+        reason: controlReason,
+      },
+      controlState,
+      voice: {
+        roomId: voiceRoomId,
+        localParticipantCount: localParticipants.length,
+        localParticipants,
+        janusParticipantCount: janusParticipants.length,
+        janusParticipants,
+      },
+      janus: {
+        configured: janusAdminClient.enabled,
+        participantError: janusParticipantError,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch radio operator status' });
+  }
+});
+
 // Start/connect radio
 app.post('/api/radios/:id/start', async (req, res) => {
   try {
@@ -5260,6 +5398,33 @@ app.get('/api/voice-rooms', authMiddleware as express.RequestHandler, async (_re
     })));
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/voice-rooms/me', authMiddleware as express.RequestHandler, async (req: AuthRequest, res) => {
+  try {
+    const stationId = req.session?.stationId;
+    if (!stationId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const roomId = voiceRoomManager.getParticipantRoom(stationId);
+    const room = roomId ? voiceRoomManager.getRoom(roomId) : null;
+
+    return res.json({
+      stationId,
+      roomId: roomId || null,
+      room: room
+        ? {
+            id: room.id,
+            name: room.name,
+            description: room.description,
+            radioId: room.radioId,
+          }
+        : null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || 'Failed to fetch participant room' });
   }
 });
 

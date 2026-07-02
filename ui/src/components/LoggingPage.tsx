@@ -71,7 +71,7 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     if (!Number.isFinite(raw)) return 100
     return Math.max(0, Math.min(100, Math.round(raw)))
   })
-  const [radioAudioPtt, setRadioAudioPtt] = useState(() => localStorage.getItem('yahaml:radioAudioPtt') === 'true')
+  const [radioAudioPtt, setRadioAudioPtt] = useState(false)
   const [, setJanusStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
   const [, setJanusTransportStats] = useState<{
     iceState: string
@@ -1200,16 +1200,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   useEffect(() => {
     const onSharedAudioSettings = (event: Event) => {
-      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number; ptt?: boolean }>
+      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number }>
       if (customEvent.detail?.source !== 'app') return
 
       const nextMuted = Boolean(customEvent.detail?.muted)
-      const nextPtt = Boolean(customEvent.detail?.ptt)
       const nextVolume = Number(customEvent.detail?.volume)
       syncingSharedAudioRef.current = true
 
       setRadioAudioMuted((prev) => (prev === nextMuted ? prev : nextMuted))
-      setRadioAudioPtt((prev) => (prev === nextPtt ? prev : nextPtt))
       if (Number.isFinite(nextVolume)) {
         const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
         setRadioAudioVolume((prev) => (prev === safeVolume ? prev : safeVolume))
@@ -1229,16 +1227,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
     localStorage.setItem('yahaml:radioAudioMuted', String(radioAudioMuted))
     localStorage.setItem('yahaml:radioAudioVolume', String(radioAudioVolume))
-    localStorage.setItem('yahaml:radioAudioPtt', String(radioAudioPtt))
     window.dispatchEvent(new CustomEvent('yahaml:radioAudioSettings', {
       detail: {
         source: 'logging',
         muted: radioAudioMuted,
         volume: radioAudioVolume,
-        ptt: radioAudioPtt,
       },
     }))
-  }, [radioAudioMuted, radioAudioVolume, radioAudioPtt])
+  }, [radioAudioMuted, radioAudioVolume])
 
   // Update audio volume/mute when controls change
   useEffect(() => {
