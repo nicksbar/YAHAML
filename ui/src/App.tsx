@@ -12,278 +12,41 @@ import { LoggingPage } from './components/LoggingPage'
 import { VoiceRoomPanel } from './components/VoiceRoomPanel'
 import { JanusRoomsAdmin } from './components/JanusRoomsAdmin'
 import { buildJanusApiCandidates, resolveWebSocketUrl } from './routing'
-type BandActivity = {
-  id: string
-  band: string
-  mode: string
-  lastSeen: string
-  power?: number | null
-}
-
-type NetworkStatus = {
-  isConnected: boolean
-  ip?: string | null
-  lastConnected?: string | null
-}
-
-type Station = {
-  id: string
-  callsign: string
-  name: string
-  class?: string | null
-  section?: string | null
-  grid?: string | null
-  currentBand?: string | null
-  currentMode?: string | null
-  bandActivities: BandActivity[]
-  networkStatus?: NetworkStatus | null
-  _count: {
-    qsoLogs: number
-    contextLogs: number
-  }
-}
-
-type ContextLog = {
-  id: string
-  level: string
-  category: string
-  message: string
-  createdAt: string
-}
-
-type QsoLog = {
-  id: string
-  callsign: string
-  band: string
-  mode: string
-  qsoDate: string
-  qsoTime: string
-  points: number
-}
-
-type ServiceStatus = {
-  api: {
-    name: string
-    port: number
-    status: string
-    url: string
-  }
-  relay: {
-    name: string
-    port: number
-    status: string
-    protocol: string
-    encoding: string
-    url: string
-  }
-  udp: {
-    name: string
-    port: number
-    status: string
-    protocol: string
-    url: string
-  }
-}
-
-type Contest = {
-  id: string
-  name: string
-  isActive: boolean
-  mode: string
-  startTime?: string | null
-  endTime?: string | null
-  duration?: number | null
-  scoringMode: string
-  pointsPerQso: number
-  totalQsos: number
-  totalPoints: number
-  createdAt: string
-}
-
-type RadioConnection = {
-  id: string
-  name: string
-  host: string
-  port: number
-  connectionType?: 'hamlib' | 'mock'
-  manufacturer?: string | null
-  model?: string | null
-  isConnected: boolean
-  lastSeen?: string | null
-  lastError?: string | null
-  frequency?: string | null
-  mode?: string | null
-  bandwidth?: number | null
-  power?: number | null
-  pollInterval: number
-  isEnabled: boolean
-  createdAt: string
-  audioSourceType?: string | null
-  janusRoomId?: string | null
-  janusStreamId?: string | null
-  httpStreamUrl?: string | null
-  remoteSshHost?: string | null
-  remoteSshPort?: number | null
-  remoteSshUser?: string | null
-  remoteSshPublicKey?: string | null
-  remoteHasStoredSshKey?: boolean
-  remoteProvisionedAt?: string | null
-  remoteProvisionStatus?: string | null
-  remoteProvisionLastError?: string | null
-  assignments?: RadioAssignment[]
-}
-
-type RadioAssignment = {
-  id: string
-  radioId: string
-  stationId: string
-  isActive: boolean
-  assignedAt: string
-  unassignedAt?: string | null
-  radio?: RadioConnection
-  station?: Station
-}
-type RadioOperatorStatus = {
-  radioId: string
-  radioName: string
-  isConnected: boolean
-  audioSourceType?: string | null
-  janusRoomId?: string | null
-  remoteProvisionStatus?: string | null
-  remoteProvisionLastError?: string | null
-  lastError?: string | null
-  assignment: {
-    id: string
-    stationId: string
-    callsign?: string | null
-    assignedAt: string
-  } | null
-  permissions: {
-    canControl: boolean
-    canListen: boolean
-    reason: string
-  }
-  controlState?: {
-    ptt: boolean | null
-    frequency: string | null
-    mode: string | null
-    power: number | null
-    vfo: string | null
-    stateError: string | null
-  }
-  voice: {
-    roomId: string
-    localParticipantCount: number
-    janusParticipantCount: number
-    localParticipants: Array<{
-      id: string
-      displayName: string
-      audioSourceType: string
-      isMuted: boolean
-      volume: number
-      isSpeaking?: boolean
-    }>
-    janusParticipants: Array<{
-      id: number
-      display: string
-      publisher: boolean
-      talking: boolean
-    }>
-  }
-  janus: {
-    configured: boolean
-    participantError: string | null
-  }
-}
+import {
+  formatFrequencyInputMHz,
+  formatFrequencyMHz,
+  frequencyToBand,
+  toFrequencyHz,
+} from './utils/frequency'
+import type {
+  ContextLog,
+  Contest,
+  JanusClientConfig,
+  N3fjpForwarderConfig,
+  QsoLog,
+  RadioAssignment,
+  RadioConnection,
+  RadioOperatorStatus,
+  RigModelOption,
+  ServiceStatus,
+  Station,
+  ViewType,
+} from './types/app'
+import {
+  ADVANCED_MODE_OPTIONS,
+  BAND_PRESETS,
+  COMMON_RIG_MODEL_OPTIONS,
+  CW_MODE_OPTIONS,
+  DIGITAL_MODE_OPTIONS,
+  MODE_DESCRIPTIONS,
+  OPERATOR_MODE_OPTIONS,
+  PHONE_MODE_OPTIONS,
+  TUNE_STEP_OPTIONS,
+} from './constants/radio'
 
 const storageKey = 'yahaml:callsign'
 const sessionTokenKey = 'yahaml:sessionToken'
 const browserIdKey = 'yahaml:browserId'
-
-type ViewType = 'dashboard' | 'opsmap' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
-
-type N3fjpForwarderConfig = {
-  enabled: boolean
-  host: string
-  port: number
-  timeoutMs: number
-}
-
-type JanusClientConfig = {
-  browserApiOverride: string | null
-  proxyHostOverride: string | null
-  allowedHostOverrides: string[]
-  janusServerApiUrl: string | null
-  globalHostOverride: string | null
-  janusHostOverride: string | null
-  apiHostOverride: string | null
-  wsHostOverride: string | null
-  serverLanIp: string | null
-  suggestedJanusBrowserApiUrl: string | null
-}
-
-type RigModelOption = {
-  modelId: number
-  label: string
-}
-
-const PHONE_MODE_OPTIONS = ['LSB', 'USB', 'AM', 'FM', 'WFM', 'DSB']
-const CW_MODE_OPTIONS = ['CW', 'CWR']
-const DIGITAL_MODE_OPTIONS = ['PKTLSB', 'PKTUSB', 'PKTFM', 'RTTY', 'RTTYR', 'FAX']
-const ADVANCED_MODE_OPTIONS = ['ECSSLSB', 'ECSSUSB', 'SAM', 'SAH', 'SAL', 'AMS']
-const TUNE_STEP_OPTIONS = [10, 50, 100, 500, 1000]
-
-const COMMON_RIG_MODEL_OPTIONS: RigModelOption[] = [
-  { modelId: 3073, label: 'Icom IC-7300' },
-  { modelId: 3077, label: 'Icom IC-7610' },
-  { modelId: 1045, label: 'Yaesu FTDX101MP' },
-  { modelId: 1035, label: 'Yaesu FT-991A' },
-  { modelId: 2014, label: 'Kenwood TS-590SG' },
-  { modelId: 2027, label: 'Elecraft K3' },
-]
-
-// Mode descriptions for tooltips
-const MODE_DESCRIPTIONS: Record<string, string> = {
-  // Phone modes
-  'LSB': 'Lower Sideband - Standard voice mode below 10 MHz',
-  'USB': 'Upper Sideband - Standard voice mode above 10 MHz',
-  'AM': 'Amplitude Modulation - Broadcast-style modulation',
-  'FM': 'Frequency Modulation - High-fidelity VHF/UHF voice',
-  'WFM': 'Wideband FM - Broadcast-style VHF reception',
-  'DSB': 'Double Sideband - Full bandwidth voice transmission',
-  // CW modes
-  'CW': 'Continuous Wave - Morse code transmission',
-  'CWR': 'Continuous Wave Reverse - For receiving reversed signals',
-  // Digital modes
-  'PKTLSB': 'Packet Lower Sideband - Digital data on LSB',
-  'PKTUSB': 'Packet Upper Sideband - Digital data on USB',
-  'PKTFM': 'Packet FM - Digital data on FM',
-  'RTTY': 'Radio Teleprinter - Shift keying digital mode',
-  'RTTYR': 'RTTY Reverse - For receiving reversed RTTY',
-  'FAX': 'Facsimile - Weather/chart transmission',
-  // Advanced modes
-  'ECSSLSB': 'Exalted Carrier Single Sideband Lower - Specialized analytical reception',
-  'ECSSUSB': 'Exalted Carrier Single Sideband Upper - Specialized analytical reception',
-  'SAM': 'Synchronous AM Detection - Coherent AM demodulation',
-  'SAH': 'Sideband AM High - High-frequency sideband extraction',
-  'SAL': 'Sideband AM Low - Low-frequency sideband extraction',
-  'AMS': 'Amplitude Modulation Suppressed - DSB without carrier',
-}
-const OPERATOR_MODE_OPTIONS = ['LSB', 'USB', 'CW', 'CWR', 'AM', 'FM', 'PKTUSB', 'RTTY']
-const BAND_PRESETS = [
-  { label: '160m', frequencyHz: 1900000 },
-  { label: '80m', frequencyHz: 3750000 },
-  { label: '60m', frequencyHz: 5367000 },
-  { label: '40m', frequencyHz: 7150000 },
-  { label: '30m', frequencyHz: 10125000 },
-  { label: '20m', frequencyHz: 14250000 },
-  { label: '17m', frequencyHz: 18100000 },
-  { label: '15m', frequencyHz: 21250000 },
-  { label: '12m', frequencyHz: 24920000 },
-  { label: '10m', frequencyHz: 28400000 },
-  { label: '6m', frequencyHz: 50300000 },
-  { label: '2m', frequencyHz: 146520000 },
-]
 
 function resolveDefaultJanusUrlFromOverride(rawHostOrUrl: string): string {
   const fallbackHost = window.location.hostname
@@ -597,26 +360,6 @@ function App() {
     }
   }
 
-  const formatFrequencyMHz = (frequency?: string | null) => {
-    if (!frequency) return '---.---'
-    const hz = parseInt(frequency, 10)
-    if (Number.isNaN(hz)) return '---.---'
-    return (hz / 1_000_000).toFixed(3)
-  }
-
-  const toFrequencyHz = (input: string) => {
-    const normalized = input.trim()
-    if (!normalized) return null
-    const mhz = Number(normalized)
-    if (Number.isNaN(mhz)) return null
-    return Math.round(mhz * 1_000_000)
-  }
-
-  const formatFrequencyInputMHz = (hz: number) => {
-    const mhz = hz / 1_000_000
-    return mhz.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
-  }
-
   const formatPowerLabel = (power?: number | null) => {
     if (power === null || power === undefined) return null
     const p = Number(power)
@@ -645,17 +388,8 @@ function App() {
 
   const frequencyToBandLabel = (frequency?: string | null) => {
     if (!frequency) return '---'
-    const freq = parseInt(frequency, 10)
-    if (Number.isNaN(freq)) return '---'
-    if (freq >= 1800000 && freq <= 2000000) return '160m'
-    if (freq >= 3500000 && freq <= 4000000) return '80m'
-    if (freq >= 7000000 && freq <= 7300000) return '40m'
-    if (freq >= 14000000 && freq <= 14350000) return '20m'
-    if (freq >= 21000000 && freq <= 21450000) return '15m'
-    if (freq >= 28000000 && freq <= 29700000) return '10m'
-    if (freq >= 50000000 && freq <= 54000000) return '6m'
-    if (freq >= 144000000 && freq <= 148000000) return '2m'
-    return 'Other'
+    const band = frequencyToBand(frequency)
+    return band || 'Other'
   }
 
   const markRadioStateUpdate = (source: 'ws' | 'poll') => {

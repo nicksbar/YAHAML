@@ -7,54 +7,20 @@ import { CWDecoder } from './CWDecoder'
 import { useLoggingContext } from '../hooks/useLoggingContext'
 import { useQSOSubmit } from '../hooks/useQSOSubmit'
 import { buildJanusApiCandidates, resolveWebSocketUrl } from '../routing'
-
-interface LoggingPageProps {
-  stationId: string
-  isActive?: boolean
-}
-
-type LoggingTab = 'standard' | 'gota'
-
-type RadioInfo = {
-  id?: string
-  name?: string
-  host?: string
-  port?: number
-  isConnected?: boolean
-  audioSourceType?: string
-  janusRoomId?: string | number
-  janusStreamId?: string | number
-  httpStreamUrl?: string
-  frequency?: string | number | null
-  mode?: string | null
-  bandwidth?: number | null
-  power?: number | null
-  ptt?: boolean | null
-}
-
-type AssignedRadioInfo = {
-  id?: string
-  isActive?: boolean
-  radio?: RadioInfo
-}
-
-type RadioStateInfo = {
-  frequency?: string | number | null
-  mode?: string | null
-  bandwidth?: number | null
-  power?: number | null
-  ptt?: boolean | null
-  vfo?: string | null
-  isConnected?: boolean
-  lastError?: string | null
-}
-
-type JanusConnection = {
-  sessionId?: number
-  audio?: HTMLAudioElement
-  cleanup?: () => Promise<void>
-  [key: string]: unknown
-}
+import type {
+  AssignedRadioInfo,
+  JanusConnection,
+  LoggingPageProps,
+  LoggingTab,
+  RadioInfo,
+  RadioStateInfo,
+} from '../types/logging'
+import {
+  bandToFrequencyHz,
+  formatFrequencyMHz,
+  frequencyToBand,
+  normalizeBandForOccupancy,
+} from '../utils/frequency'
 
 export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const { contest, stations, loading, error } = useLoggingContext({ pollInterval: 5000 })
@@ -644,55 +610,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
           // ignore
         }
       }
-    }
-  }
-
-  const formatFrequencyMHz = (freq?: string | null) => {
-    if (!freq) return '---.---'
-    const value = parseFloat(freq)
-    if (Number.isNaN(value)) return '---.---'
-    return (value / 1_000_000).toFixed(3)
-  }
-
-  const frequencyToBand = (freq?: string | number | null) => {
-    if (freq === null || freq === undefined) return ''
-    const value = typeof freq === 'number' ? freq : Number.parseInt(String(freq), 10)
-    if (!Number.isFinite(value) || value <= 0) return ''
-    if (value >= 1800000 && value <= 2000000) return '160m'
-    if (value >= 3500000 && value <= 4000000) return '80m'
-    if (value >= 7000000 && value <= 7300000) return '40m'
-    if (value >= 14000000 && value <= 14350000) return '20m'
-    if (value >= 21000000 && value <= 21450000) return '15m'
-    if (value >= 28000000 && value <= 29700000) return '10m'
-    if (value >= 50000000 && value <= 54000000) return '6m'
-    if (value >= 144000000 && value <= 148000000) return '2m'
-    if (value >= 420000000 && value <= 450000000) return '70cm'
-    return ''
-  }
-
-  const bandToFrequencyHz = (bandValue?: string | null): number | null => {
-    if (!bandValue) return null
-    const normalized = bandValue.trim().toLowerCase()
-    if (!normalized) return null
-
-    const compact = normalized.replace(/\s+/g, '')
-    const mhzBand = compact.endsWith('m') ? compact.slice(0, -1) : compact
-
-    if (compact.endsWith('cm')) {
-      if (compact === '70cm') return 433500000
-      return null
-    }
-
-    switch (mhzBand) {
-      case '160': return 1900000
-      case '80': return 3750000
-      case '40': return 7150000
-      case '20': return 14250000
-      case '15': return 21250000
-      case '10': return 28400000
-      case '6': return 50300000
-      case '2': return 146520000
-      default: return null
     }
   }
 
@@ -1402,22 +1319,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       setLastQsoId(result.id)
       setTimeout(() => setLastQsoId(null), 2000)
     }
-  }
-
-  const normalizeBandForOccupancy = (value: string) => {
-    const trimmed = value.trim()
-    if (!trimmed) return ''
-    const lower = trimmed.toLowerCase()
-
-    if (lower.endsWith('cm')) {
-      return trimmed.toUpperCase()
-    }
-
-    if (lower.endsWith('m')) {
-      return trimmed.slice(0, -1).toUpperCase()
-    }
-
-    return trimmed.toUpperCase()
   }
 
   const applyBandModeToAssignedRadio = async ({

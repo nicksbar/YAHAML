@@ -1,31 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { resolveWebSocketUrl } from '../routing'
-
-interface VoiceRoom {
-  id: string
-  name: string
-  description?: string
-  radioId?: string | null
-  participantCount: number
-  maxParticipants?: number
-  createdAt: string
-  isActive: boolean
-}
-
-interface Participant {
-  id: string
-  displayName: string
-  joinedAt: string
-  isActive: boolean
-  audioSourceType: 'microphone' | 'radio' | 'janus' | 'http-stream' | 'system'
-  role?: 'operator' | 'listener'
-}
-
-interface VoiceRoomProps {
-  stationId?: string
-  sessionToken?: string
-  compact?: boolean
-}
+import type { Participant, SignalMessage, VoiceRoom, VoiceRoomProps } from '../types/voice'
 
 export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: VoiceRoomProps) {
   const [rooms, setRooms] = useState<VoiceRoom[]>([])
@@ -43,12 +18,6 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map())
   const remoteAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const wsRef = useRef<WebSocket | null>(null)
-
-  type SignalMessage = {
-    from: string
-    type: 'offer' | 'answer' | 'ice-candidate'
-    data: unknown
-  }
 
   const getAuthHeaders = useCallback(
     (): Record<string, string> => (sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
