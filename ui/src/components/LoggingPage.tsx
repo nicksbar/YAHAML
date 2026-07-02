@@ -7,54 +7,20 @@ import { CWDecoder } from './CWDecoder'
 import { useLoggingContext } from '../hooks/useLoggingContext'
 import { useQSOSubmit } from '../hooks/useQSOSubmit'
 import { buildJanusApiCandidates, resolveWebSocketUrl } from '../routing'
-
-interface LoggingPageProps {
-  stationId: string
-  isActive?: boolean
-}
-
-type LoggingTab = 'standard' | 'gota'
-
-type RadioInfo = {
-  id?: string
-  name?: string
-  host?: string
-  port?: number
-  isConnected?: boolean
-  audioSourceType?: string
-  janusRoomId?: string | number
-  janusStreamId?: string | number
-  httpStreamUrl?: string
-  frequency?: string | number | null
-  mode?: string | null
-  bandwidth?: number | null
-  power?: number | null
-  ptt?: boolean | null
-}
-
-type AssignedRadioInfo = {
-  id?: string
-  isActive?: boolean
-  radio?: RadioInfo
-}
-
-type RadioStateInfo = {
-  frequency?: string | number | null
-  mode?: string | null
-  bandwidth?: number | null
-  power?: number | null
-  ptt?: boolean | null
-  vfo?: string | null
-  isConnected?: boolean
-  lastError?: string | null
-}
-
-type JanusConnection = {
-  sessionId?: number
-  audio?: HTMLAudioElement
-  cleanup?: () => Promise<void>
-  [key: string]: unknown
-}
+import type {
+  AssignedRadioInfo,
+  JanusConnection,
+  LoggingPageProps,
+  LoggingTab,
+  RadioInfo,
+  RadioStateInfo,
+} from '../types/logging'
+import {
+  bandToFrequencyHz,
+  formatFrequencyMHz,
+  frequencyToBand,
+  normalizeBandForOccupancy,
+} from '../utils/frequency'
 
 export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
   const { contest, stations, loading, error } = useLoggingContext({ pollInterval: 5000 })
@@ -71,7 +37,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     if (!Number.isFinite(raw)) return 100
     return Math.max(0, Math.min(100, Math.round(raw)))
   })
-  const [radioAudioPtt, setRadioAudioPtt] = useState(() => localStorage.getItem('yahaml:radioAudioPtt') === 'true')
   const [, setJanusStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle')
   const [, setJanusTransportStats] = useState<{
     iceState: string
@@ -647,55 +612,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
   }
 
-  const formatFrequencyMHz = (freq?: string | null) => {
-    if (!freq) return '---.---'
-    const value = parseFloat(freq)
-    if (Number.isNaN(value)) return '---.---'
-    return (value / 1_000_000).toFixed(3)
-  }
-
-  const frequencyToBand = (freq?: string | number | null) => {
-    if (freq === null || freq === undefined) return ''
-    const value = typeof freq === 'number' ? freq : Number.parseInt(String(freq), 10)
-    if (!Number.isFinite(value) || value <= 0) return ''
-    if (value >= 1800000 && value <= 2000000) return '160m'
-    if (value >= 3500000 && value <= 4000000) return '80m'
-    if (value >= 7000000 && value <= 7300000) return '40m'
-    if (value >= 14000000 && value <= 14350000) return '20m'
-    if (value >= 21000000 && value <= 21450000) return '15m'
-    if (value >= 28000000 && value <= 29700000) return '10m'
-    if (value >= 50000000 && value <= 54000000) return '6m'
-    if (value >= 144000000 && value <= 148000000) return '2m'
-    if (value >= 420000000 && value <= 450000000) return '70cm'
-    return ''
-  }
-
-  const bandToFrequencyHz = (bandValue?: string | null): number | null => {
-    if (!bandValue) return null
-    const normalized = bandValue.trim().toLowerCase()
-    if (!normalized) return null
-
-    const compact = normalized.replace(/\s+/g, '')
-    const mhzBand = compact.endsWith('m') ? compact.slice(0, -1) : compact
-
-    if (compact.endsWith('cm')) {
-      if (compact === '70cm') return 433500000
-      return null
-    }
-
-    switch (mhzBand) {
-      case '160': return 1900000
-      case '80': return 3750000
-      case '40': return 7150000
-      case '20': return 14250000
-      case '15': return 21250000
-      case '10': return 28400000
-      case '6': return 50300000
-      case '2': return 146520000
-      default: return null
-    }
-  }
-
   useEffect(() => {
     if (!isActive) return
     const callsign = localStorage.getItem('yahaml:callsign') || 'Not set'
@@ -1200,16 +1116,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
 
   useEffect(() => {
     const onSharedAudioSettings = (event: Event) => {
-      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number; ptt?: boolean }>
+      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number }>
       if (customEvent.detail?.source !== 'app') return
 
       const nextMuted = Boolean(customEvent.detail?.muted)
-      const nextPtt = Boolean(customEvent.detail?.ptt)
       const nextVolume = Number(customEvent.detail?.volume)
       syncingSharedAudioRef.current = true
 
       setRadioAudioMuted((prev) => (prev === nextMuted ? prev : nextMuted))
-      setRadioAudioPtt((prev) => (prev === nextPtt ? prev : nextPtt))
       if (Number.isFinite(nextVolume)) {
         const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
         setRadioAudioVolume((prev) => (prev === safeVolume ? prev : safeVolume))
@@ -1229,16 +1143,14 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
     }
     localStorage.setItem('yahaml:radioAudioMuted', String(radioAudioMuted))
     localStorage.setItem('yahaml:radioAudioVolume', String(radioAudioVolume))
-    localStorage.setItem('yahaml:radioAudioPtt', String(radioAudioPtt))
     window.dispatchEvent(new CustomEvent('yahaml:radioAudioSettings', {
       detail: {
         source: 'logging',
         muted: radioAudioMuted,
         volume: radioAudioVolume,
-        ptt: radioAudioPtt,
       },
     }))
-  }, [radioAudioMuted, radioAudioVolume, radioAudioPtt])
+  }, [radioAudioMuted, radioAudioVolume])
 
   // Update audio volume/mute when controls change
   useEffect(() => {
@@ -1247,11 +1159,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       radioAudioRef.current.muted = radioAudioMuted
     }
   }, [radioAudioVolume, radioAudioMuted])
-
-  useEffect(() => {
-    if (radioState?.ptt === null || radioState?.ptt === undefined) return
-    setRadioAudioPtt(Boolean(radioState.ptt))
-  }, [radioState?.ptt])
 
   // Update EQ when bass/mid/treble change
   useEffect(() => {
@@ -1406,22 +1313,6 @@ export function LoggingPage({ stationId, isActive = true }: LoggingPageProps) {
       setLastQsoId(result.id)
       setTimeout(() => setLastQsoId(null), 2000)
     }
-  }
-
-  const normalizeBandForOccupancy = (value: string) => {
-    const trimmed = value.trim()
-    if (!trimmed) return ''
-    const lower = trimmed.toLowerCase()
-
-    if (lower.endsWith('cm')) {
-      return trimmed.toUpperCase()
-    }
-
-    if (lower.endsWith('m')) {
-      return trimmed.slice(0, -1).toUpperCase()
-    }
-
-    return trimmed.toUpperCase()
   }
 
   const applyBandModeToAssignedRadio = async ({

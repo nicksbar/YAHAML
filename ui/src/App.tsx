@@ -12,226 +12,41 @@ import { LoggingPage } from './components/LoggingPage'
 import { VoiceRoomPanel } from './components/VoiceRoomPanel'
 import { JanusRoomsAdmin } from './components/JanusRoomsAdmin'
 import { buildJanusApiCandidates, resolveWebSocketUrl } from './routing'
-type BandActivity = {
-  id: string
-  band: string
-  mode: string
-  lastSeen: string
-  power?: number | null
-}
-
-type NetworkStatus = {
-  isConnected: boolean
-  ip?: string | null
-  lastConnected?: string | null
-}
-
-type Station = {
-  id: string
-  callsign: string
-  name: string
-  class?: string | null
-  section?: string | null
-  grid?: string | null
-  currentBand?: string | null
-  currentMode?: string | null
-  bandActivities: BandActivity[]
-  networkStatus?: NetworkStatus | null
-  _count: {
-    qsoLogs: number
-    contextLogs: number
-  }
-}
-
-type ContextLog = {
-  id: string
-  level: string
-  category: string
-  message: string
-  createdAt: string
-}
-
-type QsoLog = {
-  id: string
-  callsign: string
-  band: string
-  mode: string
-  qsoDate: string
-  qsoTime: string
-  points: number
-}
-
-type ServiceStatus = {
-  api: {
-    name: string
-    port: number
-    status: string
-    url: string
-  }
-  relay: {
-    name: string
-    port: number
-    status: string
-    protocol: string
-    encoding: string
-    url: string
-  }
-  udp: {
-    name: string
-    port: number
-    status: string
-    protocol: string
-    url: string
-  }
-}
-
-type Contest = {
-  id: string
-  name: string
-  isActive: boolean
-  mode: string
-  startTime?: string | null
-  endTime?: string | null
-  duration?: number | null
-  scoringMode: string
-  pointsPerQso: number
-  totalQsos: number
-  totalPoints: number
-  createdAt: string
-}
-
-type RadioConnection = {
-  id: string
-  name: string
-  host: string
-  port: number
-  connectionType?: 'hamlib' | 'mock'
-  manufacturer?: string | null
-  model?: string | null
-  isConnected: boolean
-  lastSeen?: string | null
-  lastError?: string | null
-  frequency?: string | null
-  mode?: string | null
-  bandwidth?: number | null
-  power?: number | null
-  pollInterval: number
-  isEnabled: boolean
-  createdAt: string
-  audioSourceType?: string | null
-  janusRoomId?: string | null
-  janusStreamId?: string | null
-  httpStreamUrl?: string | null
-  remoteSshHost?: string | null
-  remoteSshPort?: number | null
-  remoteSshUser?: string | null
-  remoteSshPublicKey?: string | null
-  remoteSshPrivateKeyPath?: string | null
-  remoteProvisionedAt?: string | null
-  remoteProvisionStatus?: string | null
-  remoteProvisionLastError?: string | null
-  assignments?: RadioAssignment[]
-}
-
-type RadioAssignment = {
-  id: string
-  radioId: string
-  stationId: string
-  isActive: boolean
-  assignedAt: string
-  unassignedAt?: string | null
-  radio?: RadioConnection
-  station?: Station
-}
+import {
+  formatFrequencyInputMHz,
+  formatFrequencyMHz,
+  frequencyToBand,
+  toFrequencyHz,
+} from './utils/frequency'
+import type {
+  ContextLog,
+  Contest,
+  JanusClientConfig,
+  N3fjpForwarderConfig,
+  QsoLog,
+  RadioAssignment,
+  RadioConnection,
+  RadioOperatorStatus,
+  RigModelOption,
+  ServiceStatus,
+  Station,
+  ViewType,
+} from './types/app'
+import {
+  ADVANCED_MODE_OPTIONS,
+  BAND_PRESETS,
+  COMMON_RIG_MODEL_OPTIONS,
+  CW_MODE_OPTIONS,
+  DIGITAL_MODE_OPTIONS,
+  MODE_DESCRIPTIONS,
+  OPERATOR_MODE_OPTIONS,
+  PHONE_MODE_OPTIONS,
+  TUNE_STEP_OPTIONS,
+} from './constants/radio'
 
 const storageKey = 'yahaml:callsign'
 const sessionTokenKey = 'yahaml:sessionToken'
 const browserIdKey = 'yahaml:browserId'
-
-type ViewType = 'dashboard' | 'opsmap' | 'club' | 'contests' | 'station' | 'logging' | 'rig' | 'admin' | 'debug'
-
-type N3fjpForwarderConfig = {
-  enabled: boolean
-  host: string
-  port: number
-  timeoutMs: number
-}
-
-type JanusClientConfig = {
-  browserApiOverride: string | null
-  proxyHostOverride: string | null
-  allowedHostOverrides: string[]
-  janusServerApiUrl: string | null
-  globalHostOverride: string | null
-  janusHostOverride: string | null
-  apiHostOverride: string | null
-  wsHostOverride: string | null
-  serverLanIp: string | null
-  suggestedJanusBrowserApiUrl: string | null
-}
-
-type RigModelOption = {
-  modelId: number
-  label: string
-}
-
-const PHONE_MODE_OPTIONS = ['LSB', 'USB', 'AM', 'FM', 'WFM', 'DSB']
-const CW_MODE_OPTIONS = ['CW', 'CWR']
-const DIGITAL_MODE_OPTIONS = ['PKTLSB', 'PKTUSB', 'PKTFM', 'RTTY', 'RTTYR', 'FAX']
-const ADVANCED_MODE_OPTIONS = ['ECSSLSB', 'ECSSUSB', 'SAM', 'SAH', 'SAL', 'AMS']
-const TUNE_STEP_OPTIONS = [10, 50, 100, 500, 1000]
-
-const COMMON_RIG_MODEL_OPTIONS: RigModelOption[] = [
-  { modelId: 3073, label: 'Icom IC-7300' },
-  { modelId: 3077, label: 'Icom IC-7610' },
-  { modelId: 1045, label: 'Yaesu FTDX101MP' },
-  { modelId: 1035, label: 'Yaesu FT-991A' },
-  { modelId: 2014, label: 'Kenwood TS-590SG' },
-  { modelId: 2027, label: 'Elecraft K3' },
-]
-
-// Mode descriptions for tooltips
-const MODE_DESCRIPTIONS: Record<string, string> = {
-  // Phone modes
-  'LSB': 'Lower Sideband - Standard voice mode below 10 MHz',
-  'USB': 'Upper Sideband - Standard voice mode above 10 MHz',
-  'AM': 'Amplitude Modulation - Broadcast-style modulation',
-  'FM': 'Frequency Modulation - High-fidelity VHF/UHF voice',
-  'WFM': 'Wideband FM - Broadcast-style VHF reception',
-  'DSB': 'Double Sideband - Full bandwidth voice transmission',
-  // CW modes
-  'CW': 'Continuous Wave - Morse code transmission',
-  'CWR': 'Continuous Wave Reverse - For receiving reversed signals',
-  // Digital modes
-  'PKTLSB': 'Packet Lower Sideband - Digital data on LSB',
-  'PKTUSB': 'Packet Upper Sideband - Digital data on USB',
-  'PKTFM': 'Packet FM - Digital data on FM',
-  'RTTY': 'Radio Teleprinter - Shift keying digital mode',
-  'RTTYR': 'RTTY Reverse - For receiving reversed RTTY',
-  'FAX': 'Facsimile - Weather/chart transmission',
-  // Advanced modes
-  'ECSSLSB': 'Exalted Carrier Single Sideband Lower - Specialized analytical reception',
-  'ECSSUSB': 'Exalted Carrier Single Sideband Upper - Specialized analytical reception',
-  'SAM': 'Synchronous AM Detection - Coherent AM demodulation',
-  'SAH': 'Sideband AM High - High-frequency sideband extraction',
-  'SAL': 'Sideband AM Low - Low-frequency sideband extraction',
-  'AMS': 'Amplitude Modulation Suppressed - DSB without carrier',
-}
-const OPERATOR_MODE_OPTIONS = ['LSB', 'USB', 'CW', 'CWR', 'AM', 'FM', 'PKTUSB', 'RTTY']
-const BAND_PRESETS = [
-  { label: '160m', frequencyHz: 1900000 },
-  { label: '80m', frequencyHz: 3750000 },
-  { label: '60m', frequencyHz: 5367000 },
-  { label: '40m', frequencyHz: 7150000 },
-  { label: '30m', frequencyHz: 10125000 },
-  { label: '20m', frequencyHz: 14250000 },
-  { label: '17m', frequencyHz: 18100000 },
-  { label: '15m', frequencyHz: 21250000 },
-  { label: '12m', frequencyHz: 24920000 },
-  { label: '10m', frequencyHz: 28400000 },
-  { label: '6m', frequencyHz: 50300000 },
-  { label: '2m', frequencyHz: 146520000 },
-]
 
 function resolveDefaultJanusUrlFromOverride(rawHostOrUrl: string): string {
   const fallbackHost = window.location.hostname
@@ -392,6 +207,8 @@ function App() {
     info?: string
     error?: string
   }>>({})
+    const [radioOperatorStatuses, setRadioOperatorStatuses] = useState<Record<string, RadioOperatorStatus>>({})
+    const [radioOperatorStatusLoading, setRadioOperatorStatusLoading] = useState(false)
   const [radioLiveState, setRadioLiveState] = useState<Record<string, any>>({})
   const [radioControlInputs, setRadioControlInputs] = useState<Record<string, { frequency: string; power: string; mode: string; bandwidth: string; raw: string }>>({})
   const [assignedRadio, setAssignedRadio] = useState<RadioAssignment | null>(null)
@@ -405,7 +222,6 @@ function App() {
     if (!Number.isFinite(raw)) return 100
     return Math.max(0, Math.min(100, Math.round(raw)))
   })
-  const [radioAudioPtt, setRadioAudioPtt] = useState(() => localStorage.getItem('yahaml:radioAudioPtt') === 'true')
   const [globalTuneStepHz, setGlobalTuneStepHz] = useState(100)
   const [globalOpsPicker, setGlobalOpsPicker] = useState<'band' | 'mode' | 'step' | null>(null)
   const [radioStateSource, setRadioStateSource] = useState<'idle' | 'ws' | 'poll'>('idle')
@@ -418,6 +234,7 @@ function App() {
   const sessionRestoreInFlightRef = useRef(false)
   const lastRadioStateUpdateAtRef = useRef<number>(0)
   const syncingSharedAudioRef = useRef(false)
+  const pttJitterTrackerRef = useRef<Record<string, { candidate: boolean | null; count: number }>>({})
   const [specialClubId, setSpecialClubId] = useState('')
   
   // Saved locations state
@@ -543,26 +360,6 @@ function App() {
     }
   }
 
-  const formatFrequencyMHz = (frequency?: string | null) => {
-    if (!frequency) return '---.---'
-    const hz = parseInt(frequency, 10)
-    if (Number.isNaN(hz)) return '---.---'
-    return (hz / 1_000_000).toFixed(3)
-  }
-
-  const toFrequencyHz = (input: string) => {
-    const normalized = input.trim()
-    if (!normalized) return null
-    const mhz = Number(normalized)
-    if (Number.isNaN(mhz)) return null
-    return Math.round(mhz * 1_000_000)
-  }
-
-  const formatFrequencyInputMHz = (hz: number) => {
-    const mhz = hz / 1_000_000
-    return mhz.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
-  }
-
   const formatPowerLabel = (power?: number | null) => {
     if (power === null || power === undefined) return null
     const p = Number(power)
@@ -591,17 +388,8 @@ function App() {
 
   const frequencyToBandLabel = (frequency?: string | null) => {
     if (!frequency) return '---'
-    const freq = parseInt(frequency, 10)
-    if (Number.isNaN(freq)) return '---'
-    if (freq >= 1800000 && freq <= 2000000) return '160m'
-    if (freq >= 3500000 && freq <= 4000000) return '80m'
-    if (freq >= 7000000 && freq <= 7300000) return '40m'
-    if (freq >= 14000000 && freq <= 14350000) return '20m'
-    if (freq >= 21000000 && freq <= 21450000) return '15m'
-    if (freq >= 28000000 && freq <= 29700000) return '10m'
-    if (freq >= 50000000 && freq <= 54000000) return '6m'
-    if (freq >= 144000000 && freq <= 148000000) return '2m'
-    return 'Other'
+    const band = frequencyToBand(frequency)
+    return band || 'Other'
   }
 
   const markRadioStateUpdate = (source: 'ws' | 'poll') => {
@@ -621,6 +409,58 @@ function App() {
     ptt: incoming?.ptt ?? previous?.ptt ?? null,
     vfo: incoming?.vfo ?? previous?.vfo ?? null,
   })
+
+  const stabilizeIncomingPtt = (
+    radioId: string,
+    previous: any,
+    incoming: any,
+    source: 'ws' | 'poll',
+    force = false,
+  ) => {
+    if (!incoming || !Object.prototype.hasOwnProperty.call(incoming, 'ptt')) {
+      return incoming
+    }
+
+    const prevPtt = previous?.ptt
+    const rawIncomingPtt = incoming?.ptt
+    if (rawIncomingPtt === null || rawIncomingPtt === undefined) {
+      return { ...incoming, ptt: prevPtt ?? null }
+    }
+
+    const nextPtt = Boolean(rawIncomingPtt)
+
+    if (force || source === 'ws') {
+      delete pttJitterTrackerRef.current[radioId]
+      return { ...incoming, ptt: nextPtt }
+    }
+
+    if (prevPtt === null || prevPtt === undefined) {
+      delete pttJitterTrackerRef.current[radioId]
+      return { ...incoming, ptt: nextPtt }
+    }
+
+    const prevBool = Boolean(prevPtt)
+    if (nextPtt === prevBool) {
+      delete pttJitterTrackerRef.current[radioId]
+      return { ...incoming, ptt: prevBool }
+    }
+
+    const tracker = pttJitterTrackerRef.current[radioId]
+    if (!tracker || tracker.candidate !== nextPtt) {
+      pttJitterTrackerRef.current[radioId] = { candidate: nextPtt, count: 1 }
+      return { ...incoming, ptt: prevBool }
+    }
+
+    const nextCount = tracker.count + 1
+    pttJitterTrackerRef.current[radioId] = { candidate: nextPtt, count: nextCount }
+
+    if (nextCount >= 2) {
+      delete pttJitterTrackerRef.current[radioId]
+      return { ...incoming, ptt: nextPtt }
+    }
+
+    return { ...incoming, ptt: prevBool }
+  }
 
   const getRadioState = (radio: RadioConnection) => {
     const live = radioLiveState[radio.id]
@@ -656,34 +496,30 @@ function App() {
     }))
   }
 
-  const publishSharedAudioSettings = (next: { muted: boolean; volume: number; ptt: boolean }, source: 'app' | 'logging') => {
+  const publishSharedAudioSettings = (next: { muted: boolean; volume: number }, source: 'app' | 'logging') => {
     const safeVolume = Math.max(0, Math.min(100, Math.round(next.volume)))
     localStorage.setItem('yahaml:radioAudioMuted', String(Boolean(next.muted)))
     localStorage.setItem('yahaml:radioAudioVolume', String(safeVolume))
-    localStorage.setItem('yahaml:radioAudioPtt', String(Boolean(next.ptt)))
     window.dispatchEvent(new CustomEvent('yahaml:radioAudioSettings', {
       detail: {
         source,
         muted: Boolean(next.muted),
         volume: safeVolume,
-        ptt: Boolean(next.ptt),
       },
     }))
   }
 
   useEffect(() => {
     const onSharedAudioSettings = (event: Event) => {
-      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number; ptt?: boolean }>
+      const customEvent = event as CustomEvent<{ source?: 'app' | 'logging'; muted?: boolean; volume?: number }>
       if (customEvent.detail?.source !== 'logging') return
 
       const nextMuted = Boolean(customEvent.detail?.muted)
-      const nextPtt = Boolean(customEvent.detail?.ptt)
       const nextVolume = Number(customEvent.detail?.volume)
 
       syncingSharedAudioRef.current = true
 
       setRadioAudioMuted((prev) => (prev === nextMuted ? prev : nextMuted))
-      setRadioAudioPtt((prev) => (prev === nextPtt ? prev : nextPtt))
       if (Number.isFinite(nextVolume)) {
         const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
         setRadioAudioVolume((prev) => (prev === safeVolume ? prev : safeVolume))
@@ -701,8 +537,8 @@ function App() {
       syncingSharedAudioRef.current = false
       return
     }
-    publishSharedAudioSettings({ muted: radioAudioMuted, volume: radioAudioVolume, ptt: radioAudioPtt }, 'app')
-  }, [radioAudioMuted, radioAudioVolume, radioAudioPtt])
+    publishSharedAudioSettings({ muted: radioAudioMuted, volume: radioAudioVolume }, 'app')
+  }, [radioAudioMuted, radioAudioVolume])
 
   const refreshRadioState = async (radioId: string) => {
     try {
@@ -714,7 +550,10 @@ function App() {
       if (data?.state) {
         setRadioLiveState(prev => ({
           ...prev,
-          [radioId]: mergeLiveRadioState(prev[radioId], data.state),
+          [radioId]: mergeLiveRadioState(
+            prev[radioId],
+            stabilizeIncomingPtt(radioId, prev[radioId], data.state, 'poll'),
+          ),
         }))
         markRadioStateUpdate('poll')
       }
@@ -1340,7 +1179,7 @@ function App() {
         return (
           String(radio.remoteSshHost || '').trim() === String(radioHost || '').trim() &&
           String(radio.remoteSshUser || '').trim() === String(remoteSshUser || '').trim() &&
-          Boolean(radio.remoteSshPrivateKeyPath)
+          Boolean(radio.remoteHasStoredSshKey)
         )
       })
 
@@ -1616,6 +1455,47 @@ function App() {
     }
   }
 
+  async function fetchRadioOperatorStatus(radioId: string) {
+    const response = await fetch(`/api/radios/${radioId}/operator-status`, {
+      headers: { ...getAuthHeaders() },
+    })
+    if (!response.ok) {
+      return null
+    }
+    const data = await response.json()
+    return data as RadioOperatorStatus
+  }
+
+  async function refreshRadioOperatorStatuses() {
+    if (!sessionToken || radios.length === 0) {
+      setRadioOperatorStatuses({})
+      return
+    }
+
+    try {
+      setRadioOperatorStatusLoading(true)
+      const results = await Promise.all(
+        radios.map(async (radio) => {
+          try {
+            const status = await fetchRadioOperatorStatus(radio.id)
+            return status ? [radio.id, status] as const : null
+          } catch {
+            return null
+          }
+        }),
+      )
+
+      const next: Record<string, RadioOperatorStatus> = {}
+      for (const entry of results) {
+        if (!entry) continue
+        next[entry[0]] = entry[1]
+      }
+      setRadioOperatorStatuses(next)
+    } finally {
+      setRadioOperatorStatusLoading(false)
+    }
+  }
+
   async function fetchRadios() {
     try {
       const response = await fetch('/api/radios')
@@ -1625,6 +1505,64 @@ function App() {
       }
     } catch {
       // silent
+    }
+  }
+
+  async function reprovisionExistingRadio(radio: RadioConnection) {
+    if (!sessionToken || !isAdmin) {
+      addError('Admin session required for remote reprovisioning')
+      return
+    }
+
+    try {
+      setRemoteProvisioning(true)
+      setRemoteProvisionStatus(`Re-provisioning ${radio.name}...`)
+      setRemoteProvisionWarnings([])
+      setRemoteProvisionLogs([])
+
+      const response = await fetch(`/api/radios/${radio.id}/provision-remote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({}),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reprovision remote host')
+      }
+
+      setRemoteProvisionWarnings(Array.isArray(data.warnings) ? data.warnings : [])
+      setRemoteProvisionLogs(Array.isArray(data.logs) ? data.logs : [])
+      setRemoteProvisionStatus(`Remote reprovision complete for ${radio.name}${data.janusRoomId ? ` (room ${data.janusRoomId})` : ''}.`)
+      await fetchRadios()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to reprovision remote host'
+      setRemoteProvisionStatus(`Remote reprovision failed for ${radio.name}: ${message}`)
+      addError(message)
+    } finally {
+      setRemoteProvisioning(false)
+    }
+  }
+
+  async function reconcileRadioJanusRoom(radio: RadioConnection) {
+    if (!sessionToken || !isAdmin) {
+      addError('Admin session required to reconcile Janus room')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/radios/${radio.id}/reconcile-janus-room`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders() },
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reconcile Janus room')
+      }
+      addSuccess(`Reconciled ${radio.name} to managed Janus room ${data.janusRoomId}`)
+      await fetchRadios()
+    } catch (error) {
+      addError(error instanceof Error ? error.message : 'Failed to reconcile Janus room')
     }
   }
 
@@ -1971,7 +1909,10 @@ function App() {
         if (message.type === 'radioStateUpdate' && message.data?.radioId && message.data?.state) {
           setRadioLiveState((prev) => ({
             ...prev,
-            [message.data.radioId]: mergeLiveRadioState(prev[message.data.radioId], message.data.state),
+            [message.data.radioId]: mergeLiveRadioState(
+              prev[message.data.radioId],
+              stabilizeIncomingPtt(message.data.radioId, prev[message.data.radioId], message.data.state, 'ws'),
+            ),
           }))
           markRadioStateUpdate('ws')
         }
@@ -2144,6 +2085,63 @@ function App() {
   }, [hasActiveCallsign, sessionToken])
 
   useEffect(() => {
+    if (effectiveView !== 'rig' || !sessionToken) {
+      setRadioOperatorStatuses({})
+      return
+    }
+
+    void refreshRadioOperatorStatuses()
+    const interval = setInterval(() => {
+      void refreshRadioOperatorStatuses()
+    }, 6000)
+
+    return () => clearInterval(interval)
+  }, [effectiveView, sessionToken, radios])
+
+  useEffect(() => {
+    if (!sessionToken || !assignedRadio?.radio?.id) {
+      return
+    }
+
+    const targetRoomId = `radio-${assignedRadio.radio.id}`
+    let cancelled = false
+
+    const ensureVoiceRoomPresence = async () => {
+      try {
+        const meResponse = await fetch('/api/voice-rooms/me', {
+          headers: { ...getAuthHeaders() },
+        })
+
+        if (!meResponse.ok || cancelled) return
+
+        const meData = await meResponse.json()
+        const currentRoomId = String(meData?.roomId || '')
+        const shouldJoinTargetRoom = !currentRoomId || (currentRoomId.startsWith('radio-') && currentRoomId !== targetRoomId)
+
+        if (!shouldJoinTargetRoom || cancelled) return
+
+        await fetch(`/api/voice-rooms/${targetRoomId}/join`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ audioSourceType: 'system', joinMode: 'listener' }),
+        })
+
+        if (!cancelled) {
+          await refreshRadioOperatorStatuses()
+        }
+      } catch {
+        // non-blocking; operator can still join manually from toolbar panel
+      }
+    }
+
+    void ensureVoiceRoomPresence()
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionToken, assignedRadio?.radio?.id])
+
+  useEffect(() => {
     if (!assignedRadio?.radio?.id || !assignedRadio?.radio?.isConnected) return
     const interval = setInterval(() => {
       const isWsFresh = Date.now() - lastRadioStateUpdateAtRef.current < 4000
@@ -2287,11 +2285,12 @@ function App() {
   }
 
   const toggleAssignedPtt = async () => {
-    if (!assignedRadio?.radio?.id) return
+    const radioId = assignedRadio?.radio?.id
+    if (!radioId) return
     try {
       setGlobalControlBusy(true)
       const enabled = !assignedRadioState?.ptt
-      const response = await fetchWithTimeout(`/api/radios/${assignedRadio.radio.id}/ptt`, {
+      const response = await fetchWithTimeout(`/api/radios/${radioId}/ptt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ enabled }),
@@ -2300,8 +2299,14 @@ function App() {
         const data = await response.json().catch(() => ({}))
         throw new Error(data?.error || 'Failed to toggle PTT')
       }
-      setRadioAudioPtt(Boolean(enabled))
-      await refreshRadioState(assignedRadio.radio.id)
+      setRadioLiveState((prev) => ({
+        ...prev,
+        [radioId]: mergeLiveRadioState(
+          prev[radioId],
+          stabilizeIncomingPtt(radioId, prev[radioId], { ptt: enabled }, 'ws', true),
+        ),
+      }))
+      await refreshRadioState(radioId)
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         addError('PTT request timed out. Radio may be busy; try again.')
@@ -2321,11 +2326,6 @@ function App() {
     const safeVolume = Math.max(0, Math.min(100, Math.round(nextVolume)))
     setRadioAudioVolume(safeVolume)
   }
-
-  useEffect(() => {
-    if (assignedRadioState?.ptt === null || assignedRadioState?.ptt === undefined) return
-    setRadioAudioPtt(Boolean(assignedRadioState.ptt))
-  }, [assignedRadioState?.ptt])
 
   useEffect(() => {
     if (effectiveView === 'logging') return
@@ -4049,6 +4049,16 @@ function App() {
             </div>
           </section>
 
+          <section className="panel">
+            <h2>Voice Rooms</h2>
+            <p className="hint">See your current room and join any radio room as an operator/listener.</p>
+            <VoiceRoomPanel
+              stationId={selectedStationId || ''}
+              sessionToken={sessionToken}
+              compact={false}
+            />
+          </section>
+
           {/* Radio List */}
           <section className="panel">
             <h2>Radio Connections</h2>
@@ -4062,6 +4072,10 @@ function App() {
                 const inputs = getControlInputs(radio)
                 const isAssignedRadio = assignedRadio?.radio?.id === radio.id
                 const audioSourceLabel = formatAudioSourceLabel(radio.audioSourceType)
+                const operatorStatus = radioOperatorStatuses[radio.id]
+                const canControlRadio = operatorStatus?.permissions?.canControl ?? (assignment?.stationId === selectedStationId)
+                const controlReason = operatorStatus?.permissions?.reason
+                const assignedCallsign = operatorStatus?.assignment?.callsign || assignment?.station?.callsign || null
                 return (
                   <div key={radio.id} className="radio-card">
                     <div className="radio-header">
@@ -4122,7 +4136,47 @@ function App() {
                           <strong>Error:</strong> {radio.lastError}
                         </div>
                       )}
+                      {(radio.remoteSshHost || radio.remoteProvisionStatus || radio.remoteProvisionLastError) && (
+                        <>
+                          <div className="radio-info">
+                            <strong>Remote SSH:</strong>{' '}
+                            {radio.remoteSshHost
+                              ? `${radio.remoteSshUser || 'user'}@${radio.remoteSshHost}:${radio.remoteSshPort || 22}`
+                              : 'Not configured'}
+                          </div>
+                          <div className="radio-info">
+                            <strong>Provision:</strong>{' '}
+                            {radio.remoteProvisionStatus || 'unknown'}
+                            {radio.remoteHasStoredSshKey ? ' • SSH key saved' : ''}
+                          </div>
+                          {radio.remoteProvisionLastError && (
+                            <div className="radio-info error">
+                              <strong>Provision Error:</strong> {radio.remoteProvisionLastError}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
+
+                    <div className={`notice ${canControlRadio ? 'success' : ''}`} style={{ marginTop: '0.6rem' }}>
+                      <strong>{canControlRadio ? '🎛 Control enabled' : '👂 Listen-only mode'}</strong>
+                      <div style={{ marginTop: '0.25rem' }}>
+                        {controlReason || (assignedCallsign ? `Assigned to ${assignedCallsign}` : 'No active assignment')}
+                      </div>
+                      <div style={{ marginTop: '0.25rem', fontSize: '0.9em' }}>
+                        Voice room: {operatorStatus?.voice?.roomId || `radio-${radio.id}`} · Local participants: {operatorStatus?.voice?.localParticipantCount ?? 0} · Janus participants: {operatorStatus?.voice?.janusParticipantCount ?? 0}
+                      </div>
+                      {operatorStatus?.janus?.participantError && (
+                        <div style={{ marginTop: '0.25rem' }}>
+                          Janus participant query: {operatorStatus.janus.participantError}
+                        </div>
+                      )}
+                    </div>
+
+                    {radioOperatorStatusLoading && !operatorStatus && (
+                      <div className="hint" style={{ marginTop: '0.35rem' }}>Refreshing operator status…</div>
+                    )}
+
                     {radio.isConnected && (
                       <div className="radio-control-panel">
                         <div className="rig-display">
@@ -4148,7 +4202,7 @@ function App() {
                           </div>
                         </div>
 
-                        <div className="rig-controls-grid">
+                        <fieldset className="rig-controls-grid" disabled={!canControlRadio} style={{ border: 0, padding: 0, margin: 0 }}>
                           <div className="rig-control">
                             <label title="Transmit frequency in MHz">Frequency (MHz)</label>
                             <div className="rig-frequency-input">
@@ -4485,7 +4539,12 @@ function App() {
                               </button>
                             </div>
                           </div>
-                        </div>
+                        </fieldset>
+                        {!canControlRadio && (
+                          <div className="hint" style={{ marginTop: '0.5rem' }}>
+                            Control actions are locked. You can monitor/listen while assigned operator {assignedCallsign ? <strong>{assignedCallsign}</strong> : 'holds control'}.
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -4711,6 +4770,14 @@ function App() {
                                 >
                                   Discover Janus Rooms
                                 </button>
+                                <button
+                                  className="btn secondary"
+                                  onClick={async () => {
+                                    await reconcileRadioJanusRoom(radio)
+                                  }}
+                                >
+                                  Use Managed Room ID
+                                </button>
                               </div>
                             </div>
                           </>
@@ -4827,6 +4894,20 @@ function App() {
                       >
                         Test
                       </button>
+                      {isAdmin && radio.connectionType !== 'mock' && (
+                        <button
+                          className="btn secondary"
+                          disabled={remoteProvisioning}
+                          title={radio.remoteHasStoredSshKey
+                            ? 'Re-provision using saved profile and SSH key'
+                            : 'Re-provision using saved profile (may require providing password via initial provisioning form)'}
+                          onClick={async () => {
+                            await reprovisionExistingRadio(radio)
+                          }}
+                        >
+                          {remoteProvisioning ? '⏳ Re-provisioning...' : '🔁 Re-provision Remote'}
+                        </button>
+                      )}
                       {!assignment && (
                         <select
                           onChange={async (e) => {

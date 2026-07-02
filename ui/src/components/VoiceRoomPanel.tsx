@@ -1,31 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { resolveWebSocketUrl } from '../routing'
-
-interface VoiceRoom {
-  id: string
-  name: string
-  description?: string
-  radioId?: string | null
-  participantCount: number
-  maxParticipants?: number
-  createdAt: string
-  isActive: boolean
-}
-
-interface Participant {
-  id: string
-  displayName: string
-  joinedAt: string
-  isActive: boolean
-  audioSourceType: 'microphone' | 'radio' | 'janus' | 'http-stream' | 'system'
-  role?: 'operator' | 'listener'
-}
-
-interface VoiceRoomProps {
-  stationId?: string
-  sessionToken?: string
-  compact?: boolean
-}
+import type { Participant, SignalMessage, VoiceRoom, VoiceRoomProps } from '../types/voice'
 
 export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: VoiceRoomProps) {
   const [rooms, setRooms] = useState<VoiceRoom[]>([])
@@ -43,12 +18,6 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map())
   const remoteAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const wsRef = useRef<WebSocket | null>(null)
-
-  type SignalMessage = {
-    from: string
-    type: 'offer' | 'answer' | 'ice-candidate'
-    data: unknown
-  }
 
   const getAuthHeaders = useCallback(
     (): Record<string, string> => (sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
@@ -72,6 +41,61 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
       setLoading(false)
     }
   }, [getAuthHeaders])
+
+  const hydrateCurrentRoom = useCallback(async () => {
+    if (!stationId) return
+
+    try {
+      const meResponse = await fetch('/api/voice-rooms/me', {
+        headers: getAuthHeaders(),
+      })
+
+      if (!meResponse.ok) return
+
+      const meData = await meResponse.json()
+      const currentRoomId = String(meData?.roomId || '')
+      if (!currentRoomId) {
+        setActiveRoom(null)
+        setParticipants([])
+        setUserRole(null)
+        return
+      }
+
+      const roomResponse = await fetch(`/api/voice-rooms/${currentRoomId}`, {
+        headers: getAuthHeaders(),
+      })
+
+      if (!roomResponse.ok) return
+
+      const roomData = await roomResponse.json()
+      setActiveRoom({
+        id: roomData.id,
+        name: roomData.name,
+        description: roomData.description,
+        radioId: roomData.radioId,
+        participantCount: Array.isArray(roomData.participants) ? roomData.participants.length : 0,
+        maxParticipants: roomData.maxParticipants,
+        createdAt: roomData.createdAt,
+        isActive: Boolean(roomData.isActive),
+      })
+
+      const roomParticipants = Array.isArray(roomData.participants) ? roomData.participants : []
+      setParticipants(roomParticipants)
+
+      const self = roomParticipants.find((participant: Participant) => participant.id === stationId)
+      if (self?.role === 'operator' || self?.role === 'listener') {
+        setUserRole(self.role)
+      } else if (self) {
+        setUserRole(self.audioSourceType === 'system' ? 'listener' : 'operator')
+      }
+
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        setupWebSocket()
+      }
+    } catch {
+      // best effort hydration; panel still allows manual join
+    }
+  }, [getAuthHeaders, stationId])
 
   // Create peer connection for a remote participant
   const createPeerConnection = (peerId: string): RTCPeerConnection => {
@@ -315,12 +339,24 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
             const signalData = message.data?.message || message.data
             handleSignalMessage(signalData)
           } else if (message.type === 'participantJoined') {
-            // New peer joined, create offer
-            const newPeer = message.data
+            const payloadRoomId = String(message.data?.roomId || '')
+            if (activeRoom && payloadRoomId && payloadRoomId !== activeRoom.id) {
+              return
+            }
+
+            const newPeer = message.data?.participant
+            if (!newPeer?.id) return
+
             if (newPeer.id !== stationId) {
               createOfferForPeer(newPeer.id)
             }
-            setParticipants(prev => [...prev, newPeer])
+
+            setParticipants(prev => {
+              if (prev.some((participant) => participant.id === newPeer.id)) {
+                return prev
+              }
+              return [...prev, newPeer]
+            })
           } else if (message.type === 'participantLeft') {
             const leftPeerId = message.data.participantId
             cleanupPeerConnection(leftPeerId)
@@ -458,10 +494,14 @@ export function VoiceRoomPanel({ stationId, sessionToken, compact = false }: Voi
   useEffect(() => {
     if (!sessionToken) return
     fetchRooms()
+    hydrateCurrentRoom()
     // Only poll every 30 seconds to avoid excessive page re-renders
-    const interval = setInterval(fetchRooms, 30000)
+    const interval = setInterval(() => {
+      fetchRooms()
+      hydrateCurrentRoom()
+    }, 30000)
     return () => clearInterval(interval)
-  }, [sessionToken, fetchRooms])
+  }, [sessionToken, fetchRooms, hydrateCurrentRoom])
 
   if (!sessionToken) {
     return <div className="voice-room-panel-empty">Sign in to use voice rooms</div>

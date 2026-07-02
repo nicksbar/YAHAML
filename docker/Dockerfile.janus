@@ -7,6 +7,7 @@ FROM debian:bookworm as builder
 RUN apt-get update && apt-get install -y \
     git \
     libmicrohttpd-dev \
+    libwebsockets-dev \
     libjansson-dev \
     libsrtp2-dev \
     libssl-dev \
@@ -49,6 +50,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     libmicrohttpd12 \
+    libwebsockets17 \
     libjansson4 \
     libsrtp2-1 \
     libssl3 \
@@ -86,6 +88,7 @@ RUN mkdir -p /opt/janus/etc/janus/janus.cfg.d
 COPY docker/janus-yahaml.cfg /opt/janus/etc/janus/janus.cfg.d/
 COPY docker/audiobridge-yahaml.cfg /opt/janus/etc/janus/janus.cfg.d/
 COPY docker/janus.transport.http.jcfg /opt/janus/etc/janus/
+COPY docker/janus.transport.websockets.jcfg /opt/janus/etc/janus/
 
 # Ensure runtime user can patch config values in entrypoint
 RUN chown -R janus:janus /opt/janus/etc/janus
