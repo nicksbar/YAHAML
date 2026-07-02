@@ -76,6 +76,8 @@ If your ops workflow depends on N3FJP-compatible behavior, this is one of YAHAML
 
 ```bash
 npm install
+npm --prefix ui install
+cp .env.example .env
 npm run db:generate
 npm run db:push
 npm run db:seed
@@ -84,6 +86,8 @@ npm run dev:all
 
 - UI: http://localhost:5173
 - API: http://localhost:3000
+
+> **No Docker installed?** `dev:all` starts a Janus container first (used only for WebRTC voice-room/rig-audio features) and will fail if `docker`/`docker compose` isn't on your PATH. Run `npm run dev:no-janus` instead to start just the API and UI — everything works except voice rooms, which stay disabled until `JANUS_API_URL` is configured.
 
 **For current remote provisioning and audio/rig workflow**, see [docs/provisioning.md](docs/provisioning.md).
 

@@ -9,6 +9,7 @@
     "dev:ui": "npm --prefix ui run dev",
     "dev:janus": "docker compose up -d janus || docker-compose up -d janus",
     "dev:all": "npm run dev:janus && concurrently -n api,ui -c blue,green \"npm run dev:api\" \"npm run dev:ui\"",
+    "dev:no-janus": "concurrently -n api,ui -c blue,green \"npm run dev:api\" \"npm run dev:ui\"",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
